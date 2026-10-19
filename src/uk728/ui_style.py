@@ -133,7 +133,7 @@ def apply_theme(app, theme: str, scale: int = 100) -> None:
     app.setPalette(q_palette)
     percent = scale if scale in (100, 125, 150) else 100
     base = QSS
-    for key, value in palette.items():
+    for key, value in sorted(palette.items(), key=lambda pair: len(pair[0]), reverse=True):
         base = base.replace("@" + key, value)
     # Text and controls scale together, without changing business or report amounts.
     base = base.replace("font-size: 10pt;", f"font-size: {10 * percent / 100:g}pt;")

@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -43,6 +46,14 @@ jobs:
         run: |
           python -m compileall -q main.py src
           if ($LASTEXITCODE -ne 0) { throw 'Python syntax check failed.' }
+
+      - name: UI and navigation tests
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m unittest discover -s tests -p 'test_*.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'UI tests failed.' }
 
       - name: Build standalone Windows EXE
         shell: pwsh
@@ -92,6 +103,7 @@ jobs:
           }
 
       - name: Publish single EXE to Dev Build
+        if: github.ref == 'refs/heads/main'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -101,10 +113,11 @@ jobs:
           $exe = 'dist/Otchetnost_UK_728.exe'
           if (-not (Test-Path $exe -PathType Leaf)) { throw 'Standalone EXE is missing.' }
 
+          $version = (Get-Content 'VERSION' -Raw -Encoding utf8).Trim()
           $notes = @'
           **В РАЗРАБОТКЕ, НА ТЕКУЩЕЙ СТАДИИ РАБОТАЕТ ПОСРЕДСТВЕННО, НЕ ИМЕЕТ СВЯЗИ С ОБЩЕЙ БД ИЗ ДРУГИХ ПО И СИНХРОНИЗАЦИИ ГИС ЖКХ!**
 
-          Тестовая сборка программы «Отчетность УК» для Windows. Версия V1.5.9.
+          Тестовая сборка программы «Отчетность УК» для Windows.
 
           **Установка:** скачайте один файл `Otchetnost_UK_728.exe` в отдельную папку и запустите его. Python и дополнительные файлы не нужны.
 
@@ -112,6 +125,7 @@ jobs:
 
           История изменений: [CHANGELOG.md](https://github.com/serbo26-lab/otchetchik/blob/main/CHANGELOG.md).
           '@
+          $notes = "**Версия: $version**" + [Environment]::NewLine + [Environment]::NewLine + $notes
           $notesFile = Join-Path $env:RUNNER_TEMP 'otchetchik-dev-notes.md'
           [System.IO.File]::WriteAllText($notesFile, $notes, [System.Text.UTF8Encoding]::new($false))
 

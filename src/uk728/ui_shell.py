@@ -53,7 +53,7 @@ class ActionFlowLayout(QLayout):
         return None
 
     def expandingDirections(self):
-        return Qt.Orientations()
+        return Qt.Orientation(0)
 
     def hasHeightForWidth(self):
         return True
@@ -121,7 +121,7 @@ class NavigationSidebar(QFrame):
         self.navigation.setObjectName("SidebarNavigation")
         self.navigation.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.navigation.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.navigation.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.navigation.setIconSize(QSize(20, 20))
         self.navigation.setSpacing(3)
         for title, _glyph, subtitle, _help in PAGES:
