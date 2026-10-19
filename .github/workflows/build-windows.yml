@@ -15,9 +15,9 @@ concurrency:
 
 jobs:
   build:
-    name: Build and publish Dev Build
+    name: Build and publish single EXE
     runs-on: windows-2022
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
@@ -34,65 +34,109 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw 'pip upgrade failed.' }
           python -m pip install -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
 
       - name: Check Python syntax
         shell: pwsh
         run: |
           python -m compileall -q main.py src
+          if ($LASTEXITCODE -ne 0) { throw 'Python syntax check failed.' }
 
-      - name: Build portable Windows application
+      - name: Build standalone Windows EXE
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --windowed --onedir --name Otchetnost_UK_728 main.py
+          $python = (Get-Command python -CommandType Application | Select-Object -First 1).Source
+          $pythonDirectory = Split-Path -Parent $python
+          # Prevent unrelated software in PATH from supplying incompatible Qt DLLs.
+          $env:PATH = "$pythonDirectory;$pythonDirectory\Scripts;$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\Wbem"
+          & $python -m PyInstaller --noconfirm --clean --onefile --windowed --name Otchetnost_UK_728 main.py
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed.' }
+          if (-not (Test-Path 'dist/Otchetnost_UK_728.exe' -PathType Leaf)) {
+            throw 'Standalone executable is missing.'
+          }
+          if (Test-Path 'dist/Otchetnost_UK_728/_internal') {
+            throw 'Found a multi-file distribution instead of a standalone EXE.'
+          }
 
-      - name: Check and package Windows build
+      - name: Smoke-test executable and portable data storage
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $folder = 'dist/Otchetnost_UK_728'
-          if (-not (Test-Path "$folder/Otchetnost_UK_728.exe")) {
-            throw 'The executable was not created.'
+          $exe = (Resolve-Path 'dist/Otchetnost_UK_728.exe').Path
+          $testFolder = Join-Path $env:RUNNER_TEMP 'otchetchik-standalone-test'
+          New-Item -ItemType Directory -Force -Path $testFolder | Out-Null
+          $testExe = Join-Path $testFolder 'Otchetnost_UK_728.exe'
+          Copy-Item $exe $testExe -Force
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $process = Start-Process -FilePath $testExe -WorkingDirectory $testFolder -PassThru
+          try {
+            $database = Join-Path $testFolder 'data/reporting_728.db'
+            $ready = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Seconds 1
+              $process.Refresh()
+              if ($process.HasExited) { throw "EXE quit unexpectedly (exit code: $($process.ExitCode))." }
+              if (Test-Path $database -PathType Leaf) {
+                $ready = $true
+                break
+              }
+            }
+            if (-not $ready) { throw 'Program did not initialize its portable database within 30 seconds.' }
+            Write-Host 'Smoke test passed: standalone EXE started and data folder was created beside the EXE.'
           }
-          if (-not (Test-Path "$folder/_internal")) {
-            throw 'Required _internal directory is missing.'
+          finally {
+            $process.Refresh()
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
           }
-          New-Item -ItemType Directory -Force -Path "$folder/data" | Out-Null
-          New-Item -ItemType Directory -Force -Path 'release' | Out-Null
-          Compress-Archive -Path $folder -DestinationPath 'release/Otchetnost_UK_728_Dev_Build.zip' -CompressionLevel Optimal -Force
 
-      - name: Publish in Releases as Dev Build
+      - name: Publish single EXE to Dev Build
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $zip = 'release/Otchetnost_UK_728_Dev_Build.zip'
-          if (-not (Test-Path $zip)) { throw 'The release archive is missing.' }
+          $exe = 'dist/Otchetnost_UK_728.exe'
+          if (-not (Test-Path $exe -PathType Leaf)) { throw 'Standalone EXE is missing.' }
+
           $notes = @'
           **В РАЗРАБОТКЕ, НА ТЕКУЩЕЙ СТАДИИ РАБОТАЕТ ПОСРЕДСТВЕННО, НЕ ИМЕЕТ СВЯЗИ С ОБЩЕЙ БД ИЗ ДРУГИХ ПО И СИНХРОНИЗАЦИИ ГИС ЖКХ!**
 
-          Тестовая сборка программы «Отчетность УК» для Windows. Текущая версия исходников: V1.5.9.
+          Тестовая сборка программы «Отчетность УК» для Windows. Версия V1.5.9.
 
-          **Установка:** скачайте ZIP, распакуйте целиком и запустите `Otchetnost_UK_728.exe`. Не переносите EXE отдельно от папки `_internal`.
+          **Установка:** скачайте один файл `Otchetnost_UK_728.exe` в отдельную папку и запустите его. Python и дополнительные файлы не нужны.
 
-          **Обновление:** обязательно сохраните свою папку `data` с базой и отчетами перед заменой программы.
+          **Данные:** при первом запуске рядом с программой автоматически создается папка `data`. При обновлении заменяйте только EXE и сохраняйте папку `data`.
 
           История изменений: [CHANGELOG.md](https://github.com/serbo26-lab/otchetchik/blob/main/CHANGELOG.md).
           '@
-          $notes | Set-Content -Path 'release/RELEASE_NOTES.md' -Encoding utf8
+          $notesFile = Join-Path $env:RUNNER_TEMP 'otchetchik-dev-notes.md'
+          [System.IO.File]::WriteAllText($notesFile, $notes, [System.Text.UTF8Encoding]::new($false))
 
-          gh release view dev-build --json tagName *> $null
+          gh release view dev-build --repo $env:GH_REPO --json tagName *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload dev-build $zip --clobber
-            if ($LASTEXITCODE -ne 0) { throw 'Failed to replace Dev Build archive.' }
-            gh release edit dev-build --title 'Dev Build' --notes-file 'release/RELEASE_NOTES.md' --prerelease --latest=false
-            if ($LASTEXITCODE -ne 0) { throw 'Failed to update Dev Build release.' }
+            gh release upload dev-build $exe --repo $env:GH_REPO --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot upload standalone EXE.' }
+
+            # Previous builds were distributed as archives; remove these obsolete assets.
+            $oldAssets = gh release view dev-build --repo $env:GH_REPO --json assets --jq '.assets[].name'
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot list release assets.' }
+            foreach ($asset in $oldAssets) {
+              if ($asset -ne 'Otchetnost_UK_728.exe') {
+                gh release delete-asset dev-build $asset --repo $env:GH_REPO --yes
+                if ($LASTEXITCODE -ne 0) { throw "Cannot remove obsolete release asset: $asset" }
+              }
+            }
+            gh release edit dev-build --repo $env:GH_REPO --title 'Dev Build' --notes-file $notesFile --prerelease --latest=false
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot update Dev Build release.' }
             gh api --method PATCH "repos/$env:GH_REPO/git/refs/tags/dev-build" -f "sha=$env:GITHUB_SHA" -F "force=true" | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw 'Failed to update the dev-build tag.' }
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot update the dev-build tag.' }
           } else {
-            gh release create dev-build $zip --title 'Dev Build' --notes-file 'release/RELEASE_NOTES.md' --prerelease --latest=false --target "$env:GITHUB_SHA"
-            if ($LASTEXITCODE -ne 0) { throw 'Failed to create Dev Build release.' }
+            gh release create dev-build $exe --repo $env:GH_REPO --title 'Dev Build' --notes-file $notesFile --prerelease --latest=false --target "$env:GITHUB_SHA"
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot create Dev Build release.' }
           }
-          "Dev Build published: https://github.com/$env:GH_REPO/releases/tag/dev-build" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "Standalone EXE published: https://github.com/$env:GH_REPO/releases/tag/dev-build" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "EXE SHA256: $hash" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
