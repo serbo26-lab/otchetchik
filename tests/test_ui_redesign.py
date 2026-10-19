@@ -138,5 +138,52 @@ class ShellTests(unittest.TestCase):
         page._autosave_timer.stop()
 
 
+    def test_switching_company_record_saves_previous_values(self):
+        page = self.window.company_tab
+        page.add_company()
+        first_id = page.current_id
+        other = db.execute("INSERT INTO companies(name) VALUES(?)", ("Другая УО",))
+        page.refresh()
+        page.name.setText("Первая УО — изменена")
+        for i in range(page.list.count()):
+            if page.list.item(i).data(256) == other:
+                page.list.setCurrentRow(i)
+                break
+        self.assertEqual(page.current_id, other)
+        self.assertEqual(
+            db.row("SELECT name FROM companies WHERE id=?", (first_id,))["name"],
+            "Первая УО — изменена"
+        )
+
+    def test_failed_company_save_rolls_back_selection(self):
+        page = self.window.company_tab
+        page.add_company()
+        old_id = page.current_id
+        other = db.execute("INSERT INTO companies(name) VALUES(?)", ("Другая УО",))
+        page.refresh()
+        page.name.setText("Не сохранено")
+        with patch.object(page, "save", side_effect=OSError("readonly database")):
+            for i in range(page.list.count()):
+                if page.list.item(i).data(256) == other:
+                    page.list.setCurrentRow(i)
+                    break
+        self.assertEqual(page.current_id, old_id)
+        self.assertEqual(page.list.currentItem().data(256), old_id)
+        self.assertEqual(page.name.text(), "Не сохранено")
+        self.assertEqual(self.window.page_header.save_status.property("state"), "error")
+
+    def test_repeated_category_save_does_not_duplicate_subcategory(self):
+        page = self.window.categories_tab
+        page.add_category()
+        cid = page.current_id
+        page.name.setText("Содержание")
+        page.add_subcategory()
+        page.save(refresh_after=False)
+        page.save(refresh_after=False)
+        self.assertEqual(
+            db.row("SELECT COUNT(*) AS n FROM work_categories WHERE parent_id=?", (cid,))["n"], 1
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

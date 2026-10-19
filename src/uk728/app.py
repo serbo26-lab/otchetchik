@@ -243,6 +243,58 @@ class CopyPasteTable(QTableWidget):
 
 
 class BaseTab(QWidget):
+    def _form_signature(self):
+        """Non-invasive snapshot of a form; used to detect edits before changing records."""
+        widgets = list(getattr(self, "form_widgets", []))
+        if self.__class__.__name__ == "TemplatesTab":
+            widgets.append(self.table)
+        snapshot = []
+        for widget in widgets:
+            if isinstance(widget, QLineEdit):
+                snapshot.append(("line", widget.text()))
+            elif isinstance(widget, QTextEdit):
+                snapshot.append(("text", widget.toPlainText()))
+            elif isinstance(widget, QComboBox):
+                snapshot.append(("combo", widget.currentText(), widget.currentData()))
+            elif isinstance(widget, QTableWidget):
+                snapshot.append(("table", tuple(
+                    tuple(widget.value(r, c) for c in range(widget.columnCount()))
+                    for r in range(widget.rowCount())
+                )))
+        return tuple(snapshot)
+
+    def _remember_form_state(self):
+        self._loaded_form_id = getattr(self, "current_id", None)
+        self._form_snapshot = self._form_signature()
+
+    def _commit_form_before_load(self, new_id):
+        """Persist the *previous* record before selection, refresh or reload replaces it."""
+        old_id = getattr(self, "_loaded_form_id", None)
+        if old_id is None or self._form_signature() == getattr(self, "_form_snapshot", None):
+            return True
+        selected_id = getattr(self, "current_id", None)
+        self.current_id = old_id
+        try:
+            self.save(refresh_after=False)
+        except Exception as exc:
+            # Keep old values visible and revert list selection after any write failure.
+            self.current_id = old_id
+            choices = getattr(self, "list", None)
+            if choices is not None:
+                blocked = choices.blockSignals(True)
+                for row in range(choices.count()):
+                    if choices.item(row).data(Qt.UserRole) == old_id:
+                        choices.setCurrentRow(row)
+                        break
+                choices.blockSignals(blocked)
+            win = self.window()
+            if hasattr(win, "set_save_status"):
+                win.set_save_status("error")
+            self.msg(f"Не удалось сохранить предыдущую запись: {exc}")
+            return False
+        self.current_id = selected_id
+        return True
+
     def save(self) -> None:
         pass
 
@@ -456,10 +508,14 @@ class CompaniesTab(BaseTab):
 
     def _load_current(self):
         item = self.list.currentItem()
-        self.current_id = item.data(Qt.UserRole) if item else None
+        next_id = item.data(Qt.UserRole) if item else None
+        if not self._commit_form_before_load(next_id):
+            return
+        self.current_id = next_id
         r = db.row("SELECT * FROM companies WHERE id=?", (self.current_id,)) if self.current_id else None
         if not r:
             self.update_form_state()
+            self._remember_form_state()
             return
         self.update_form_state()
         self.name.setText(r["name"])
@@ -468,6 +524,7 @@ class CompaniesTab(BaseTab):
         self.person.setText(r["report_person"])
         self.contact.setText(r["report_contact"])
         self.notes.setPlainText(r["notes"])
+        self._remember_form_state()
 
     def add_company(self):
         if self.current_id:
@@ -488,7 +545,7 @@ class CompaniesTab(BaseTab):
             self.refresh()
             self.update_form_state()
 
-    def save(self):
+    def save(self, *_args, refresh_after: bool = True):
         if not self.current_id:
             self.msg("Нажмите «Добавить организацию», затем заполните поля и сохраните.")
             return
@@ -498,8 +555,10 @@ class CompaniesTab(BaseTab):
                 (self.name.text(), self.ogrn.text(), self.addr.toPlainText(), self.person.text(), self.contact.text(), self.notes.toPlainText(), self.current_id),
             )
             conn.commit()
+        self._remember_form_state()
         self.msg("Организация сохранена")
-        self.refresh()
+        if refresh_after:
+            self.refresh()
 
 
 class HousesTab(BaseTab):
@@ -646,10 +705,14 @@ class HousesTab(BaseTab):
 
     def _load_current(self):
         item = self.list.currentItem()
-        self.current_id = item.data(Qt.UserRole) if item else None
+        next_id = item.data(Qt.UserRole) if item else None
+        if not self._commit_form_before_load(next_id):
+            return
+        self.current_id = next_id
         r = db.row("SELECT * FROM houses WHERE id=?", (self.current_id,)) if self.current_id else None
         if not r:
             self.update_form_state()
+            self._remember_form_state()
             return
         self.update_form_state()
         idx = self.company.findData(r["company_id"])
@@ -660,6 +723,7 @@ class HousesTab(BaseTab):
         self.end.setText(r["management_end"])
         self.status.setCurrentText(r["status"])
         self.notes.setPlainText(r["notes"])
+        self._remember_form_state()
 
     def add_house(self):
         if self.current_id:
@@ -684,7 +748,7 @@ class HousesTab(BaseTab):
             self.refresh()
             self.update_form_state()
 
-    def save(self):
+    def save(self, *_args, refresh_after: bool = True):
         if not self.current_id:
             self.msg("Сначала выберите или добавьте дом, затем заполните поля и сохраните.")
             return
@@ -694,8 +758,10 @@ class HousesTab(BaseTab):
                 (self.company.currentData(), self.address.toPlainText(), to_float(self.area.text()), self.start.text(), self.end.text(), self.status.currentText(), self.notes.toPlainText(), self.current_id),
             )
             conn.commit()
+        self._remember_form_state()
         self.msg("Дом сохранен")
-        self.refresh()
+        if refresh_after:
+            self.refresh()
 
 
 
@@ -808,10 +874,14 @@ class CategoriesTab(BaseTab):
 
     def _load_current(self):
         item = self.list.currentItem()
-        self.current_id = item.data(Qt.UserRole) if item else None
+        next_id = item.data(Qt.UserRole) if item else None
+        if not self._commit_form_before_load(next_id):
+            return
+        self.current_id = next_id
         r = db.row("SELECT * FROM work_categories WHERE id=?", (self.current_id,)) if self.current_id else None
         if not r:
             self.update_form_state()
+            self._remember_form_state()
             return
         self.update_form_state()
         self.name.setText(r["name"]); self.section.setCurrentText(r["section"] or "Не выбрано"); self.unit.setCurrentText(r["unit"] or "Не выбрано")
@@ -822,6 +892,7 @@ class CategoriesTab(BaseTab):
             vals = [sub["id"], sub["name"], sub["section"], sub["unit"], sub["default_price"], sub["notes"]]
             for c, val in enumerate(vals): self.sub_table.set_value(row, c, val)
         self.sub_table.resizeColumnsToContents()
+        self._remember_form_state()
 
     def add_category(self):
         if self.current_id:
@@ -854,7 +925,7 @@ class CategoriesTab(BaseTab):
         vals = ["", "Новая подкатегория", section, unit, self.price.text() or "0", ""]
         for c, val in enumerate(vals): self.sub_table.set_value(row, c, val)
 
-    def save(self):
+    def save(self, *_args, refresh_after: bool = True):
         if not self.current_id:
             self.msg("Нажмите «Добавить категорию», затем заполните поля и сохраните.")
             return
@@ -866,6 +937,7 @@ class CategoriesTab(BaseTab):
                 (self.name.text(), section, unit, to_float(self.price.text()), self.notes.toPlainText(), self.current_id),
             )
             existing_ids: list[int] = []
+            new_subrows: list[tuple[int, int]] = []
             for r in range(self.sub_table.rowCount()):
                 name = self.sub_table.value(r, 1)
                 if not name:
@@ -882,14 +954,19 @@ class CategoriesTab(BaseTab):
                 else:
                     cur = conn.execute("INSERT INTO work_categories(parent_id, name, section, unit, default_price, notes) VALUES(?,?,?,?,?,?)", vals)
                     existing_ids.append(int(cur.lastrowid))
+                    new_subrows.append((r, int(cur.lastrowid)))
             if existing_ids:
                 placeholders = ",".join("?" for _ in existing_ids)
                 conn.execute(f"UPDATE work_categories SET is_active=0 WHERE parent_id=? AND id NOT IN ({placeholders})", (self.current_id, *existing_ids))
             else:
                 conn.execute("UPDATE work_categories SET is_active=0 WHERE parent_id=?", (self.current_id,))
             conn.commit()
+        for row_index, new_id in new_subrows:
+            self.sub_table.set_value(row_index, 0, new_id)
+        self._remember_form_state()
         self.msg("Категории сохранены")
-        self.refresh()
+        if refresh_after:
+            self.refresh()
 
 
 class WorksTab(BaseTab):
@@ -1136,10 +1213,14 @@ class TemplatesTab(BaseTab):
 
     def _load_current(self):
         item = self.list.currentItem()
-        self.current_id = item.data(Qt.UserRole) if item else None
+        next_id = item.data(Qt.UserRole) if item else None
+        if not self._commit_form_before_load(next_id):
+            return
+        self.current_id = next_id
         r = db.row("SELECT * FROM templates WHERE id=?", (self.current_id,)) if self.current_id else None
         if not r:
             self.update_form_state()
+            self._remember_form_state()
             return
         self.update_form_state()
         self.name.setText(r["name"]); self.category.setCurrentText(r["category"]); self.notes.setPlainText(r["notes"])
@@ -1150,6 +1231,7 @@ class TemplatesTab(BaseTab):
             vals = [it["id"], it["work_item_id"] or "", it["name"], it["unit"], it["unit_price"], it["plan_qty"]]
             for c, val in enumerate(vals): self.table.set_value(row, c, val)
         self.table.resizeColumnsToContents()
+        self._remember_form_state()
 
     def add_template(self):
         if self.current_id:
@@ -1177,7 +1259,7 @@ class TemplatesTab(BaseTab):
         vals = ["", wid, r["name"], r["unit"], r["default_price"], "0"]
         for c, val in enumerate(vals): self.table.set_value(row, c, val)
 
-    def save(self):
+    def save(self, *_args, refresh_after: bool = True):
         if not self.current_id:
             self.msg("Нажмите «Добавить шаблон», затем заполните поля и сохраните.")
             return
@@ -1193,8 +1275,10 @@ class TemplatesTab(BaseTab):
                     (self.current_id, int(self.table.value(r, 1) or 0) or None, name, self.table.value(r, 3), to_float(self.table.value(r, 4)), to_float(self.table.value(r, 5)), r + 1),
                 )
             conn.commit()
+        self._remember_form_state()
         self.msg("Шаблон сохранен")
-        self.refresh()
+        if refresh_after:
+            self.refresh()
 
 
 class AddFromReferenceDialog(QDialog):
