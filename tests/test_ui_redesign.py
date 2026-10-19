@@ -45,7 +45,7 @@ class ShellTests(unittest.TestCase):
         old_theme = self.window._theme
         self.window.switch_theme()
         self.assertNotEqual(self.window._theme, old_theme)
-        self.assertFalse(self.window.sidebar.scale_combo.isVisible())
+        self.assertTrue(self.window.sidebar.scale_combo.isHidden())
         self.assertEqual(self.window.sidebar.scale_combo.count(), 1)
         self.window.set_scale(125)
         self.assertEqual(self.window._scale, 100)
@@ -76,6 +76,66 @@ class ShellTests(unittest.TestCase):
         self.assertEqual(self.window.sidebar.navigation.currentRow(), 0)
         self.assertEqual(self.window.page_header.save_status.property("state"), "error")
         self.window.company_tab.current_id = None
+
+
+    def test_bulk_line_identity_and_explicit_zero(self):
+        cid = db.execute("INSERT INTO companies(name) VALUES(?)", ("УО",))
+        hid = db.execute("INSERT INTO houses(company_id,address,total_area) VALUES(?,?,?)",
+                         (cid, "Дом 1", 100))
+        wid = db.execute(
+            "INSERT INTO work_items(name,category,unit) VALUES(?,?,?)",
+            ("Уборка", "Содержание", "м²"))
+        rid = db.create_report(cid, hid, 2025)
+        with db.connect() as conn:
+            cur = conn.execute(
+                """INSERT INTO report_content_items
+                   (report_id,work_item_id,name,unit,unit_price,plan_qty,
+                   plan_cost,actual_qty,actual_cost,source,is_manual,position)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (rid,wid,"Уборка","м²",6.76,100,676,100,676,"массовое применение",0,1))
+            line_id = int(cur.lastrowid)
+            conn.commit()
+        self.window.navigate(5)
+        page = self.window.reports_tab
+        page.year_filter.setValue(2025)
+        self.assertEqual(page.current_id, rid)
+        page.save(silent=True, refresh_after=False)
+        original = db.row("SELECT * FROM report_content_items WHERE id=?", (line_id,))
+        self.assertEqual(original["is_manual"], 0)
+        self.assertEqual(original["source"], "массовое применение")
+        self.assertEqual(page.content_table.value(0,0), str(line_id))
+
+        page.content_table.set_value(0,7,"0")
+        page.flush_autosave()
+        changed = db.row("SELECT * FROM report_content_items WHERE id=?", (line_id,))
+        self.assertEqual(changed["id"], line_id)
+        self.assertEqual(changed["is_manual"], 1)
+        self.assertEqual(changed["source"], "массовое применение")
+        self.assertEqual(changed["actual_qty"], 0)
+        self.assertEqual(changed["actual_cost"], 0)
+        self.assertEqual(changed["plan_cost"], 676)
+        self.assertEqual(self.window.page_header.save_status.property("state"), "saved")
+
+    def test_failed_report_save_blocks_navigation(self):
+        cid = db.execute("INSERT INTO companies(name) VALUES(?)", ("УО",))
+        hid = db.execute("INSERT INTO houses(company_id,address) VALUES(?,?)", (cid,"Дом 2"))
+        rid = db.create_report(cid,hid,2025)
+        self.window.navigate(5)
+        page = self.window.reports_tab
+        page.year_filter.setValue(2025)
+        self.assertEqual(page.current_id, rid)
+        page.period_start.setText("2025-02-01")
+        self.assertTrue(page._dirty_report)
+        with patch("src.uk728.app.connect", side_effect=OSError("readonly database")):
+            self.window.navigate(0)
+        self.assertEqual(self.window.tabs.currentIndex(), 5)
+        self.assertEqual(self.window.sidebar.navigation.currentRow(), 5)
+        self.assertTrue(page._dirty_report)
+        self.assertEqual(page.period_start.text(), "2025-02-01")
+        self.assertEqual(self.window.page_header.save_status.property("state"), "error")
+        # Allow tear-down without writing the deliberately unsaved mock value.
+        page._dirty_report = False
+        page._autosave_timer.stop()
 
 
 if __name__ == "__main__":

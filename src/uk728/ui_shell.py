@@ -137,18 +137,11 @@ class NavigationSidebar(QFrame):
         self.theme_button.clicked.connect(self.themeRequested.emit)
         layout.addWidget(self.theme_button)
 
-        # Kept for API compatibility; unverified scales 125/150 are hidden.
-        scale_row = QHBoxLayout()
-        scale_label = QLabel("Масштаб")
-        scale_label.setObjectName("PageSubtitle")
-        scale_row.addWidget(scale_label)
-        self.scale_combo = QComboBox()
+        # An API-compatible but hidden 100%-only selector.
+        self.scale_combo = QComboBox(self)
         self.scale_combo.addItem("100%", 100)
-        self.scale_combo.setCurrentIndex(max(0, self.scale_combo.findData(scale)))
-        self.scale_combo.currentIndexChanged.connect(self._scale_changed)
-        scale_row.addWidget(self.scale_combo, 1)
-        # No scale widget in UI until sizes >100% have been validated.
         self.scale_combo.setEnabled(False)
+        self.scale_combo.hide()
         self.refresh_theme(theme)
 
     def _scale_changed(self, _index):
