@@ -1,0 +1,71 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-exe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build portable Windows application
+    runs-on: windows-2022
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Check Python syntax
+        shell: pwsh
+        run: |
+          python -m compileall -q main.py src
+
+      - name: Build EXE with PyInstaller
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed --onedir --name Otchetnost_UK_728 main.py
+
+      - name: Verify portable distribution
+        shell: pwsh
+        run: |
+          $output = 'dist/Otchetnost_UK_728'
+          if (-not (Test-Path "$output/Otchetnost_UK_728.exe")) {
+            throw 'PyInstaller did not create the expected EXE.'
+          }
+          if (-not (Test-Path "$output/_internal")) {
+            throw 'Required PyInstaller _internal directory is missing.'
+          }
+          New-Item -ItemType Directory -Force -Path "$output/data" | Out-Null
+          New-Item -ItemType File -Force -Path "$output/data/.gitkeep" | Out-Null
+          "Download the Windows build from this run's Artifacts section. Extract the entire archive and run Otchetnost_UK_728.exe; keep _internal next to the EXE." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Otchetnost_UK_728_Windows_${{ github.run_number }}
+          path: dist/Otchetnost_UK_728/
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+          compression-level: 6
