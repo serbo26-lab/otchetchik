@@ -45,8 +45,9 @@ from .paths import data_dir, make_backup
 from .utils import full_year_period, iso_date, money, to_float
 from .ui_style import apply_theme
 from .ui_shell import ActionFlowLayout, NavigationSidebar, PageChrome, PAGES
+from .report_storage import sync_report_rows
 
-APP_TITLE = "Отчетность УК по приказу 728/пр — V1.6.0 UI/UX REDESIGN"
+APP_TITLE = "Отчетность УК по приказу 728/пр — V1.6.1 STABILITY"
 
 
 def selectable_label(text: str = "") -> QLabel:
@@ -1264,6 +1265,7 @@ class ReportsTab(BaseTab):
         self.current_id: int | None = None
         self._loading_report = False
         self._saving_report = False
+        self._dirty_report = False
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.timeout.connect(self._autosave_current_report)
@@ -1328,21 +1330,30 @@ class ReportsTab(BaseTab):
     def schedule_autosave(self, *args) -> None:
         if self._loading_report or self._saving_report or not self.current_id:
             return
+        self._dirty_report = True
         self._autosave_timer.start(700)
         win = self.window()
-        if hasattr(win, 'set_save_status'):
-            win.set_save_status('saving')
+        if hasattr(win, "set_save_status"):
+            win.set_save_status("pending")
 
     def flush_autosave(self) -> None:
+        if not self._dirty_report or not self.current_id or self._loading_report:
+            return
         if self._autosave_timer.isActive():
             self._autosave_timer.stop()
-        if self.current_id and not self._loading_report and not self._saving_report:
-            self.save(silent=True, refresh_after=False)
+        self.save(silent=True, refresh_after=False)
 
     def _autosave_current_report(self) -> None:
-        if not self.current_id or self._loading_report or self._saving_report:
+        if not self._dirty_report or not self.current_id or self._loading_report or self._saving_report:
             return
-        self.save(silent=True, refresh_after=False)
+        try:
+            self.save(silent=True, refresh_after=False)
+        except Exception as exc:
+            # A timer must not raise an unhandled error or pretend that the write succeeded.
+            win = self.window()
+            if hasattr(win, "set_save_status"):
+                win.set_save_status("error")
+            self.msg(f"Не удалось сохранить отчет: {exc}")
 
     def _build_general_tab(self):
         w = QWidget(); form = QFormLayout(w)
@@ -1542,6 +1553,9 @@ class ReportsTab(BaseTab):
             self._fill_template_combo(self.management_template_combo, "Управление")
 
     def refresh(self):
+        # Before rebuilding the report list, persist the report still on screen.
+        if self._dirty_report and self.current_id and not self._loading_report:
+            self.flush_autosave()
         target_id = self.current_id
         self.list.blockSignals(True)
         self.list.clear()
@@ -1628,7 +1642,21 @@ class ReportsTab(BaseTab):
         new_id = item.data(Qt.UserRole) if item else None
         old_id = self.current_id
         if old_id and old_id != new_id and not self._loading_report and not self._saving_report:
-            self.flush_autosave()
+            try:
+                self.flush_autosave()
+            except Exception as exc:
+                # The model selection has changed but the old editor must not be discarded.
+                blocked = self.list.blockSignals(True)
+                for i in range(self.list.count()):
+                    if self.list.item(i).data(Qt.UserRole) == old_id:
+                        self.list.setCurrentRow(i)
+                        break
+                self.list.blockSignals(blocked)
+                win = self.window()
+                if hasattr(win, "set_save_status"):
+                    win.set_save_status("error")
+                self.msg(f"Не удалось сохранить предыдущий отчет: {exc}")
+                return
         self.current_id = new_id
         if not self.current_id:
             self.report_tabs.setEnabled(False)
@@ -1662,6 +1690,10 @@ class ReportsTab(BaseTab):
             self.claim_pret.setText(str(claims.get("pretensions_count") or "")); self.claim_lawsuits.setText(str(claims.get("lawsuits_count") or "")); self.claim_amount.setText(str(claims.get("recovered_amount") or ""))
         finally:
             self._loading_report = False
+        self._dirty_report = False
+        win = self.window()
+        if hasattr(win, "set_save_status"):
+            win.set_save_status("saved")
 
     def _content_calc_values(self, row: int) -> tuple[float, float]:
         unit_price = to_float(self.content_table.value(row, 4))
@@ -1710,7 +1742,7 @@ class ReportsTab(BaseTab):
         if plan_cost in (None, ""):
             plan_cost = to_float(unit_price) * to_float(plan_qty)
         actual_cost = item.get("actual_cost", None)
-        if actual_cost in (None, "") or (to_float(actual_cost) == 0 and to_float(actual_qty) != 0 and to_float(unit_price) != 0):
+        if actual_cost in (None, ""):
             actual_cost = to_float(unit_price) * to_float(actual_qty)
         vals = [item.get("id", ""), item.get("work_item_id", ""), item.get("name", ""), item.get("unit", "усл."), unit_price, plan_qty, plan_cost, actual_qty, actual_cost]
         self._content_recalc_lock = True
@@ -1718,12 +1750,20 @@ class ReportsTab(BaseTab):
             for c, val in enumerate(vals): self.content_table.set_value(row, c, val)
         finally:
             self._content_recalc_lock = False
+        self.content_table.item(row, 0).setData(Qt.UserRole, {
+            "source": item.get("source", "ручной ввод/редактирование"),
+            "is_manual": item.get("is_manual", 0 if item.get("source") in ("массовое применение", "шаблон") else 1),
+        })
         self.schedule_autosave()
 
     def add_repair_row(self, item: dict[str, Any]):
         row = self.repair_table.rowCount(); self.repair_table.insertRow(row)
         vals = [item.get("id", ""), item.get("work_item_id", ""), item.get("name", ""), item.get("basis", ""), item.get("cost", "0"), item.get("volume", ""), item.get("act_details", "")]
         for c, val in enumerate(vals): self.repair_table.set_value(row, c, val)
+        self.repair_table.item(row, 0).setData(Qt.UserRole, {
+            "source": item.get("source", "ручной ввод/редактирование"),
+            "is_manual": item.get("is_manual", 0 if item.get("source") in ("массовое применение", "шаблон") else 1),
+        })
         self.schedule_autosave()
 
     def _management_calc_value(self, row: int) -> float:
@@ -1761,6 +1801,10 @@ class ReportsTab(BaseTab):
             for c, val in enumerate(vals): self.management_table.set_value(row, c, val)
         finally:
             self._management_recalc_lock = False
+        self.management_table.item(row, 0).setData(Qt.UserRole, {
+            "source": item.get("source", "ручной ввод/редактирование"),
+            "is_manual": item.get("is_manual", 0 if item.get("source") in ("массовое применение", "шаблон") else 1),
+        })
         self.schedule_autosave()
 
     def recalc_management_total(self) -> None:
@@ -1841,41 +1885,60 @@ class ReportsTab(BaseTab):
                     "UPDATE reports SET year=?, period_start=?, period_end=?, show_period_note=?, publish_date=?, status=?, management_cost=?, repair_start_balance=?, repair_accrual=?, repair_work_cost=?, repair_end_balance=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                     (self.year.value(), iso_date(self.period_start.text()) or self.period_start.text(), iso_date(self.period_end.text()) or self.period_end.text(), 1 if self.show_period.isChecked() else 0, iso_date(self.publish.text()) or self.publish.text(), self.status.currentText(), to_float(self.management_cost.text()), to_float(self.repair_start.text()), to_float(self.repair_accrual.text()), to_float(self.repair_work_cost.text()), to_float(self.repair_end.text()), self.notes.toPlainText(), rid),
                 )
-                conn.execute("DELETE FROM report_content_items WHERE report_id=?", (rid,))
-                for r in range(self.content_table.rowCount()):
-                    name = self.content_table.value(r, 2)
-                    if not name:
-                        continue
-                    unit_price = to_float(self.content_table.value(r, 4))
-                    plan_qty = to_float(self.content_table.value(r, 5))
-                    actual_qty = to_float(self.content_table.value(r, 7))
-                    plan_cost = to_float(self.content_table.value(r, 6)) or unit_price * plan_qty
-                    actual_cost = to_float(self.content_table.value(r, 8)) or unit_price * actual_qty
-                    conn.execute(
-                        "INSERT INTO report_content_items(report_id, work_item_id, name, unit, unit_price, plan_qty, plan_cost, actual_qty, actual_cost, source, is_manual, position) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (rid, int(self.content_table.value(r,1) or 0) or None, name, self.content_table.value(r,3), unit_price, plan_qty, plan_cost, actual_qty, actual_cost, "ручной ввод/редактирование", 1, r+1),
-                    )
-                conn.execute("DELETE FROM report_repair_items WHERE report_id=?", (rid,))
-                for r in range(self.repair_table.rowCount()):
-                    name = self.repair_table.value(r, 2)
-                    if not name:
-                        continue
-                    conn.execute(
-                        "INSERT INTO report_repair_items(report_id, work_item_id, name, basis, cost, volume, act_details, source, is_manual, position) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                        (rid, int(self.repair_table.value(r,1) or 0) or None, name, self.repair_table.value(r,3), to_float(self.repair_table.value(r,4)), self.repair_table.value(r,5), self.repair_table.value(r,6), "ручной ввод/редактирование", 1, r+1),
-                    )
-                conn.execute("DELETE FROM report_management_items WHERE report_id=?", (rid,))
-                for r in range(self.management_table.rowCount()):
-                    name = self.management_table.value(r, 2)
-                    if not name:
-                        continue
-                    unit_price = to_float(self.management_table.value(r, 4))
-                    qty = to_float(self.management_table.value(r, 5))
-                    cost = to_float(self.management_table.value(r, 6)) or unit_price * qty
-                    conn.execute(
-                        "INSERT INTO report_management_items(report_id, work_item_id, name, unit, unit_price, qty, cost, source, is_manual, position) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                        (rid, int(self.management_table.value(r,1) or 0) or None, name, self.management_table.value(r,3), unit_price, qty, cost, "ручной ввод/редактирование", 1, r+1),
-                    )
+                # Reconcile the three report sections by row ID. Unchanged bulk
+                # lines must NOT become manually overridden after autosave.
+                inserted_rows = []
+                report_tables = (
+                    (self.content_table, "report_content_items"),
+                    (self.repair_table, "report_repair_items"),
+                    (self.management_table, "report_management_items"),
+                )
+                for widget, table_name in report_tables:
+                    records = []
+                    for row_index in range(widget.rowCount()):
+                        name = widget.value(row_index, 2)
+                        meta_item = widget.item(row_index, 0)
+                        meta = meta_item.data(Qt.UserRole) if meta_item else None
+                        meta = meta if isinstance(meta, dict) else {}
+                        common = {
+                            "id": int(widget.value(row_index, 0) or 0),
+                            "work_item_id": int(widget.value(row_index, 1) or 0) or None,
+                            "name": name,
+                            "source": meta.get("source", "ручной ввод/редактирование"),
+                            "is_manual": meta.get("is_manual", 1),
+                        }
+                        if table_name == "report_content_items":
+                            price = to_float(widget.value(row_index, 4))
+                            plan_qty = to_float(widget.value(row_index, 5))
+                            actual_qty = to_float(widget.value(row_index, 7))
+                            plan_text = widget.value(row_index, 6)
+                            actual_text = widget.value(row_index, 8)
+                            fields = {
+                                "unit": widget.value(row_index, 3),
+                                "unit_price": price, "plan_qty": plan_qty,
+                                "plan_cost": to_float(plan_text) if plan_text else price * plan_qty,
+                                "actual_qty": actual_qty,
+                                "actual_cost": to_float(actual_text) if actual_text else price * actual_qty,
+                            }
+                        elif table_name == "report_repair_items":
+                            fields = {
+                                "basis": widget.value(row_index, 3),
+                                "cost": to_float(widget.value(row_index, 4)),
+                                "volume": widget.value(row_index, 5),
+                                "act_details": widget.value(row_index, 6),
+                            }
+                        else:
+                            price = to_float(widget.value(row_index, 4))
+                            qty = to_float(widget.value(row_index, 5))
+                            cost_text = widget.value(row_index, 6)
+                            fields = {
+                                "unit": widget.value(row_index, 3),
+                                "unit_price": price, "qty": qty,
+                                "cost": to_float(cost_text) if cost_text else price * qty,
+                            }
+                        records.append({**common, **fields})
+                    result = sync_report_rows(conn, table_name, rid, records)
+                    inserted_rows.append((widget, result))
                 conn.execute("DELETE FROM report_financials WHERE report_id=?", (rid,))
                 for r in range(self.finance_table.rowCount()):
                     payer = self.finance_table.value(r, 1)
@@ -1890,11 +1953,22 @@ class ReportsTab(BaseTab):
                     (rid, int(to_float(self.claim_pret.text())), int(to_float(self.claim_lawsuits.text())), to_float(self.claim_amount.text())),
                 )
                 conn.commit()
+                # Update hidden IDs before allowing UI change signals to mark new edits.
+                for widget, inserts in inserted_rows:
+                    for row_index, record_id in inserts:
+                        widget.set_value(row_index, 0, record_id)
+        except Exception:
+            win = self.window()
+            if hasattr(win, "set_save_status"):
+                win.set_save_status("error")
+            raise
         finally:
             self._saving_report = False
-        if silent:
-            self.msg("Автосохранение отчета выполнено")
-        else:
+        self._dirty_report = False
+        win = self.window()
+        if hasattr(win, "set_save_status"):
+            win.set_save_status("saved")
+        if not silent:
             self.msg("Отчет сохранен")
         if refresh_after:
             self.refresh()
@@ -1903,7 +1977,11 @@ class ReportsTab(BaseTab):
         if not self.current_id:
             self.msg("Выберите отчет для выгрузки.")
             return
-        self.save()
+        try:
+            self.save(silent=True, refresh_after=False)
+        except Exception as exc:
+            self.msg(f"Экспорт отменен: отчет не удалось сохранить ({exc})")
+            return
         make_backup("before_export")
         paths = []
         try:
@@ -2284,8 +2362,8 @@ class MainWindow(QMainWindow):
             self._scale = int(self.settings.value("ui/scale", 100))
         except (TypeError, ValueError):
             self._scale = 100
-        if self._scale not in (100, 125, 150):
-            self._scale = 100
+        # Non-100 UI scaling was experimental in the reference application.
+        self._scale = 100
 
         apply_theme(QApplication.instance(), self._theme, self._scale)
         central = QWidget(self)
@@ -2391,6 +2469,7 @@ class MainWindow(QMainWindow):
         self._last_tab = index
         self.sidebar.select(index)
         self.page_header.show_page(index)
+        self.set_save_status("idle")
         current = self.tabs.widget(index)
         if hasattr(current, "reload"):
             try:
@@ -2403,7 +2482,8 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self.statusBar().showMessage(f"Не удалось обновить вкладку: {exc}", 8000)
         self.refresh_context()
-        self.set_save_status("saved")
+        if isinstance(current, ReportsTab) and current.current_id and not current._dirty_report:
+            self.set_save_status("saved")
 
     def refresh_context(self):
         """A compact, always visible reporting context without mutating selectors."""
@@ -2429,13 +2509,9 @@ class MainWindow(QMainWindow):
         self.sidebar.refresh_theme(self._theme)
 
     def set_scale(self, scale: int):
-        if scale not in (100, 125, 150):
-            return
-        self._scale = scale
-        self.settings.setValue("ui/scale", scale)
-        self.sidebar.setFixedWidth(round(245 * scale / 100))
-        apply_theme(QApplication.instance(), self._theme, scale)
-        self.sidebar.refresh_theme(self._theme)
+        # Intentionally locked until each size has a verified layout.
+        self._scale = 100
+        self.settings.setValue("ui/scale", 100)
 
     def auto_backup(self):
         try:
