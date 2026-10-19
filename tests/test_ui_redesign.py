@@ -19,7 +19,7 @@ class ShellTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.temp.cleanup)
         self.patch_dir = patch("src.uk728.paths.app_dir", return_value=Path(self.temp.name))
         self.patch_dir.start()
@@ -57,6 +57,15 @@ class ShellTests(unittest.TestCase):
         self.window.navigate(5)
         self.window.navigate(6)
         self.assertTrue(database.exists())
+
+    def test_organization_edit_saved_on_navigation(self):
+        self.window.company_tab.add_company()
+        company_id = self.window.company_tab.current_id
+        self.assertIsNotNone(company_id)
+        self.window.company_tab.name.setText("Тестовая УО после переключения")
+        self.window.navigate(1)
+        row = db.row("SELECT name FROM companies WHERE id=?", (company_id,))
+        self.assertEqual(row["name"], "Тестовая УО после переключения")
 
     def test_failed_page_save_stops_navigation(self):
         self.window.company_tab.current_id = 12345
