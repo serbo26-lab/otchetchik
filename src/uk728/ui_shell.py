@@ -137,17 +137,11 @@ class NavigationSidebar(QFrame):
         self.theme_button.clicked.connect(self.themeRequested.emit)
         layout.addWidget(self.theme_button)
 
-        scale_row = QHBoxLayout()
-        scale_label = QLabel("Масштаб")
-        scale_label.setObjectName("PageSubtitle")
-        scale_row.addWidget(scale_label)
-        self.scale_combo = QComboBox()
-        for percent in (100, 125, 150):
-            self.scale_combo.addItem(f"{percent}%", percent)
-        self.scale_combo.setCurrentIndex(max(0, self.scale_combo.findData(scale)))
-        self.scale_combo.currentIndexChanged.connect(self._scale_changed)
-        scale_row.addWidget(self.scale_combo, 1)
-        layout.addLayout(scale_row)
+        # An API-compatible but hidden 100%-only selector.
+        self.scale_combo = QComboBox(self)
+        self.scale_combo.addItem("100%", 100)
+        self.scale_combo.setEnabled(False)
+        self.scale_combo.hide()
         self.refresh_theme(theme)
 
     def _scale_changed(self, _index):
@@ -182,9 +176,9 @@ class PageChrome(QFrame):
         self.title.setObjectName("PageTitle")
         header.addWidget(self.title, 1)
 
-        self.save_status = QLabel("Локально: сохранено")
+        self.save_status = QLabel("Сохранение при переходе")
         self.save_status.setObjectName("SaveStatus")
-        self.save_status.setProperty("state", "saved")
+        self.save_status.setProperty("state", "idle")
         header.addWidget(self.save_status)
         container.addLayout(header)
 
@@ -219,7 +213,7 @@ class PageChrome(QFrame):
         self.context.setText(text)
 
     def set_save_status(self, state: str, message: str | None = None):
-        labels = {"saved": "Локально: сохранено", "saving": "Локально: сохранение…", "error": "Локально: ошибка сохранения"}
+        labels = {"saved": "Локально: сохранено", "pending": "Локально: есть изменения", "saving": "Локально: сохранение…", "idle": "Сохранение при переходе", "error": "Локально: ошибка сохранения"}
         self.save_status.setText(message or labels.get(state, labels["saved"]))
         self.save_status.setProperty("state", state)
         self.save_status.style().unpolish(self.save_status)

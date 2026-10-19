@@ -131,7 +131,7 @@ def apply_theme(app, theme: str, scale: int = 100) -> None:
     ]:
         q_palette.setColor(role, QColor(palette[key]))
     app.setPalette(q_palette)
-    percent = scale if scale in (100, 125, 150) else 100
+    percent = 100
     base = QSS
     for key, value in sorted(palette.items(), key=lambda pair: len(pair[0]), reverse=True):
         base = base.replace("@" + key, value)
