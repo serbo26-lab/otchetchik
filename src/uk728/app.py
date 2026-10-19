@@ -4,7 +4,7 @@ import sys
 import traceback
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer, QEvent, QUrl
+from PySide6.QtCore import Qt, QTimer, QEvent, QUrl, QSettings
 from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGridLayout,
     QGroupBox,
+    QFrame,
+    QStackedWidget,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -41,8 +43,10 @@ from .db import connect
 from .exporters import export_docx, export_pdf, export_xlsx
 from .paths import data_dir, make_backup
 from .utils import full_year_period, iso_date, money, to_float
+from .ui_style import apply_theme
+from .ui_shell import ActionFlowLayout, NavigationSidebar, PageChrome, PAGES
 
-APP_TITLE = "Отчетность УК по приказу 728/пр — V1.5.9 MONTHLY RATE FIX"
+APP_TITLE = "Отчетность УК по приказу 728/пр — V1.6.0 UI/UX REDESIGN"
 
 
 def selectable_label(text: str = "") -> QLabel:
@@ -105,6 +109,13 @@ class ClickComboBox(QComboBox):
         super().mousePressEvent(event)
         if self.isEnabled():
             QTimer.singleShot(0, self.showPopup)
+
+    def wheelEvent(self, event):
+        # Scrolling a form must not accidentally change its selected value.
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
 
     def eventFilter(self, obj, event):
         if obj is self.lineEdit() and event.type() == QEvent.MouseButtonPress and self.isEnabled():
@@ -241,6 +252,8 @@ class BaseTab(QWidget):
         win = self.window()
         if isinstance(win, QMainWindow):
             win.statusBar().showMessage(text, 5000)
+            if hasattr(win, 'notification_received'):
+                win.notification_received(text)
 
 
 def form_scroll(inner: QWidget) -> QScrollArea:
@@ -358,7 +371,7 @@ class CompaniesTab(BaseTab):
         self.list = QListWidget()
         self.list.currentItemChanged.connect(self._load_current)
         left_l.addWidget(self.list)
-        btns = QHBoxLayout()
+        btns = ActionFlowLayout()
         add = QPushButton("Добавить организацию")
         add.clicked.connect(self.add_company)
         delete = QPushButton("Удалить")
@@ -504,7 +517,7 @@ class HousesTab(BaseTab):
         left_l.addLayout(top)
         self.list = QListWidget(); self.list.currentItemChanged.connect(self._load_current)
         left_l.addWidget(self.list)
-        btns = QHBoxLayout()
+        btns = ActionFlowLayout()
         self.add_button = QPushButton("Добавить дом"); self.add_button.clicked.connect(self.add_house)
         delete = QPushButton("Удалить"); delete.clicked.connect(self.delete_house)
         btns.addWidget(self.add_button); btns.addWidget(delete)
@@ -702,7 +715,7 @@ class CategoriesTab(BaseTab):
         left_l.addWidget(selectable_label("Категории работ/услуг"))
         self.list = QListWidget(); self.list.currentItemChanged.connect(self._load_current)
         left_l.addWidget(self.list)
-        btns = QHBoxLayout()
+        btns = ActionFlowLayout()
         add = QPushButton("Добавить категорию"); add.clicked.connect(self.add_category)
         delete = QPushButton("Удалить категорию"); delete.clicked.connect(self.delete_category)
         btns.addWidget(add); btns.addWidget(delete)
@@ -907,7 +920,7 @@ class WorksTab(BaseTab):
         self.table.setItemDelegateForColumn(4, EditableComboDelegate(lambda: distinct_texts("work_items", "category", COMMON_SECTIONS), self.table))
         self.table.setItemDelegateForColumn(5, EditableComboDelegate(lambda: distinct_texts("work_items", "unit", COMMON_UNITS), self.table))
         root.addWidget(self.table)
-        btns = QHBoxLayout()
+        btns = ActionFlowLayout()
         add = QPushButton("Добавить произвольную строку"); add.clicked.connect(self.add_row)
         save = QPushButton("Сохранить справочник"); save.clicked.connect(self.save)
         delete = QPushButton("Удалить выбранные строки"); delete.clicked.connect(self.table.delete_selected_rows)
@@ -1196,7 +1209,7 @@ class AddFromReferenceDialog(QDialog):
                 continue
             self.combo.addItem(work_display(r), r["id"])
         layout.addWidget(self.combo)
-        btns = QHBoxLayout(); ok = QPushButton("Добавить"); cancel = QPushButton("Отмена")
+        btns = ActionFlowLayout(); ok = QPushButton("Добавить"); cancel = QPushButton("Отмена")
         ok.clicked.connect(self.accept); cancel.clicked.connect(self.reject)
         btns.addStretch(); btns.addWidget(ok); btns.addWidget(cancel); layout.addLayout(btns)
 
@@ -1282,7 +1295,7 @@ class ReportsTab(BaseTab):
         self._build_finance_tab()
         self._build_export_tab()
         self.report_tabs.setEnabled(False)
-        btns = QHBoxLayout()
+        btns = ActionFlowLayout()
         save = QPushButton("Сохранить отчет"); save.clicked.connect(self.save)
         btns.addStretch(); btns.addWidget(save)
         right_l.addLayout(btns)
@@ -1316,6 +1329,9 @@ class ReportsTab(BaseTab):
         if self._loading_report or self._saving_report or not self.current_id:
             return
         self._autosave_timer.start(700)
+        win = self.window()
+        if hasattr(win, 'set_save_status'):
+            win.set_save_status('saving')
 
     def flush_autosave(self) -> None:
         if self._autosave_timer.isActive():
@@ -1356,7 +1372,7 @@ class ReportsTab(BaseTab):
         self.content_template_combo = ClickComboBox()
         template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.content_template_combo, 1)
         layout.addLayout(template_row)
-        btns = QHBoxLayout()
+        btns = ActionFlowLayout()
         apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template("Содержание", self.content_template_combo))
         add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference("Содержание"))
         add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_content_row({}))
@@ -1387,7 +1403,7 @@ class ReportsTab(BaseTab):
         self.repair_template_combo = ClickComboBox()
         template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.repair_template_combo, 1)
         layout.addLayout(template_row)
-        btns = QHBoxLayout()
+        btns = ActionFlowLayout()
         apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template("Текущий ремонт", self.repair_template_combo))
         add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference("Текущий ремонт"))
         add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_repair_row({}))
@@ -1423,7 +1439,7 @@ class ReportsTab(BaseTab):
         self.management_template_combo = ClickComboBox()
         template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.management_template_combo, 1)
         layout.addLayout(template_row)
-        btns = QHBoxLayout()
+        btns = ActionFlowLayout()
         apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template("Управление", self.management_template_combo))
         add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference("Управление"))
         add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_management_row({}))
@@ -1952,7 +1968,7 @@ class MassApplyTab(BaseTab):
         form.addWidget(self.create_missing, 7, 1); form.addWidget(self.update_existing, 7, 2)
         form.addWidget(self.help, 8, 0, 1, 4)
         root.addLayout(form)
-        btns = QHBoxLayout(); preview = QPushButton("Предпросмотр"); preview.clicked.connect(self.preview); apply = QPushButton("Применить"); apply.clicked.connect(self.apply)
+        btns = ActionFlowLayout(); preview = QPushButton("Предпросмотр"); preview.clicked.connect(self.preview); apply = QPushButton("Применить"); apply.clicked.connect(self.apply)
         btns.addStretch(); btns.addWidget(preview); btns.addWidget(apply); root.addLayout(btns)
         self.table = CopyPasteTable(0, len(self.PREVIEW_COLUMNS))
         self.table.setHorizontalHeaderLabels(self.PREVIEW_COLUMNS)
@@ -2212,7 +2228,7 @@ class BackupsTab(BaseTab):
         super().__init__()
         layout = QVBoxLayout(self)
         layout.addWidget(selectable_label("Данные программы хранятся в папке data рядом с EXE/исходным файлом. Резервная копия создается автоматически раз в 5 минут."))
-        btns = QHBoxLayout()
+        btns = ActionFlowLayout()
         backup = QPushButton("Создать резервную копию сейчас"); backup.clicked.connect(self.backup_now)
         open_data = QPushButton("Показать путь к папке data"); open_data.clicked.connect(self.show_data_path)
         btns.addWidget(backup); btns.addWidget(open_data); btns.addStretch()
@@ -2237,37 +2253,86 @@ class BackupsTab(BaseTab):
 
 
 class MainWindow(QMainWindow):
+    """Navigation shell; pages retain their own data, calculations and exports."""
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_TITLE)
-        self.resize(1280, 820)
-        self.tabs = QTabWidget()
-        self.setCentralWidget(self.tabs)
+        self.resize(1320, 850)
+        self.settings = QSettings("OtchetnostUK", "728")
+        self._theme = str(self.settings.value("ui/theme", "light"))
+        if self._theme not in ("light", "dark"):
+            self._theme = "light"
+        try:
+            self._scale = int(self.settings.value("ui/scale", 100))
+        except (TypeError, ValueError):
+            self._scale = 100
+        if self._scale not in (100, 125, 150):
+            self._scale = 100
+
+        apply_theme(QApplication.instance(), self._theme, self._scale)
+        central = QWidget(self)
+        central.setObjectName("ContentPane")
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        self.setCentralWidget(central)
+        self.sidebar = NavigationSidebar(self._theme, self._scale, self)
+        root.addWidget(self.sidebar)
+
+        workspace = QWidget()
+        workspace.setObjectName("PageSurface")
+        workspace_layout = QVBoxLayout(workspace)
+        workspace_layout.setContentsMargins(10, 9, 10, 8)
+        workspace_layout.setSpacing(8)
+        self.page_header = PageChrome()
+        workspace_layout.addWidget(self.page_header)
+        self.tabs = QStackedWidget()
+        workspace_layout.addWidget(self.tabs, 1)
+        root.addWidget(workspace, 1)
+
+        # Preserve the existing screens, data bindings and per-section logic.
         self.company_tab = CompaniesTab()
         self.houses_tab = HousesTab()
         self.categories_tab = CategoriesTab()
         self.works_tab = WorksTab()
         self.templates_tab = TemplatesTab()
         self.reports_tab = ReportsTab()
-        self.backups_tab = BackupsTab()
         self.mass_tab = MassApplyTab()
-        for title, tab in [
-            ("Управляющие организации", self.company_tab),
-            ("Дома", self.houses_tab),
-            ("Категории работ", self.categories_tab),
-            ("Справочник работ", self.works_tab),
-            ("Шаблоны", self.templates_tab),
-            ("Отчеты", self.reports_tab),
-            ("Массовое заполнение", self.mass_tab),
-            ("Данные и резервные копии", self.backups_tab),
-        ]:
-            self.tabs.addTab(tab, title)
-        self.tabs.currentChanged.connect(self.on_tab_changed)
+        self.backups_tab = BackupsTab()
+        for tab in (
+            self.company_tab, self.houses_tab, self.categories_tab,
+            self.works_tab, self.templates_tab, self.reports_tab,
+            self.mass_tab, self.backups_tab,
+        ):
+            self.tabs.addWidget(tab)
+
         self._last_tab = 0
+        self.tabs.currentChanged.connect(self.on_tab_changed)
+        self.sidebar.navigateRequested.connect(self.navigate)
+        self.sidebar.themeRequested.connect(self.switch_theme)
+        self.sidebar.scaleRequested.connect(self.set_scale)
+        self.sidebar.select(0)
+        self.page_header.show_page(0)
+        self._decorate_buttons()
+
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.auto_backup)
         self.timer.start(5 * 60 * 1000)
+        self.context_timer = QTimer(self)
+        self.context_timer.timeout.connect(self.refresh_context)
+        self.context_timer.start(1500)
+        self.refresh_context()
         self.statusBar().showMessage("Готово")
+
+    def _decorate_buttons(self):
+        """Mark primary and destructive commands consistently on every page."""
+        for button in self.findChildren(QPushButton):
+            label = button.text().strip().lower()
+            if any(word in label for word in ("удалить", "очистить", "аннулировать")):
+                button.setObjectName("DangerAction")
+            elif label in ("применить", "сохранить отчет", "сохранить справочник", "выгрузить все форматы"):
+                button.setObjectName("PrimaryAction")
 
     def _can_autosave_tab(self, tab) -> bool:
         if not isinstance(tab, BaseTab):
@@ -2276,37 +2341,112 @@ class MainWindow(QMainWindow):
             return getattr(tab, "current_id") is not None
         return True
 
-    def on_tab_changed(self, index: int):
-        old = self.tabs.widget(self._last_tab)
+    def set_save_status(self, state: str, message: str | None = None):
+        self.page_header.set_save_status(state, message)
+
+    def notification_received(self, text: str):
+        low = text.lower()
+        if "не удалось" in low and "сохран" in low:
+            self.set_save_status("error")
+        elif "сохран" in low and any(word in low for word in ("выполнено", "сохранен", "сохранён", "сохранена")):
+            self.set_save_status("saved")
+
+    def navigate(self, index: int):
+        if not 0 <= index < self.tabs.count():
+            return
+        if index == self._last_tab:
+            return
+        previous = self.tabs.widget(self._last_tab)
         try:
-            if self._can_autosave_tab(old):
-                old.save()
-        except Exception as e:
-            self.statusBar().showMessage(f"Автосохранение не выполнено: {e}", 5000)
+            if isinstance(previous, ReportsTab):
+                # No pending edit may be thrown away when selecting another page.
+                previous.flush_autosave()
+            elif self._can_autosave_tab(previous):
+                previous.save()
+        except Exception as exc:
+            self.set_save_status("error")
+            self.statusBar().showMessage(f"Не удалось сохранить изменения: {exc}", 12000)
+            self.sidebar.select(self._last_tab)
+            return
+        self.tabs.setCurrentIndex(index)
+
+    def on_tab_changed(self, index: int):
         self._last_tab = index
+        self.sidebar.select(index)
+        self.page_header.show_page(index)
         current = self.tabs.widget(index)
         if hasattr(current, "reload"):
             try:
                 current.reload()
-            except Exception as e:
-                self.statusBar().showMessage(f"Не удалось обновить вкладку: {e}", 5000)
+            except Exception as exc:
+                self.statusBar().showMessage(f"Не удалось обновить список: {exc}", 8000)
         if isinstance(current, BaseTab):
             try:
                 current.refresh()
-            except Exception as e:
-                self.statusBar().showMessage(f"Не удалось обновить вкладку: {e}", 5000)
-        if self._can_autosave_tab(old):
-            self.statusBar().showMessage("Автосохранение выполнено", 3000)
+            except Exception as exc:
+                self.statusBar().showMessage(f"Не удалось обновить вкладку: {exc}", 8000)
+        self.refresh_context()
+        self.set_save_status("saved")
+
+    def refresh_context(self):
+        """A compact, always visible reporting context without mutating selectors."""
+        try:
+            company = self.reports_tab.company_filter.currentText().strip()
+            house = self.reports_tab.house_filter.currentText().strip()
+            year = self.reports_tab.year_filter.value()
+            parts = []
+            if company and company not in ("Выберите УО", "Выберите организацию", "Все организации"):
+                parts.append(f"УО: {company}")
+            if house and house not in ("Выберите дом", "Все дома"):
+                parts.append(f"Дом: {house}")
+            parts.append(f"Год отчета: {year}")
+            text = "   •   ".join(parts)
+        except (AttributeError, RuntimeError):
+            text = "Рабочий контекст"
+        self.page_header.set_context(text)
+
+    def switch_theme(self):
+        self._theme = "dark" if self._theme == "light" else "light"
+        self.settings.setValue("ui/theme", self._theme)
+        apply_theme(QApplication.instance(), self._theme, self._scale)
+        self.sidebar.refresh_theme(self._theme)
+
+    def set_scale(self, scale: int):
+        if scale not in (100, 125, 150):
+            return
+        self._scale = scale
+        self.settings.setValue("ui/scale", scale)
+        self.sidebar.setFixedWidth(round(245 * scale / 100))
+        apply_theme(QApplication.instance(), self._theme, scale)
+        self.sidebar.refresh_theme(self._theme)
 
     def auto_backup(self):
         try:
             tab = self.tabs.currentWidget()
-            if self._can_autosave_tab(tab):
+            if isinstance(tab, ReportsTab):
+                tab.flush_autosave()
+            elif self._can_autosave_tab(tab):
                 tab.save()
             path = make_backup("auto")
             self.statusBar().showMessage(f"Резервная копия создана: {path.name if path else ''}", 5000)
-        except Exception as e:
-            self.statusBar().showMessage(f"Не удалось создать резервную копию: {e}", 5000)
+        except Exception as exc:
+            self.set_save_status("error")
+            self.statusBar().showMessage(f"Не удалось создать резервную копию: {exc}", 8000)
+
+    def closeEvent(self, event):
+        # A failed write must never silently discard edited form fields.
+        try:
+            tab = self.tabs.currentWidget()
+            if isinstance(tab, ReportsTab):
+                tab.flush_autosave()
+            elif self._can_autosave_tab(tab):
+                tab.save()
+        except Exception as exc:
+            self.set_save_status("error")
+            self.statusBar().showMessage(f"Закрытие отменено: данные не сохранены ({exc})", 12000)
+            event.ignore()
+            return
+        super().closeEvent(event)
 
 
 def install_exception_hook():
@@ -2319,19 +2459,7 @@ def install_exception_hook():
 def main():
     db.init_db()
     app = QApplication(sys.argv)
-    app.setStyleSheet(
-        """
-        QWidget { font-size: 10.5pt; }
-        QLineEdit, QTextEdit, QComboBox, QSpinBox { padding: 5px; }
-        QPushButton { padding: 7px 12px; border-radius: 6px; border: 1px solid #7f8fa6; background: #f7f9fc; }
-        QPushButton:hover { background: #eef3fb; }
-        QPushButton:pressed { background: #dfe8f6; }
-        QTabWidget::pane { border: 1px solid #d6dbe5; }
-        QHeaderView::section { padding: 6px; background: #e9eef7; font-weight: 600; }
-        QTableWidget { gridline-color: #ccd3df; alternate-background-color: #f7f9fc; }
-        """
-    )
     install_exception_hook()
-    win = MainWindow()
-    win.show()
+    window = MainWindow()
+    window.show()
     sys.exit(app.exec())
