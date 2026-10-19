@@ -45,11 +45,12 @@ class ShellTests(unittest.TestCase):
         old_theme = self.window._theme
         self.window.switch_theme()
         self.assertNotEqual(self.window._theme, old_theme)
+        self.assertFalse(self.window.sidebar.scale_combo.isVisible())
+        self.assertEqual(self.window.sidebar.scale_combo.count(), 1)
         self.window.set_scale(125)
-        self.assertEqual(self.window._scale, 125)
-        self.assertEqual(self.window.sidebar.width(), 306)
+        self.assertEqual(self.window._scale, 100)
+        self.assertEqual(self.window.sidebar.width(), 245)
         self.window.switch_theme()
-        self.window.set_scale(100)
 
     def test_data_folder_is_external_and_survives_page_changes(self):
         database = Path(self.temp.name) / "data" / "reporting_728.db"

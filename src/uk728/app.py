@@ -1832,6 +1832,9 @@ class ReportsTab(BaseTab):
             return
         rid = self.current_id
         self._saving_report = True
+        win = self.window()
+        if hasattr(win, "set_save_status"):
+            win.set_save_status("saving")
         try:
             with connect() as conn:
                 conn.execute(
@@ -1957,6 +1960,13 @@ class MassApplyTab(BaseTab):
         self.help = selectable_label("")
         self.create_missing = QCheckBox("Создать отчет, если его еще нет")
         self.update_existing = QCheckBox("Обновлять строку, если эта же услуга уже есть")
+        self.override_manual = QCheckBox("Разрешить замену строк с ручными правками")
+        self.override_manual.setToolTip("По умолчанию ручные изменения защищены от повторного массового заполнения.")
+        self.override_manual.setEnabled(False)
+        self.update_existing.toggled.connect(self.override_manual.setEnabled)
+        self.update_existing.toggled.connect(
+            lambda active: self.override_manual.setChecked(False) if not active else None
+        )
         form.addWidget(selectable_label("УО"), 0, 0); form.addWidget(self.company, 0, 1)
         form.addWidget(selectable_label("Год"), 0, 2); form.addWidget(self.year, 0, 3)
         form.addWidget(selectable_label("Услуга"), 1, 0); form.addWidget(self.work, 1, 1, 1, 3)
@@ -1966,7 +1976,8 @@ class MassApplyTab(BaseTab):
         form.addWidget(self.quantity_label, 5, 0); form.addWidget(self.quantity, 5, 1, 1, 3)
         form.addWidget(self.total_label, 6, 0); form.addWidget(self.total, 6, 1, 1, 3)
         form.addWidget(self.create_missing, 7, 1); form.addWidget(self.update_existing, 7, 2)
-        form.addWidget(self.help, 8, 0, 1, 4)
+        form.addWidget(self.override_manual, 8, 1, 1, 3)
+        form.addWidget(self.help, 9, 0, 1, 4)
         root.addLayout(form)
         btns = ActionFlowLayout(); preview = QPushButton("Предпросмотр"); preview.clicked.connect(self.preview); apply = QPushButton("Применить"); apply.clicked.connect(self.apply)
         btns.addStretch(); btns.addWidget(preview); btns.addWidget(apply); root.addLayout(btns)
@@ -1987,6 +1998,7 @@ class MassApplyTab(BaseTab):
         self.total.textChanged.connect(self.mark_dirty)
         self.create_missing.stateChanged.connect(self.mark_dirty)
         self.update_existing.stateChanged.connect(self.mark_dirty)
+        self.override_manual.stateChanged.connect(self.mark_dirty)
         self.reload()
         self.update_mode_help()
 
@@ -2132,8 +2144,10 @@ class MassApplyTab(BaseTab):
                 action = "нет отчета"
                 if report:
                     existing = self._find_existing(conn, table, int(report["id"]), int(wid), str(work["name"]))
-                    if existing and int(existing["is_manual"] or 0) and not self.update_existing.isChecked():
-                        action = "эта услуга уже есть и изменена вручную, пропуск"
+                    if existing and int(existing["is_manual"] or 0) and not (
+                        self.update_existing.isChecked() and self.override_manual.isChecked()
+                    ):
+                        action = "изменено вручную — защищено, пропуск"
                     elif existing and self.update_existing.isChecked():
                         action = "эта услуга уже есть, будет обновлена"
                     elif existing:
@@ -2160,7 +2174,10 @@ class MassApplyTab(BaseTab):
         if self.table.rowCount() == 0:
             self.msg("Нет домов или отчетов для применения.")
             return
-        if QMessageBox.question(self, "Применить", "Добавить/обновить выбранную услугу по данным предпросмотра?") != QMessageBox.Yes:
+        confirmation = "Добавить/обновить выбранную услугу по данным предпросмотра?"
+        if self.override_manual.isChecked():
+            confirmation += "\n\nВНИМАНИЕ: вручную измененные строки будут перезаписаны!"
+        if QMessageBox.question(self, "Применить", confirmation) != QMessageBox.Yes:
             return
         work = db.row("SELECT * FROM work_items WHERE id=?", (wid,))
         if not work:
