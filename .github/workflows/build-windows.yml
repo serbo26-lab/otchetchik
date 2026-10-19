@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: windows-exe-${{ github.ref }}
@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build portable Windows application
+    name: Build and publish Dev Build
     runs-on: windows-2022
     timeout-minutes: 40
 
@@ -41,31 +41,58 @@ jobs:
         run: |
           python -m compileall -q main.py src
 
-      - name: Build EXE with PyInstaller
+      - name: Build portable Windows application
         shell: pwsh
         run: |
           python -m PyInstaller --noconfirm --clean --windowed --onedir --name Otchetnost_UK_728 main.py
 
-      - name: Verify portable distribution
+      - name: Check and package Windows build
         shell: pwsh
         run: |
-          $output = 'dist/Otchetnost_UK_728'
-          if (-not (Test-Path "$output/Otchetnost_UK_728.exe")) {
-            throw 'PyInstaller did not create the expected EXE.'
+          $ErrorActionPreference = 'Stop'
+          $folder = 'dist/Otchetnost_UK_728'
+          if (-not (Test-Path "$folder/Otchetnost_UK_728.exe")) {
+            throw 'The executable was not created.'
           }
-          if (-not (Test-Path "$output/_internal")) {
-            throw 'Required PyInstaller _internal directory is missing.'
+          if (-not (Test-Path "$folder/_internal")) {
+            throw 'Required _internal directory is missing.'
           }
-          New-Item -ItemType Directory -Force -Path "$output/data" | Out-Null
-          New-Item -ItemType File -Force -Path "$output/data/.gitkeep" | Out-Null
-          "Download the Windows build from this run's Artifacts section. Extract the entire archive and run Otchetnost_UK_728.exe; keep _internal next to the EXE." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          New-Item -ItemType Directory -Force -Path "$folder/data" | Out-Null
+          New-Item -ItemType Directory -Force -Path 'release' | Out-Null
+          Compress-Archive -Path $folder -DestinationPath 'release/Otchetnost_UK_728_Dev_Build.zip' -CompressionLevel Optimal -Force
 
-      - name: Upload Windows build
-        uses: actions/upload-artifact@v4
-        with:
-          name: Otchetnost_UK_728_Windows_${{ github.run_number }}
-          path: dist/Otchetnost_UK_728/
-          if-no-files-found: error
-          include-hidden-files: true
-          retention-days: 30
-          compression-level: 6
+      - name: Publish in Releases as Dev Build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = 'release/Otchetnost_UK_728_Dev_Build.zip'
+          if (-not (Test-Path $zip)) { throw 'The release archive is missing.' }
+          $notes = @'
+          **В РАЗРАБОТКЕ, НА ТЕКУЩЕЙ СТАДИИ РАБОТАЕТ ПОСРЕДСТВЕННО, НЕ ИМЕЕТ СВЯЗИ С ОБЩЕЙ БД ИЗ ДРУГИХ ПО И СИНХРОНИЗАЦИИ ГИС ЖКХ!**
+
+          Тестовая сборка программы «Отчетность УК» для Windows. Текущая версия исходников: V1.5.9.
+
+          **Установка:** скачайте ZIP, распакуйте целиком и запустите `Otchetnost_UK_728.exe`. Не переносите EXE отдельно от папки `_internal`.
+
+          **Обновление:** обязательно сохраните свою папку `data` с базой и отчетами перед заменой программы.
+
+          История изменений: [CHANGELOG.md](https://github.com/serbo26-lab/otchetchik/blob/main/CHANGELOG.md).
+          '@
+          $notes | Set-Content -Path 'release/RELEASE_NOTES.md' -Encoding utf8
+
+          gh release view dev-build --json tagName *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload dev-build $zip --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to replace Dev Build archive.' }
+            gh release edit dev-build --title 'Dev Build' --notes-file 'release/RELEASE_NOTES.md' --prerelease --latest=false
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to update Dev Build release.' }
+            gh api --method PATCH "repos/$env:GH_REPO/git/refs/tags/dev-build" -f "sha=$env:GITHUB_SHA" -F "force=true" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to update the dev-build tag.' }
+          } else {
+            gh release create dev-build $zip --title 'Dev Build' --notes-file 'release/RELEASE_NOTES.md' --prerelease --latest=false --target "$env:GITHUB_SHA"
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to create Dev Build release.' }
+          }
+          "Dev Build published: https://github.com/$env:GH_REPO/releases/tag/dev-build" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
