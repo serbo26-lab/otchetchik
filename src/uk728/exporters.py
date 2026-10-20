@@ -24,9 +24,10 @@ def _period_line(report: dict[str, Any]) -> str:
 
 
 def _management_cost(bundle: dict[str, Any]) -> float:
-    manual = to_float(bundle.get("report", {}).get("management_cost"))
-    detail = sum(to_float(x.get("cost")) for x in bundle.get("management", []))
-    return manual if abs(manual) > 0.0001 else detail
+    # Only the stored official total is exported. A zero can be an explicit
+    # managerial decision; internal detail is transferred via the UI's
+    # "Посчитать из строк ниже" action, never implicitly at export time.
+    return to_float(bundle.get("report", {}).get("management_cost"))
 
 
 def _financial_rows(bundle: dict[str, Any]) -> list[dict[str, Any]]:
@@ -139,8 +140,8 @@ def export_xlsx(report_id: int) -> Path:
     total_plan = 0.0
     total_actual = 0.0
     for i, item in enumerate(bundle["content"], 1):
-        plan_cost = to_float(item.get("plan_cost")) or to_float(item.get("unit_price")) * to_float(item.get("plan_qty"))
-        actual_cost = to_float(item.get("actual_cost")) or to_float(item.get("unit_price")) * to_float(item.get("actual_qty"))
+        plan_cost = to_float(item.get("plan_cost"))
+        actual_cost = to_float(item.get("actual_cost"))
         total_plan += plan_cost
         total_actual += actual_cost
         content_data.append([i, item.get("name", ""), item.get("unit", ""), money(item.get("unit_price")), money(item.get("plan_qty")), money(plan_cost), money(item.get("actual_qty")), money(actual_cost)])
@@ -236,8 +237,8 @@ def export_docx(report_id: int) -> Path:
         tbl.rows[0].cells[i].text = h
     total_plan = total_actual = 0.0
     for idx, item in enumerate(bundle["content"], 1):
-        plan_cost = to_float(item.get("plan_cost")) or to_float(item.get("unit_price")) * to_float(item.get("plan_qty"))
-        actual_cost = to_float(item.get("actual_cost")) or to_float(item.get("unit_price")) * to_float(item.get("actual_qty"))
+        plan_cost = to_float(item.get("plan_cost"))
+        actual_cost = to_float(item.get("actual_cost"))
         total_plan += plan_cost
         total_actual += actual_cost
         vals = [idx, item.get("name", ""), item.get("unit", ""), money(item.get("unit_price")), money(item.get("plan_qty")), money(plan_cost), money(item.get("actual_qty")), money(actual_cost)]
@@ -358,8 +359,8 @@ def export_pdf(report_id: int) -> Path:
     data = [["N", "Наименование", "Ед.", "Цена", "Кол-во", "Стоимость", "Выполнено", "Стоимость"]]
     total_plan = total_actual = 0.0
     for idx, item in enumerate(bundle["content"], 1):
-        plan_cost = to_float(item.get("plan_cost")) or to_float(item.get("unit_price")) * to_float(item.get("plan_qty"))
-        actual_cost = to_float(item.get("actual_cost")) or to_float(item.get("unit_price")) * to_float(item.get("actual_qty"))
+        plan_cost = to_float(item.get("plan_cost"))
+        actual_cost = to_float(item.get("actual_cost"))
         total_plan += plan_cost
         total_actual += actual_cost
         data.append([idx, item.get("name", ""), item.get("unit", ""), money(item.get("unit_price")), money(item.get("plan_qty")), money(plan_cost), money(item.get("actual_qty")), money(actual_cost)])
