@@ -46,8 +46,9 @@ from .utils import full_year_period, iso_date, money, to_float
 from .ui_style import apply_theme
 from .ui_shell import ActionFlowLayout, NavigationSidebar, PageChrome, PAGES
 from .report_storage import sync_report_rows
+from .ui_components import ActionPanel, ContentCard, action_panel, describe_context, table_card
 
-APP_TITLE = "Отчетность УК по приказу 728/пр — V1.6.1 STABILITY"
+APP_TITLE = "Отчетность УК по приказу 728/пр — V1.6.2 UI COMPONENTS"
 
 
 def selectable_label(text: str = "") -> QLabel:
@@ -152,13 +153,26 @@ class CopyPasteTable(QTableWidget):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setAlternatingRowColors(True)
-        self.setWordWrap(True)
+        self.setWordWrap(False)
+        self.setHorizontalScrollMode(QTableWidget.ScrollPerPixel)
+        self.setVerticalScrollMode(QTableWidget.ScrollPerPixel)
+        self.setTextElideMode(Qt.ElideRight)
         self.setSelectionMode(QTableWidget.ExtendedSelection)
         self.setSelectionBehavior(QTableWidget.SelectItems)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.horizontalHeader().setMinimumSectionSize(65)
+        self.horizontalHeader().setStretchLastSection(False)
+        self.verticalHeader().setDefaultSectionSize(31)
         self.verticalHeader().setVisible(False)
+        self.itemChanged.connect(self._sync_cell_tooltip)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._menu)
+
+    def _sync_cell_tooltip(self, item):
+        if item and item.toolTip() != item.text():
+            blocked = self.blockSignals(True)
+            item.setToolTip(item.text())
+            self.blockSignals(blocked)
 
     def mousePressEvent(self, event):
         # Для ячеек со справочниками открываем выпадающий список сразу по одному клику,
@@ -235,7 +249,10 @@ class CopyPasteTable(QTableWidget):
             self.removeRow(row)
 
     def set_value(self, row: int, col: int, value: Any):
-        self.setItem(row, col, QTableWidgetItem("" if value is None else str(value)))
+        text = "" if value is None else str(value)
+        item = QTableWidgetItem(text)
+        item.setToolTip(text)
+        self.setItem(row, col, item)
 
     def value(self, row: int, col: int) -> str:
         item = self.item(row, col)
@@ -424,13 +441,12 @@ class CompaniesTab(BaseTab):
         self.list = QListWidget()
         self.list.currentItemChanged.connect(self._load_current)
         left_l.addWidget(self.list)
-        btns = ActionFlowLayout()
         add = QPushButton("Добавить организацию")
         add.clicked.connect(self.add_company)
         delete = QPushButton("Удалить")
         delete.clicked.connect(self.delete_company)
-        btns.addWidget(add); btns.addWidget(delete)
-        left_l.addLayout(btns)
+        left_l.addWidget(action_panel("Создание организации", add, primary=add))
+        left_l.addWidget(action_panel("Удаление выбранной УО", delete, purpose="danger"))
         splitter.addWidget(left)
 
         formw = QWidget()
@@ -453,7 +469,7 @@ class CompaniesTab(BaseTab):
             form.addRow(selectable_label(label), widget)
         self.save_button = QPushButton("Сохранить организацию")
         self.save_button.clicked.connect(self.save)
-        form.addRow(self.save_button)
+        form.addRow(action_panel("Сохранение реквизитов", self.save_button, primary=self.save_button))
         splitter.addWidget(form_scroll(formw))
         splitter.setSizes([260, 700])
         self.refresh()
@@ -577,11 +593,10 @@ class HousesTab(BaseTab):
         left_l.addLayout(top)
         self.list = QListWidget(); self.list.currentItemChanged.connect(self._load_current)
         left_l.addWidget(self.list)
-        btns = ActionFlowLayout()
         self.add_button = QPushButton("Добавить дом"); self.add_button.clicked.connect(self.add_house)
         delete = QPushButton("Удалить"); delete.clicked.connect(self.delete_house)
-        btns.addWidget(self.add_button); btns.addWidget(delete)
-        left_l.addLayout(btns)
+        left_l.addWidget(action_panel("Создание дома", self.add_button, primary=self.add_button))
+        left_l.addWidget(action_panel("Удаление выбранного дома", delete, purpose="danger"))
         splitter.addWidget(left)
 
         formw = QWidget(); form_l = QVBoxLayout(formw)
@@ -609,7 +624,7 @@ class HousesTab(BaseTab):
         form_l.addWidget(official_box)
 
         self.save_button = QPushButton("Сохранить дом"); self.save_button.clicked.connect(self.save)
-        form_l.addWidget(self.save_button)
+        form_l.addWidget(action_panel("Сохранение карточки", self.save_button, primary=self.save_button))
         splitter.addWidget(form_scroll(formw))
         splitter.setSizes([340, 700])
         self.reload_companies()
@@ -782,11 +797,10 @@ class CategoriesTab(BaseTab):
         left_l.addWidget(selectable_label("Категории работ/услуг"))
         self.list = QListWidget(); self.list.currentItemChanged.connect(self._load_current)
         left_l.addWidget(self.list)
-        btns = ActionFlowLayout()
         add = QPushButton("Добавить категорию"); add.clicked.connect(self.add_category)
         delete = QPushButton("Удалить категорию"); delete.clicked.connect(self.delete_category)
-        btns.addWidget(add); btns.addWidget(delete)
-        left_l.addLayout(btns)
+        left_l.addWidget(action_panel("Создание категории", add, primary=add))
+        left_l.addWidget(action_panel("Удаление категории", delete, purpose="danger"))
         splitter.addWidget(left)
 
         right = QWidget(); right_l = QVBoxLayout(right)
@@ -814,14 +828,14 @@ class CategoriesTab(BaseTab):
         self.sub_table.setColumnHidden(0, True)
         self.sub_table.setItemDelegateForColumn(2, EditableComboDelegate(lambda: distinct_texts("work_categories", "section", ["Не выбрано", *COMMON_SECTIONS]), self.sub_table))
         self.sub_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("work_categories", "unit", ["Не выбрано", *COMMON_UNITS]), self.sub_table))
-        right_l.addWidget(self.sub_table)
+        right_l.addWidget(table_card("Подкатегории", self.sub_table))
         self.form_widgets = [self.name, self.section, self.unit, self.price, self.notes, self.sub_table]
-        bottom = QHBoxLayout()
         add_sub = QPushButton("Добавить подкатегорию"); add_sub.clicked.connect(self.add_subcategory)
         del_sub = QPushButton("Удалить выбранные подкатегории"); del_sub.clicked.connect(self.sub_table.delete_selected_rows)
         save = QPushButton("Сохранить категорию и подкатегории"); save.clicked.connect(self.save)
-        bottom.addWidget(add_sub); bottom.addWidget(del_sub); bottom.addStretch(); bottom.addWidget(save)
-        right_l.addLayout(bottom)
+        right_l.addWidget(action_panel("Работа с подкатегориями", add_sub, primary=add_sub))
+        right_l.addWidget(action_panel("Удаление строк", del_sub, purpose="danger"))
+        right_l.addWidget(action_panel("Сохранение категории", save, primary=save))
         splitter.addWidget(right)
         splitter.setSizes([300, 900])
         self.refresh()
@@ -997,13 +1011,15 @@ class WorksTab(BaseTab):
         self.table.setItemDelegateForColumn(2, EditableComboDelegate(lambda: self.subcategory_names(), self.table))
         self.table.setItemDelegateForColumn(4, EditableComboDelegate(lambda: distinct_texts("work_items", "category", COMMON_SECTIONS), self.table))
         self.table.setItemDelegateForColumn(5, EditableComboDelegate(lambda: distinct_texts("work_items", "unit", COMMON_UNITS), self.table))
-        root.addWidget(self.table)
-        btns = ActionFlowLayout()
+        root.addWidget(table_card("Работы и услуги", self.table))
         add = QPushButton("Добавить произвольную строку"); add.clicked.connect(self.add_row)
         save = QPushButton("Сохранить справочник"); save.clicked.connect(self.save)
         delete = QPushButton("Удалить выбранные строки"); delete.clicked.connect(self.table.delete_selected_rows)
-        btns.addWidget(add); btns.addWidget(delete); btns.addStretch(); btns.addWidget(save)
-        root.addLayout(btns)
+        actions = QHBoxLayout()
+        actions.addWidget(action_panel("Добавление", add, primary=add))
+        actions.addWidget(action_panel("Удаление строк", delete, purpose="danger"))
+        actions.addWidget(action_panel("Сохранение", save, primary=save))
+        root.addLayout(actions)
         self.reload_category_combo()
         self.refresh()
 
@@ -1116,7 +1132,8 @@ class TemplatesTab(BaseTab):
         left_l.addWidget(self.list)
         add = QPushButton("Добавить шаблон"); add.clicked.connect(self.add_template)
         delete = QPushButton("Удалить шаблон"); delete.clicked.connect(self.delete_template)
-        left_l.addWidget(add); left_l.addWidget(delete)
+        left_l.addWidget(action_panel("Создание шаблона", add, primary=add))
+        left_l.addWidget(action_panel("Удаление шаблона", delete, purpose="danger"))
         splitter.addWidget(left)
         right = QWidget(); right_l = QVBoxLayout(right)
         form = QFormLayout()
@@ -1140,9 +1157,9 @@ class TemplatesTab(BaseTab):
         self.table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование", "Ед. изм.", "Цена", "Кол-во по перечню"])
         self.table.setColumnHidden(0, True); self.table.setColumnHidden(1, True)
         self.table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("work_items", "unit", COMMON_UNITS), self.table))
-        right_l.addWidget(self.table)
+        right_l.addWidget(table_card("Состав шаблона", self.table))
         save = QPushButton("Сохранить шаблон"); save.clicked.connect(self.save)
-        right_l.addWidget(save)
+        right_l.addWidget(action_panel("Сохранение шаблона", save, primary=save))
         splitter.addWidget(right)
         splitter.setSizes([280, 800])
         self.reload_work_combo()
@@ -1367,8 +1384,8 @@ class ReportsTab(BaseTab):
         create = QPushButton("Создать отчет за выбранный год"); create.clicked.connect(self.create_report)
         self.delete_report_btn = QPushButton("Удалить отчет")
         self.delete_report_btn.clicked.connect(self.delete_report)
-        left_l.addWidget(create)
-        left_l.addWidget(self.delete_report_btn)
+        left_l.addWidget(action_panel("Создание отчета", create, primary=create))
+        left_l.addWidget(action_panel("Удаление отчета", self.delete_report_btn, purpose="danger"))
         splitter.addWidget(left)
 
         right = QWidget(); right_l = QVBoxLayout(right)
@@ -1381,10 +1398,8 @@ class ReportsTab(BaseTab):
         self._build_finance_tab()
         self._build_export_tab()
         self.report_tabs.setEnabled(False)
-        btns = ActionFlowLayout()
         save = QPushButton("Сохранить отчет"); save.clicked.connect(self.save)
-        btns.addStretch(); btns.addWidget(save)
-        right_l.addLayout(btns)
+        right_l.addWidget(action_panel("Сохранение отчета", save, primary=save))
         splitter.addWidget(right)
         splitter.setSizes([300, 1000])
         self._connect_autosave_signals()
@@ -1467,19 +1482,20 @@ class ReportsTab(BaseTab):
         self.content_template_combo = ClickComboBox()
         template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.content_template_combo, 1)
         layout.addLayout(template_row)
-        btns = ActionFlowLayout()
         apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template("Содержание", self.content_template_combo))
         add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference("Содержание"))
         add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_content_row({}))
-        btns.addWidget(apply); btns.addWidget(add_ref); btns.addWidget(add_empty); btns.addStretch()
-        layout.addLayout(btns)
+        groups = QHBoxLayout()
+        groups.addWidget(action_panel("Применение шаблона", apply))
+        groups.addWidget(action_panel("Добавление строк", add_ref, add_empty, primary=add_ref))
+        layout.addLayout(groups)
         self.content_table = CopyPasteTable(0, 9)
         self.content_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование работы/услуги", "Ед. изм.", "Цена единицы", "Кол-во по перечню", "Стоимость по перечню", "Выполнено кол-во", "Стоимость выполнено"])
         self.content_table.setColumnHidden(0, True); self.content_table.setColumnHidden(1, True)
         self.content_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_content_items", "unit", distinct_texts("work_items", "unit", COMMON_UNITS)), self.content_table))
         self._content_recalc_lock = False
         self.content_table.itemChanged.connect(self.on_content_item_changed)
-        layout.addWidget(self.content_table)
+        layout.addWidget(table_card("Строки содержания", self.content_table))
         self.report_tabs.addTab(w, "1. Содержание")
 
     def _build_repair_tab(self):
@@ -1498,17 +1514,18 @@ class ReportsTab(BaseTab):
         self.repair_template_combo = ClickComboBox()
         template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.repair_template_combo, 1)
         layout.addLayout(template_row)
-        btns = ActionFlowLayout()
         apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template("Текущий ремонт", self.repair_template_combo))
         add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference("Текущий ремонт"))
         add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_repair_row({}))
-        btns.addWidget(apply); btns.addWidget(add_ref); btns.addWidget(add_empty); btns.addStretch()
-        layout.addLayout(btns)
+        groups = QHBoxLayout()
+        groups.addWidget(action_panel("Применение шаблона", apply))
+        groups.addWidget(action_panel("Добавление строк", add_ref, add_empty, primary=add_ref))
+        layout.addLayout(groups)
         self.repair_table = CopyPasteTable(0, 7)
         self.repair_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование работы", "Основание", "Стоимость", "Объем", "Акт/ссылка"])
         self.repair_table.setColumnHidden(0, True); self.repair_table.setColumnHidden(1, True)
         self.repair_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_repair_items", "basis", COMMON_REPAIR_BASIS), self.repair_table))
-        layout.addWidget(self.repair_table)
+        layout.addWidget(table_card("Работы текущего ремонта", self.repair_table))
         self.report_tabs.addTab(w, "2. Текущий ремонт")
 
     def _build_management_tab(self):
@@ -1534,12 +1551,13 @@ class ReportsTab(BaseTab):
         self.management_template_combo = ClickComboBox()
         template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.management_template_combo, 1)
         layout.addLayout(template_row)
-        btns = ActionFlowLayout()
         apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template("Управление", self.management_template_combo))
         add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference("Управление"))
         add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_management_row({}))
-        btns.addWidget(apply); btns.addWidget(add_ref); btns.addWidget(add_empty); btns.addStretch()
-        layout.addLayout(btns)
+        groups = QHBoxLayout()
+        groups.addWidget(action_panel("Применение шаблона", apply))
+        groups.addWidget(action_panel("Добавление строк", add_ref, add_empty, primary=add_ref))
+        layout.addLayout(groups)
 
         self.management_table = CopyPasteTable(0, 7)
         self.management_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование услуги", "Ед. изм.", "Цена единицы", "Кол-во", "Стоимость"])
@@ -1547,7 +1565,7 @@ class ReportsTab(BaseTab):
         self.management_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_management_items", "unit", distinct_texts("work_items", "unit", COMMON_UNITS)), self.management_table))
         self._management_recalc_lock = False
         self.management_table.itemChanged.connect(self.on_management_item_changed)
-        layout.addWidget(self.management_table)
+        layout.addWidget(table_card("Расчет по услугам управления", self.management_table))
         layout.addWidget(selectable_label(
             "В форму 728/пр по разделу 3 выводится итоговая сумма. Строки выше нужны, чтобы удобно ее заполнить."
         ))
@@ -1569,7 +1587,7 @@ class ReportsTab(BaseTab):
         self.finance_table.setItemDelegateForColumn(1, EditableComboDelegate(lambda: distinct_texts("report_financials", "payer_type", COMMON_PAYER_TYPES), self.finance_table))
         self.finance_table.set_value(0, 1, "Собственники")
         self.finance_table.set_value(1, 1, "Наниматели")
-        layout.addWidget(self.finance_table)
+        layout.addWidget(table_card("Начисления и поступления", self.finance_table))
         self.report_tabs.addTab(w, "4–5. Финансы")
 
     def _build_export_tab(self):
@@ -2141,13 +2159,17 @@ class MassApplyTab(BaseTab):
         form.addWidget(self.override_manual, 8, 1, 1, 3)
         form.addWidget(self.help, 9, 0, 1, 4)
         root.addLayout(form)
-        btns = ActionFlowLayout(); preview = QPushButton("Предпросмотр"); preview.clicked.connect(self.preview); apply = QPushButton("Применить"); apply.clicked.connect(self.apply)
-        btns.addStretch(); btns.addWidget(preview); btns.addWidget(apply); root.addLayout(btns)
+        preview = QPushButton("Предпросмотр"); preview.clicked.connect(self.preview)
+        apply = QPushButton("Применить"); apply.clicked.connect(self.apply)
+        mass_actions = QHBoxLayout()
+        mass_actions.addWidget(action_panel("Проверка результатов", preview, primary=preview))
+        mass_actions.addWidget(action_panel("Запись в отчеты", apply, primary=apply))
+        root.addLayout(mass_actions)
         self.table = CopyPasteTable(0, len(self.PREVIEW_COLUMNS))
         self.table.setHorizontalHeaderLabels(self.PREVIEW_COLUMNS)
         self.table.setColumnHidden(0, True)
         self.table.setColumnHidden(1, True)
-        root.addWidget(self.table)
+        root.addWidget(table_card("Результат предварительного просмотра", self.table))
         # Любое изменение условий делает старый предпросмотр недействительным.
         # Это убирает ситуацию, когда пользователь выбрал другую услугу, а таблица
         # все еще показывает старую строку "уже есть, пропуск".
@@ -2407,11 +2429,12 @@ class BackupsTab(BaseTab):
         super().__init__()
         layout = QVBoxLayout(self)
         layout.addWidget(selectable_label("Данные программы хранятся в папке data рядом с EXE/исходным файлом. Резервная копия создается автоматически раз в 5 минут."))
-        btns = ActionFlowLayout()
         backup = QPushButton("Создать резервную копию сейчас"); backup.clicked.connect(self.backup_now)
         open_data = QPushButton("Показать путь к папке data"); open_data.clicked.connect(self.show_data_path)
-        btns.addWidget(backup); btns.addWidget(open_data); btns.addStretch()
-        layout.addLayout(btns)
+        backup_actions = QHBoxLayout()
+        backup_actions.addWidget(action_panel("Создание копии", backup, primary=backup))
+        backup_actions.addWidget(action_panel("Расположение данных", open_data))
+        layout.addLayout(backup_actions)
         self.info = QTextEdit(); self.info.setReadOnly(True)
         layout.addWidget(self.info)
         self.refresh()
@@ -2505,13 +2528,13 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Готово")
 
     def _decorate_buttons(self):
-        """Mark primary and destructive commands consistently on every page."""
+        """Do not override roles assigned by the actual action groups."""
         for button in self.findChildren(QPushButton):
+            if button.objectName() in ("PrimaryAction", "DangerAction", "QuietAction"):
+                continue
             label = button.text().strip().lower()
-            if any(word in label for word in ("удалить", "очистить", "аннулировать")):
+            if label.startswith(("удалить", "очистить", "аннулировать")):
                 button.setObjectName("DangerAction")
-            elif label in ("применить", "сохранить отчет", "сохранить справочник", "выгрузить все форматы"):
-                button.setObjectName("PrimaryAction")
 
     def _can_autosave_tab(self, tab) -> bool:
         if not isinstance(tab, BaseTab):
@@ -2570,21 +2593,14 @@ class MainWindow(QMainWindow):
             self.set_save_status("saved")
 
     def refresh_context(self):
-        """A compact, always visible reporting context without mutating selectors."""
+        """Show only the active page's selection and its meaningful next step."""
         try:
-            company = self.reports_tab.company_filter.currentText().strip()
-            house = self.reports_tab.house_filter.currentText().strip()
-            year = self.reports_tab.year_filter.value()
-            parts = []
-            if company and company not in ("Выберите УО", "Выберите организацию", "Все организации"):
-                parts.append(f"УО: {company}")
-            if house and house not in ("Выберите дом", "Все дома"):
-                parts.append(f"Дом: {house}")
-            parts.append(f"Год отчета: {year}")
-            text = "   •   ".join(parts)
+            current = self.tabs.currentWidget()
+            context, guidance = describe_context(current, self)
+            self.page_header.set_context(context)
+            self.page_header.guide.setText(guidance)
         except (AttributeError, RuntimeError):
-            text = "Рабочий контекст"
-        self.page_header.set_context(text)
+            self.page_header.set_context("Рабочий контекст")
 
     def switch_theme(self):
         self._theme = "dark" if self._theme == "light" else "light"

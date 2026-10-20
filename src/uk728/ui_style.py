@@ -58,6 +58,13 @@ QSS = """
 QWidget { font-family: 'Segoe UI', 'DejaVu Sans'; font-size: 10pt; color: @text; }
 QMainWindow, QDialog, QWidget#ContentPane, QWidget#PageSurface { background: @background; }
 QFrame#Sidebar { background: @sidebar; border-right: 1px solid @border; }
+QFrame#ContentCard { background: @surface; border: 1px solid @border; border-radius: 7px; }
+QFrame#ActionPanel { background: @surface; border: 1px solid @border; border-radius: 6px; }
+QFrame#ActionPanel[purpose="danger"] { border-left: 2px solid @danger; }
+QLabel#ActionPanelTitle { font-size: 9pt; font-weight: 600; color: @muted; }
+QLabel#CardTitle { font-size: 10pt; font-weight: 600; color: @text; }
+QLabel#CardSubtitle { font-size: 9pt; color: @muted; }
+QPushButton#QuietAction { background: transparent; border-color: @border; }
 QLabel#AppBrand { font-size: 13pt; font-weight: 700; }
 QLabel#PageTitle { font-size: 16pt; font-weight: 600; }
 QLabel#PageSubtitle, QLabel#ContextCaption, QLabel#SaveStatus, QLabel#Guide { color: @muted; font-size: 9pt; }
