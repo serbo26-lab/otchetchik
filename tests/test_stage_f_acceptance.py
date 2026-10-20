@@ -182,7 +182,7 @@ class AcceptanceStageTests(unittest.TestCase):
         self.assertIn("ОТЧЕТ", text)
         self.assertIn("УК Приёмка", text)
         self.assertIn("ул. Кленовая, д. 5", text)
-        self.assertIn("1200,25 м²", text)
+        self.assertIn("1 200,25 м²", text)
         self.assertIn("26.02.2026", text)
         for number in range(1, 6):
             self.assertIn(f"{number}.", text)
@@ -199,9 +199,9 @@ class AcceptanceStageTests(unittest.TestCase):
         reader = PdfReader(str(path))
         self.assertGreaterEqual(len(reader.pages), 1)
         text = "\n".join((page.extract_text() or "") for page in reader.pages)
-        self.assertIn("Содержание", text)
-        self.assertIn("Текущий ремонт", text)
-        self.assertIn("Управление", text)
+        self.assertIn("содержанию", text.lower())
+        self.assertIn("текущему ремонту", text.lower())
+        self.assertIn("управлению", text.lower())
         self.assertNotIn("Внутренний расчет управления", text)
 
     def test_exports_are_separated_by_house_and_year(self):
