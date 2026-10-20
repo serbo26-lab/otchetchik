@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import gc
 import os
 import tempfile
 from pathlib import Path
@@ -40,7 +41,7 @@ def main():
     app.setQuitOnLastWindowClosed(False)
 
     result = {"scale": 100, "windows_size": [1366, 900], "screens": []}
-    with tempfile.TemporaryDirectory(prefix="otchetchik-ui-") as workdir:
+    with tempfile.TemporaryDirectory(prefix="otchetchik-ui-", ignore_cleanup_errors=True) as workdir:
         with patch("src.uk728.paths.app_dir", return_value=Path(workdir)):
             db.init_db()
             org = db.execute("INSERT INTO companies(name) VALUES(?)", ("УК Приёмка",))
@@ -88,6 +89,9 @@ def main():
             finally:
                 window.close()
                 app.processEvents()
+                window.deleteLater()
+                del window
+                gc.collect()
     summary = args.out_dir / "manifest.json"
     summary.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Visual acceptance snapshots saved: {len(result['screens'])}; {summary}")
