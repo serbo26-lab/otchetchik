@@ -1427,6 +1427,65 @@ class ReportsTab(BaseTab):
         self.reload_filters()
         self._update_report_actions()
 
+    def _update_report_actions(self):
+        has_report = bool(self.current_id)
+        self.report_tabs.setEnabled(has_report)
+        self.save_button.setEnabled(has_report)
+        self.delete_report_btn.setEnabled(has_report)
+        self.create_report_btn.setEnabled(
+            self.company_filter.currentData() is not None
+            and self.house_filter.currentData() is not None
+        )
+
+    def _invalidate_review(self):
+        self._review_dirty = True
+        self._review_snapshot = None
+        if hasattr(self, "review_status"):
+            self.review_status.setText(
+                "Отчет изменен. Перед выгрузкой повторите проверку."
+            )
+
+    def _on_report_section_changed(self, index):
+        previous_index = self._report_tab_index
+        if previous_index == index:
+            return
+        try:
+            self.flush_autosave()
+        except Exception as exc:
+            blocked = self.report_tabs.blockSignals(True)
+            self.report_tabs.setCurrentIndex(previous_index)
+            self.report_tabs.blockSignals(blocked)
+            self.msg(f"Переход отменен: отчет не сохранен ({exc})")
+            return
+        self._report_tab_index = index
+
+    def _go_to_report_section(self, index):
+        if not self.current_id:
+            return
+        try:
+            self.flush_autosave()
+        except Exception as exc:
+            self.msg(f"Не удалось сохранить отчет: {exc}")
+            return
+        self.report_tabs.setCurrentIndex(index)
+
+    def _next_report_action(self, layout, title, next_index):
+        button = QPushButton(title)
+        button.clicked.connect(lambda _checked=False, i=next_index: self._go_to_report_section(i))
+        layout.addWidget(action_panel("Следующий шаг", button, primary=button))
+
+    def _delete_selected_report_rows(self, table):
+        count = len({cell.row() for cell in table.selectedIndexes()})
+        if count == 0:
+            self.msg("Выделите строки, которые требуется удалить.")
+            return
+        if QMessageBox.question(
+            self, "Удаление строк", f"Удалить из отчета выбранные строки ({count})?"
+        ) != QMessageBox.Yes:
+            return
+        table.delete_selected_rows()
+        self.schedule_autosave()
+
     def _connect_autosave_signals(self) -> None:
         # Автосохранение отчета должно срабатывать не только при переходе между
         # главными вкладками, но и при изменении любого поля отчета, переключении
@@ -1446,7 +1505,7 @@ class ReportsTab(BaseTab):
         self.repair_table.itemChanged.connect(lambda _item: self.schedule_autosave())
         self.management_table.itemChanged.connect(lambda _item: self.schedule_autosave())
         self.finance_table.itemChanged.connect(lambda _item: self.schedule_autosave())
-        self.report_tabs.currentChanged.connect(lambda _idx: self.flush_autosave())
+        self.report_tabs.currentChanged.connect(self._on_report_section_changed)
 
     def schedule_autosave(self, *args) -> None:
         if self._loading_report or self._saving_report or not self.current_id:
@@ -1706,8 +1765,7 @@ class ReportsTab(BaseTab):
         else:
             self.current_id = None
             self.report_tabs.setEnabled(False)
-        if hasattr(self, "delete_report_btn"):
-            self.delete_report_btn.setEnabled(bool(self.current_id))
+        self._update_report_actions()
 
     def fill_full_year(self):
         y = self.year.value()
@@ -1784,13 +1842,11 @@ class ReportsTab(BaseTab):
                 return
         self.current_id = new_id
         if not self.current_id:
-            self.report_tabs.setEnabled(False)
-            if hasattr(self, "delete_report_btn"):
-                self.delete_report_btn.setEnabled(False)
+            self._invalidate_review()
+            self._update_report_actions()
             return
-        self.report_tabs.setEnabled(True)
-        if hasattr(self, "delete_report_btn"):
-            self.delete_report_btn.setEnabled(True)
+        self._invalidate_review()
+        self._update_report_actions()
         self._loading_report = True
         try:
             bundle = db.load_report_bundle(self.current_id)
