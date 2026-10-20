@@ -437,20 +437,21 @@ class CompaniesTab(BaseTab):
         root.addWidget(splitter)
         left = QWidget()
         left_l = QVBoxLayout(left)
-        left_l.addWidget(selectable_label("Управляющие организации"))
+        selector = ContentCard("1. Выбор организации", "Добавьте УО или выберите ее из перечня.")
         self.list = QListWidget()
         self.list.currentItemChanged.connect(self._load_current)
-        left_l.addWidget(self.list)
-        add = QPushButton("Добавить организацию")
-        add.clicked.connect(self.add_company)
-        delete = QPushButton("Удалить")
-        delete.clicked.connect(self.delete_company)
-        left_l.addWidget(action_panel("Создание организации", add, primary=add))
-        left_l.addWidget(action_panel("Удаление выбранной УО", delete, purpose="danger"))
+        selector.add_widget(self.list, 1)
+        self.add_button = QPushButton("Добавить организацию")
+        self.add_button.clicked.connect(self.add_company)
+        selector.add_widget(action_panel("Создание", self.add_button, primary=self.add_button))
+        left_l.addWidget(selector, 1)
+        self.delete_button = QPushButton("Удалить организацию")
+        self.delete_button.clicked.connect(self.delete_company)
+        left_l.addWidget(action_panel("Удаление выбранной УО", self.delete_button, purpose="danger"))
         splitter.addWidget(left)
 
         formw = QWidget()
-        form = QFormLayout(formw)
+        form_layout = QVBoxLayout(formw)
         self.name = QLineEdit()
         self.ogrn = QLineEdit()
         self.addr = QTextEdit(); self.addr.setFixedHeight(70)
@@ -458,18 +459,32 @@ class CompaniesTab(BaseTab):
         self.contact = QLineEdit()
         self.notes = QTextEdit(); self.notes.setFixedHeight(80)
         self.form_widgets = [self.name, self.ogrn, self.addr, self.person, self.contact, self.notes]
-        for label, widget in [
-            ("Полное наименование", self.name),
-            ("ОГРН / ИНН", self.ogrn),
-            ("Адрес приема населения", self.addr),
-            ("Кто дает разъяснения по отчету", self.person),
-            ("Телефон / email", self.contact),
-            ("Примечание", self.notes),
-        ]:
-            form.addRow(selectable_label(label), widget)
+        basic = ContentCard("2. Основные сведения")
+        basic_form = QFormLayout()
+        basic_form.addRow(selectable_label("Полное наименование"), self.name)
+        basic_form.addRow(selectable_label("ОГРН / ИНН"), self.ogrn)
+        basic.add_layout(basic_form)
+        form_layout.addWidget(basic)
+
+        report_contact = ContentCard("3. Сведения для разъяснений по отчету")
+        contact_form = QFormLayout()
+        for title, widget in [("Адрес приема населения", self.addr),
+                              ("Кто дает разъяснения по отчету", self.person),
+                              ("Телефон / email", self.contact)]:
+            contact_form.addRow(selectable_label(title), widget)
+        report_contact.add_layout(contact_form)
+        form_layout.addWidget(report_contact)
+
+        extra = ContentCard("4. Примечания")
+        extra_form = QFormLayout()
+        extra_form.addRow(selectable_label("Примечание"), self.notes)
+        extra.add_layout(extra_form)
+        form_layout.addWidget(extra)
+
         self.save_button = QPushButton("Сохранить организацию")
         self.save_button.clicked.connect(self.save)
-        form.addRow(action_panel("Сохранение реквизитов", self.save_button, primary=self.save_button))
+        form_layout.addWidget(action_panel("Сохранение сведений", self.save_button, primary=self.save_button))
+        form_layout.addStretch()
         splitter.addWidget(form_scroll(formw))
         splitter.setSizes([260, 700])
         self.refresh()
@@ -481,6 +496,7 @@ class CompaniesTab(BaseTab):
     def update_form_state(self):
         has_record = self.current_id is not None
         set_widgets_enabled(self.form_widgets + [self.save_button], has_record)
+        self.delete_button.setEnabled(has_record)
         if not has_record:
             self._clear_form()
 
@@ -500,27 +516,6 @@ class CompaniesTab(BaseTab):
             self.list.setCurrentRow(select_row)
         elif self.list.count() and target_id is None:
             self.list.setCurrentRow(0)
-
-    def delete_report(self):
-        if not self.current_id:
-            self.msg("Выберите отчет для удаления.")
-            return
-        item = self.list.currentItem()
-        title = item.text() if item else "выбранный отчет"
-        if QMessageBox.question(
-            self,
-            "Удалить отчет?",
-            f"Удалить отчет: {title}?\n\nСтроки содержания, текущего ремонта, управления, финансов и претензионной работы по этому отчету также будут удалены.",
-        ) != QMessageBox.Yes:
-            return
-        try:
-            db.execute("DELETE FROM reports WHERE id=?", (int(self.current_id),))
-            make_backup("delete_report")
-            self.current_id = None
-            self.refresh()
-            self.msg("Отчет удален")
-        except Exception as e:
-            QMessageBox.warning(self, "Не удалось удалить отчет", str(e))
 
     def _load_current(self):
         item = self.list.currentItem()
@@ -585,18 +580,22 @@ class HousesTab(BaseTab):
         splitter = QSplitter()
         root.addWidget(splitter)
         left = QWidget(); left_l = QVBoxLayout(left)
-        top = QHBoxLayout()
-        top.addWidget(selectable_label("УО:"))
+        organization = ContentCard("1. Управляющая организация")
         self.company_filter = ClickComboBox()
-        self.company_filter.currentIndexChanged.connect(self.refresh)
-        top.addWidget(self.company_filter, 1)
-        left_l.addLayout(top)
-        self.list = QListWidget(); self.list.currentItemChanged.connect(self._load_current)
-        left_l.addWidget(self.list)
-        self.add_button = QPushButton("Добавить дом"); self.add_button.clicked.connect(self.add_house)
-        delete = QPushButton("Удалить"); delete.clicked.connect(self.delete_house)
-        left_l.addWidget(action_panel("Создание дома", self.add_button, primary=self.add_button))
-        left_l.addWidget(action_panel("Удаление выбранного дома", delete, purpose="danger"))
+        self.company_filter.currentIndexChanged.connect(self._on_company_filter_changed)
+        organization.add_widget(self.company_filter)
+        left_l.addWidget(organization)
+        houses = ContentCard("2. Перечень домов", "Сначала выберите УО, затем дом.")
+        self.list = QListWidget()
+        self.list.currentItemChanged.connect(self._load_current)
+        houses.add_widget(self.list, 1)
+        self.add_button = QPushButton("Добавить дом")
+        self.add_button.clicked.connect(self.add_house)
+        houses.add_widget(action_panel("Создание", self.add_button, primary=self.add_button))
+        left_l.addWidget(houses, 1)
+        self.delete_button = QPushButton("Удалить дом")
+        self.delete_button.clicked.connect(self.delete_house)
+        left_l.addWidget(action_panel("Удаление выбранного дома", self.delete_button, purpose="danger"))
         splitter.addWidget(left)
 
         formw = QWidget(); form_l = QVBoxLayout(formw)
@@ -609,19 +608,29 @@ class HousesTab(BaseTab):
         self.notes = QTextEdit(); self.notes.setFixedHeight(90)
         self.form_widgets = [self.company, self.address, self.area, self.start, self.end, self.status, self.notes]
 
-        official_box = QGroupBox("Официальные данные для отчета 728/пр")
-        official_form = QFormLayout(official_box)
-        for label, widget in [
-            ("Управляющая организация", self.company),
-            ("Адрес дома", self.address),
-            ("Общая площадь жилых и нежилых помещений, м²", self.area),
-            ("Дата начала управления", self.start),
-            ("Дата прекращения управления", self.end),
-            ("Статус", self.status),
-            ("Примечание", self.notes),
-        ]:
+        official = ContentCard("3. Сведения о доме", "Площадь — сумма площадей жилых и нежилых помещений без общего имущества.")
+        official_form = QFormLayout()
+        for label, widget in [("Управляющая организация", self.company),
+                              ("Адрес дома", self.address),
+                              ("Площадь помещений, м²", self.area)]:
             official_form.addRow(selectable_label(label), widget)
-        form_l.addWidget(official_box)
+        official.add_layout(official_form)
+        form_l.addWidget(official)
+
+        management = ContentCard("4. Период управления")
+        management_form = QFormLayout()
+        for label, widget in [("Дата начала управления", self.start),
+                              ("Дата прекращения управления", self.end),
+                              ("Статус", self.status)]:
+            management_form.addRow(selectable_label(label), widget)
+        management.add_layout(management_form)
+        form_l.addWidget(management)
+
+        other = ContentCard("5. Дополнительно")
+        extra_form = QFormLayout()
+        extra_form.addRow(selectable_label("Примечание"), self.notes)
+        other.add_layout(extra_form)
+        form_l.addWidget(other)
 
         self.save_button = QPushButton("Сохранить дом"); self.save_button.clicked.connect(self.save)
         form_l.addWidget(action_panel("Сохранение карточки", self.save_button, primary=self.save_button))
@@ -639,8 +648,20 @@ class HousesTab(BaseTab):
     def update_form_state(self):
         has_record = self.current_id is not None
         set_widgets_enabled(self.form_widgets + [self.save_button], has_record)
+        self.delete_button.setEnabled(has_record)
         if not has_record:
             self._clear_form()
+
+    def _on_company_filter_changed(self):
+        previous = getattr(self, "_selected_company_filter_id", None)
+        if not self._commit_form_before_load(None):
+            self.company_filter.blockSignals(True)
+            self.company_filter.setCurrentIndex(max(0, self.company_filter.findData(previous)))
+            self.company_filter.blockSignals(False)
+            return
+        self._selected_company_filter_id = self.company_filter.currentData()
+        self.current_id = None
+        self.refresh()
 
     def reload_companies(self):
         old_filter = self.company_filter.currentData()
@@ -660,6 +681,7 @@ class HousesTab(BaseTab):
                 if idx >= 0:
                     self.company_filter.setCurrentIndex(idx)
         self.company_filter.blockSignals(False)
+        self._selected_company_filter_id = self.company_filter.currentData()
         fill_combo(self.company, "SELECT id, name FROM companies ORDER BY name", empty="Не выбрано")
         if hasattr(self, "add_button"):
             self.add_button.setEnabled(self.company_filter.currentData() is not None)
@@ -696,27 +718,7 @@ class HousesTab(BaseTab):
         else:
             self.current_id = None
             self.update_form_state()
-
-    def delete_report(self):
-        if not self.current_id:
-            self.msg("Выберите отчет для удаления.")
-            return
-        item = self.list.currentItem()
-        title = item.text() if item else "выбранный отчет"
-        if QMessageBox.question(
-            self,
-            "Удалить отчет?",
-            f"Удалить отчет: {title}?\n\nСтроки содержания, текущего ремонта, управления, финансов и претензионной работы по этому отчету также будут удалены.",
-        ) != QMessageBox.Yes:
-            return
-        try:
-            db.execute("DELETE FROM reports WHERE id=?", (int(self.current_id),))
-            make_backup("delete_report")
-            self.current_id = None
-            self.refresh()
-            self.msg("Отчет удален")
-        except Exception as e:
-            QMessageBox.warning(self, "Не удалось удалить отчет", str(e))
+            self._remember_form_state()
 
     def _load_current(self):
         item = self.list.currentItem()
@@ -794,21 +796,22 @@ class CategoriesTab(BaseTab):
         splitter = QSplitter(); root.addWidget(splitter)
 
         left = QWidget(); left_l = QVBoxLayout(left)
-        left_l.addWidget(selectable_label("Категории работ/услуг"))
-        self.list = QListWidget(); self.list.currentItemChanged.connect(self._load_current)
-        left_l.addWidget(self.list)
-        add = QPushButton("Добавить категорию"); add.clicked.connect(self.add_category)
-        delete = QPushButton("Удалить категорию"); delete.clicked.connect(self.delete_category)
-        left_l.addWidget(action_panel("Создание категории", add, primary=add))
-        left_l.addWidget(action_panel("Удаление категории", delete, purpose="danger"))
+        selection = ContentCard("1. Выберите категорию")
+        self.list = QListWidget()
+        self.list.currentItemChanged.connect(self._load_current)
+        selection.add_widget(self.list, 1)
+        add = QPushButton("Добавить категорию")
+        add.clicked.connect(self.add_category)
+        selection.add_widget(action_panel("Создание категории", add, primary=add))
+        left_l.addWidget(selection, 1)
+        self.delete_button = QPushButton("Удалить категорию")
+        self.delete_button.clicked.connect(self.delete_category)
+        left_l.addWidget(action_panel("Удаление выбранной категории", self.delete_button, purpose="danger"))
         splitter.addWidget(left)
 
         right = QWidget(); right_l = QVBoxLayout(right)
-        right_l.addWidget(selectable_label(
-            "Категории помогают быстро создавать строки справочника. Главное поле — «Раздел формы»: "
-            "Содержание — раздел 1, Текущий ремонт — раздел 2, Управление — раздел 3. "
-            "Примечание — это только комментарий для пользователя. На попадание строки в раздел отчета влияет поле «Раздел формы»."
-        ))
+        details = ContentCard("2. Параметры категории",
+            "Раздел формы определяет место новых работ в отчете. Примечание не влияет на расчет.")
         form = QFormLayout()
         self.name = QLineEdit()
         self.section = ClickComboBox(); self.section.setEditable(True); self.section.addItems(["Не выбрано", *COMMON_SECTIONS])
@@ -820,22 +823,28 @@ class CategoriesTab(BaseTab):
         form.addRow(selectable_label("Единица измерения"), self.unit)
         form.addRow(selectable_label("Цена / ставка"), self.price)
         form.addRow(selectable_label("Примечание"), self.notes)
-        right_l.addLayout(form)
+        details.add_layout(form)
+        right_l.addWidget(details)
 
-        right_l.addWidget(selectable_label("Подкатегории выбранной категории"))
+        # Добавление подкатегории относится к ее таблице, а не к категории в целом.
         self.sub_table = CopyPasteTable(0, 6)
         self.sub_table.setHorizontalHeaderLabels(["ID", "Название подкатегории", "Раздел", "Ед. изм.", "Цена/ставка", "Примечание"])
         self.sub_table.setColumnHidden(0, True)
         self.sub_table.setItemDelegateForColumn(2, EditableComboDelegate(lambda: distinct_texts("work_categories", "section", ["Не выбрано", *COMMON_SECTIONS]), self.sub_table))
         self.sub_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("work_categories", "unit", ["Не выбрано", *COMMON_UNITS]), self.sub_table))
-        right_l.addWidget(table_card("Подкатегории", self.sub_table))
+        subcategories = table_card("3. Подкатегории", self.sub_table,
+                                   subtitle="Сначала добавьте строку, затем заполните ее поля.")
+        self.add_sub_button = QPushButton("Добавить подкатегорию")
+        self.add_sub_button.clicked.connect(self.add_subcategory)
+        subcategories.add_widget(action_panel("Добавление", self.add_sub_button, primary=self.add_sub_button))
+        right_l.addWidget(subcategories, 1)
+        self.delete_sub_button = QPushButton("Удалить выбранные подкатегории")
+        self.delete_sub_button.clicked.connect(self.sub_table.delete_selected_rows)
+        self.save_button = QPushButton("Сохранить категорию и подкатегории")
+        self.save_button.clicked.connect(self.save)
+        right_l.addWidget(action_panel("Удаление строк", self.delete_sub_button, purpose="danger"))
+        right_l.addWidget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
         self.form_widgets = [self.name, self.section, self.unit, self.price, self.notes, self.sub_table]
-        add_sub = QPushButton("Добавить подкатегорию"); add_sub.clicked.connect(self.add_subcategory)
-        del_sub = QPushButton("Удалить выбранные подкатегории"); del_sub.clicked.connect(self.sub_table.delete_selected_rows)
-        save = QPushButton("Сохранить категорию и подкатегории"); save.clicked.connect(self.save)
-        right_l.addWidget(action_panel("Работа с подкатегориями", add_sub, primary=add_sub))
-        right_l.addWidget(action_panel("Удаление строк", del_sub, purpose="danger"))
-        right_l.addWidget(action_panel("Сохранение категории", save, primary=save))
         splitter.addWidget(right)
         splitter.setSizes([300, 900])
         self.refresh()
@@ -843,7 +852,8 @@ class CategoriesTab(BaseTab):
 
     def update_form_state(self):
         has_record = self.current_id is not None
-        set_widgets_enabled(self.form_widgets, has_record)
+        set_widgets_enabled(self.form_widgets + [self.add_sub_button, self.delete_sub_button, self.save_button], has_record)
+        self.delete_button.setEnabled(has_record)
         if not has_record:
             self.name.clear(); self.price.clear(); self.notes.clear(); self.sub_table.setRowCount(0)
             self.section.setCurrentText("Не выбрано"); self.unit.setCurrentText("Не выбрано")
@@ -864,27 +874,6 @@ class CategoriesTab(BaseTab):
             self.list.setCurrentRow(select_row)
         elif self.list.count() and target_id is None:
             self.list.setCurrentRow(0)
-
-    def delete_report(self):
-        if not self.current_id:
-            self.msg("Выберите отчет для удаления.")
-            return
-        item = self.list.currentItem()
-        title = item.text() if item else "выбранный отчет"
-        if QMessageBox.question(
-            self,
-            "Удалить отчет?",
-            f"Удалить отчет: {title}?\n\nСтроки содержания, текущего ремонта, управления, финансов и претензионной работы по этому отчету также будут удалены.",
-        ) != QMessageBox.Yes:
-            return
-        try:
-            db.execute("DELETE FROM reports WHERE id=?", (int(self.current_id),))
-            make_backup("delete_report")
-            self.current_id = None
-            self.refresh()
-            self.msg("Отчет удален")
-        except Exception as e:
-            QMessageBox.warning(self, "Не удалось удалить отчет", str(e))
 
     def _load_current(self):
         item = self.list.currentItem()
@@ -987,22 +976,22 @@ class WorksTab(BaseTab):
     def __init__(self):
         super().__init__()
         root = QVBoxLayout(self)
-        info = selectable_label(
-            "Справочник работ/услуг. Работу можно добавить произвольно или быстро создать из категории/подкатегории. "
-            "Категория и подкатегория нужны для удобного поиска. В отчет попадает наименование работы/услуги и поля официальной формы."
-        )
-        root.addWidget(info)
+        sources = ContentCard("1. Выберите источник работы",
+            "Категории задают типовые данные. Работы можно создавать и без категории.")
         top = QHBoxLayout()
         top.addWidget(selectable_label("Категория:"))
-        self.category_combo = ClickComboBox(); self.category_combo.currentIndexChanged.connect(self.reload_subcategory_combo)
+        self.category_combo = ClickComboBox()
+        self.category_combo.currentIndexChanged.connect(self.reload_subcategory_combo)
         top.addWidget(self.category_combo, 1)
         top.addWidget(selectable_label("Подкатегория:"))
         self.subcategory_combo = ClickComboBox()
         top.addWidget(self.subcategory_combo, 1)
-        add_cat = QPushButton("Добавить работу/услугу из выбранного")
-        add_cat.clicked.connect(self.add_from_category)
-        top.addWidget(add_cat)
-        root.addLayout(top)
+        sources.add_layout(top)
+        self.add_from_category_button = QPushButton("Добавить из выбранной категории")
+        self.add_from_category_button.clicked.connect(self.add_from_category)
+        sources.add_widget(action_panel("Добавление из категории", self.add_from_category_button,
+                                        primary=self.add_from_category_button))
+        root.addWidget(sources)
 
         self.table = CopyPasteTable(0, 8)
         self.table.setHorizontalHeaderLabels(["ID", "Категория", "Подкатегория", "Наименование", "Раздел формы", "Ед. изм.", "Цена/ставка", "Примечание"])
@@ -1011,15 +1000,19 @@ class WorksTab(BaseTab):
         self.table.setItemDelegateForColumn(2, EditableComboDelegate(lambda: self.subcategory_names(), self.table))
         self.table.setItemDelegateForColumn(4, EditableComboDelegate(lambda: distinct_texts("work_items", "category", COMMON_SECTIONS), self.table))
         self.table.setItemDelegateForColumn(5, EditableComboDelegate(lambda: distinct_texts("work_items", "unit", COMMON_UNITS), self.table))
-        root.addWidget(table_card("Работы и услуги", self.table))
-        add = QPushButton("Добавить произвольную строку"); add.clicked.connect(self.add_row)
-        save = QPushButton("Сохранить справочник"); save.clicked.connect(self.save)
-        delete = QPushButton("Удалить выбранные строки"); delete.clicked.connect(self.table.delete_selected_rows)
-        actions = QHBoxLayout()
-        actions.addWidget(action_panel("Добавление", add, primary=add))
-        actions.addWidget(action_panel("Удаление строк", delete, purpose="danger"))
-        actions.addWidget(action_panel("Сохранение", save, primary=save))
-        root.addLayout(actions)
+        entries = table_card("2. Справочник работ и услуг", self.table,
+            subtitle="Заполните раздел формы, наименование, единицу измерения и цену.")
+        self.add_manual_button = QPushButton("Добавить работу вручную")
+        self.add_manual_button.clicked.connect(self.add_row)
+        entries.add_widget(action_panel("Добавление строки", self.add_manual_button,
+                                       primary=self.add_manual_button))
+        root.addWidget(entries, 1)
+        delete = QPushButton("Удалить выбранные строки")
+        delete.clicked.connect(self.table.delete_selected_rows)
+        save = QPushButton("Сохранить справочник")
+        save.clicked.connect(self.save)
+        root.addWidget(action_panel("Удаление строк", delete, purpose="danger"))
+        root.addWidget(action_panel("3. Сохранение справочника", save, primary=save))
         self.reload_category_combo()
         self.refresh()
 
@@ -1049,11 +1042,12 @@ class WorksTab(BaseTab):
         if cid:
             data = db.rows("SELECT * FROM work_categories WHERE parent_id=? AND is_active=1 ORDER BY name", (cid,))
         else:
-            data = db.rows("SELECT * FROM work_categories WHERE parent_id IS NOT NULL AND is_active=1 ORDER BY name")
+            data = []
         for r in data:
             self.subcategory_combo.addItem(r["name"], r["id"])
         restore_combo_selection(self.subcategory_combo, old_data, old_text)
         self.subcategory_combo.blockSignals(False)
+        self.add_from_category_button.setEnabled(self.category_combo.currentData() is not None)
 
     def reload(self):
         self.reload_category_combo()
@@ -1127,15 +1121,20 @@ class TemplatesTab(BaseTab):
         root = QHBoxLayout(self)
         splitter = QSplitter(); root.addWidget(splitter)
         left = QWidget(); left_l = QVBoxLayout(left)
-        left_l.addWidget(selectable_label("Шаблоны перечней"))
-        self.list = QListWidget(); self.list.currentItemChanged.connect(self._load_current)
-        left_l.addWidget(self.list)
-        add = QPushButton("Добавить шаблон"); add.clicked.connect(self.add_template)
-        delete = QPushButton("Удалить шаблон"); delete.clicked.connect(self.delete_template)
-        left_l.addWidget(action_panel("Создание шаблона", add, primary=add))
-        left_l.addWidget(action_panel("Удаление шаблона", delete, purpose="danger"))
+        selection = ContentCard("1. Выберите шаблон", "Шаблон относится к одному разделу отчета.")
+        self.list = QListWidget()
+        self.list.currentItemChanged.connect(self._load_current)
+        selection.add_widget(self.list, 1)
+        add = QPushButton("Добавить шаблон")
+        add.clicked.connect(self.add_template)
+        selection.add_widget(action_panel("Создание", add, primary=add))
+        left_l.addWidget(selection, 1)
+        self.delete_button = QPushButton("Удалить шаблон")
+        self.delete_button.clicked.connect(self.delete_template)
+        left_l.addWidget(action_panel("Удаление выбранного шаблона", self.delete_button, purpose="danger"))
         splitter.addWidget(left)
         right = QWidget(); right_l = QVBoxLayout(right)
+        details = ContentCard("2. Основные сведения шаблона")
         form = QFormLayout()
         self.name = QLineEdit()
         self.category = ClickComboBox(); self.category.setEditable(True); self.category.addItems(COMMON_SECTIONS)
@@ -1145,21 +1144,31 @@ class TemplatesTab(BaseTab):
         form.addRow(selectable_label("Раздел"), self.category)
         form.addRow(selectable_label("Примечание"), self.notes)
         self.form_widgets = [self.name, self.category, self.notes]
-        right_l.addLayout(form)
+        details.add_layout(form)
+        right_l.addWidget(details)
+        source = ContentCard("3. Наполнение шаблона", "Список работ зависит от раздела шаблона.")
         add_from = QHBoxLayout()
         self.work_combo = ClickComboBox()
-        add_from.addWidget(selectable_label("Добавить из справочника:"))
+        add_from.addWidget(selectable_label("Работа из справочника:"))
         add_from.addWidget(self.work_combo, 1)
-        btn = QPushButton("Добавить строку"); btn.clicked.connect(self.add_work_to_template)
-        add_from.addWidget(btn)
-        right_l.addLayout(add_from)
+        source.add_layout(add_from)
+        self.add_item_button = QPushButton("Добавить работу в шаблон")
+        self.add_item_button.clicked.connect(self.add_work_to_template)
+        source.add_widget(action_panel("Добавление строк", self.add_item_button,
+                                       primary=self.add_item_button))
+        right_l.addWidget(source)
         self.table = CopyPasteTable(0, 6)
         self.table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование", "Ед. изм.", "Цена", "Кол-во по перечню"])
         self.table.setColumnHidden(0, True); self.table.setColumnHidden(1, True)
         self.table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("work_items", "unit", COMMON_UNITS), self.table))
-        right_l.addWidget(table_card("Состав шаблона", self.table))
-        save = QPushButton("Сохранить шаблон"); save.clicked.connect(self.save)
-        right_l.addWidget(action_panel("Сохранение шаблона", save, primary=save))
+        right_l.addWidget(table_card("4. Состав шаблона", self.table,
+                             subtitle="Проверьте цену и количество в каждой строке."), 1)
+        self.remove_item_button = QPushButton("Удалить выбранные строки")
+        self.remove_item_button.clicked.connect(self.table.delete_selected_rows)
+        self.save_button = QPushButton("Сохранить шаблон")
+        self.save_button.clicked.connect(self.save)
+        right_l.addWidget(action_panel("Удаление строк", self.remove_item_button, purpose="danger"))
+        right_l.addWidget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
         splitter.addWidget(right)
         splitter.setSizes([280, 800])
         self.reload_work_combo()
@@ -1168,7 +1177,10 @@ class TemplatesTab(BaseTab):
 
     def update_form_state(self):
         has_record = self.current_id is not None
-        set_widgets_enabled(self.form_widgets + [self.work_combo, self.table], has_record)
+        set_widgets_enabled(self.form_widgets + [self.work_combo, self.table,
+                            self.add_item_button, self.remove_item_button, self.save_button], has_record)
+        self.delete_button.setEnabled(has_record)
+        self.add_item_button.setEnabled(bool(has_record and self.work_combo.currentData() is not None))
         if not has_record:
             self.name.clear(); self.notes.clear(); self.table.setRowCount(0)
 
@@ -1185,6 +1197,10 @@ class TemplatesTab(BaseTab):
             self.work_combo.addItem(work_display(r), r["id"])
         restore_combo_selection(self.work_combo, old_data, old_text)
         self.work_combo.blockSignals(False)
+        if hasattr(self, "add_item_button"):
+            self.add_item_button.setEnabled(
+                self.current_id is not None and self.work_combo.currentData() is not None
+            )
 
     def reload(self):
         # После изменения справочника работ новые строки должны сразу появляться
@@ -1206,27 +1222,6 @@ class TemplatesTab(BaseTab):
         self.list.blockSignals(False)
         if select_row >= 0:
             self.list.setCurrentRow(select_row)
-
-    def delete_report(self):
-        if not self.current_id:
-            self.msg("Выберите отчет для удаления.")
-            return
-        item = self.list.currentItem()
-        title = item.text() if item else "выбранный отчет"
-        if QMessageBox.question(
-            self,
-            "Удалить отчет?",
-            f"Удалить отчет: {title}?\n\nСтроки содержания, текущего ремонта, управления, финансов и претензионной работы по этому отчету также будут удалены.",
-        ) != QMessageBox.Yes:
-            return
-        try:
-            db.execute("DELETE FROM reports WHERE id=?", (int(self.current_id),))
-            make_backup("delete_report")
-            self.current_id = None
-            self.refresh()
-            self.msg("Отчет удален")
-        except Exception as e:
-            QMessageBox.warning(self, "Не удалось удалить отчет", str(e))
 
     def _load_current(self):
         item = self.list.currentItem()
@@ -1271,6 +1266,11 @@ class TemplatesTab(BaseTab):
         wid = self.work_combo.currentData()
         if not wid:
             return
+        for row_index in range(self.table.rowCount()):
+            if self.table.value(row_index, 1) == str(wid):
+                self.msg("Эта работа уже добавлена в шаблон.")
+                self.table.selectRow(row_index)
+                return
         r = db.row("SELECT * FROM work_items WHERE id=?", (wid,))
         row = self.table.rowCount(); self.table.insertRow(row)
         vals = ["", wid, r["name"], r["unit"], r["default_price"], "0"]
