@@ -1379,7 +1379,7 @@ class ReportsTab(BaseTab):
         root = QHBoxLayout(self)
         splitter = QSplitter(); root.addWidget(splitter)
         left = QWidget(); left_l = QVBoxLayout(left)
-        self.company_filter = ClickComboBox(); self.company_filter.currentIndexChanged.connect(self.reload_houses_filter)
+        self.company_filter = ClickComboBox(); self.company_filter.currentIndexChanged.connect(lambda _i: self.reload_houses_filter())
         self.house_filter = ClickComboBox(); self.house_filter.currentIndexChanged.connect(self.refresh)
         self.year_filter = QSpinBox(); self.year_filter.setRange(2000, 2100); self.year_filter.setValue(2026); self.year_filter.valueChanged.connect(self.refresh)
         context_card = ContentCard("1. Выберите УО, дом и отчетный год")
@@ -1537,7 +1537,10 @@ class ReportsTab(BaseTab):
             self.msg(f"Не удалось сохранить отчет: {exc}")
 
     def _build_general_tab(self):
-        w = QWidget(); form = QFormLayout(w)
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        card = ContentCard("Общие сведения", "Укажите отчетный год, фактический период управления и статус.")
+        form = QFormLayout()
         self.year = QSpinBox(); self.year.setRange(2000, 2100); self.year.setValue(2026)
         self.period_start = QLineEdit(); self.period_start.setPlaceholderText("дд.мм.гггг или гггг-мм-дд")
         self.period_end = QLineEdit(); self.period_end.setPlaceholderText("дд.мм.гггг или гггг-мм-дд")
@@ -1554,6 +1557,10 @@ class ReportsTab(BaseTab):
         form.addRow(selectable_label("Дата размещения отчета"), self.publish)
         form.addRow(selectable_label("Статус"), self.status)
         form.addRow(selectable_label("Примечание"), self.notes)
+        card.add_layout(form)
+        layout.addWidget(card)
+        self._next_report_action(layout, "Перейти к содержанию", 1)
+        layout.addStretch()
         self.report_tabs.addTab(form_scroll(w), "Общие сведения")
 
     def _build_content_tab(self):
@@ -1578,6 +1585,10 @@ class ReportsTab(BaseTab):
         self._content_recalc_lock = False
         self.content_table.itemChanged.connect(self.on_content_item_changed)
         layout.addWidget(table_card("Строки содержания", self.content_table))
+        delete = QPushButton("Удалить выбранные строки")
+        delete.clicked.connect(lambda: self._delete_selected_report_rows(self.content_table))
+        layout.addWidget(action_panel("Удаление строк", delete, purpose="danger"))
+        self._next_report_action(layout, "Перейти к текущему ремонту", 2)
         self.report_tabs.addTab(w, "1. Содержание")
 
     def _build_repair_tab(self):
@@ -1591,7 +1602,10 @@ class ReportsTab(BaseTab):
             ("Остаток/перерасход на 31 декабря", self.repair_end),
         ]:
             form.addRow(selectable_label(label), widget)
-        layout.addLayout(form)
+        balance_card = ContentCard("Остаток и начисления текущего ремонта",
+                                   "Сведения о фонде текущего ремонта заполняются отдельно от перечня работ.")
+        balance_card.add_layout(form)
+        layout.addWidget(balance_card)
         template_row = QHBoxLayout()
         self.repair_template_combo = ClickComboBox()
         template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.repair_template_combo, 1)
@@ -1608,6 +1622,10 @@ class ReportsTab(BaseTab):
         self.repair_table.setColumnHidden(0, True); self.repair_table.setColumnHidden(1, True)
         self.repair_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_repair_items", "basis", COMMON_REPAIR_BASIS), self.repair_table))
         layout.addWidget(table_card("Работы текущего ремонта", self.repair_table))
+        delete = QPushButton("Удалить выбранные строки")
+        delete.clicked.connect(lambda: self._delete_selected_report_rows(self.repair_table))
+        layout.addWidget(action_panel("Удаление строк", delete, purpose="danger"))
+        self._next_report_action(layout, "Перейти к управлению", 3)
         self.report_tabs.addTab(w, "2. Текущий ремонт")
 
     def _build_management_tab(self):
@@ -1629,6 +1647,10 @@ class ReportsTab(BaseTab):
         box_l.addLayout(recalc_row)
         layout.addWidget(box)
 
+        layout.addWidget(selectable_label(
+            "Внутренняя детализация ниже не изменяет итог раздела 3 автоматически. "
+            "Кнопка «Посчитать из строк ниже» применяется только по вашему выбору."
+        ))
         template_row = QHBoxLayout()
         self.management_template_combo = ClickComboBox()
         template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.management_template_combo, 1)
@@ -1647,10 +1669,14 @@ class ReportsTab(BaseTab):
         self.management_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_management_items", "unit", distinct_texts("work_items", "unit", COMMON_UNITS)), self.management_table))
         self._management_recalc_lock = False
         self.management_table.itemChanged.connect(self.on_management_item_changed)
-        layout.addWidget(table_card("Расчет по услугам управления", self.management_table))
+        layout.addWidget(table_card("Внутренний расчет услуг управления", self.management_table))
+        delete = QPushButton("Удалить выбранные строки")
+        delete.clicked.connect(lambda: self._delete_selected_report_rows(self.management_table))
+        layout.addWidget(action_panel("Удаление строк расчета", delete, purpose="danger"))
         layout.addWidget(selectable_label(
-            "В форму 728/пр по разделу 3 выводится итоговая сумма. Строки выше нужны, чтобы удобно ее заполнить."
+            "В официальной форме раздел 3 содержит итоговую сумму, а не внутренние строки расчета."
         ))
+        self._next_report_action(layout, "Перейти к финансам", 4)
         self.report_tabs.addTab(w, "3. Управление")
 
     def _build_finance_tab(self):
@@ -1669,7 +1695,8 @@ class ReportsTab(BaseTab):
         self.finance_table.setItemDelegateForColumn(1, EditableComboDelegate(lambda: distinct_texts("report_financials", "payer_type", COMMON_PAYER_TYPES), self.finance_table))
         self.finance_table.set_value(0, 1, "Собственники")
         self.finance_table.set_value(1, 1, "Наниматели")
-        layout.addWidget(table_card("Начисления и поступления", self.finance_table))
+        layout.addWidget(table_card("5. Начисления и поступления", self.finance_table))
+        self._next_report_action(layout, "Проверить и выгрузить отчет", 5)
         self.report_tabs.addTab(w, "4–5. Финансы")
 
     def _build_export_tab(self):
