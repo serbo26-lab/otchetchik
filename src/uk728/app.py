@@ -46,9 +46,11 @@ from .utils import full_year_period, iso_date, money, to_float
 from .ui_style import apply_theme
 from .ui_shell import ActionFlowLayout, NavigationSidebar, PageChrome, PAGES
 from .report_storage import sync_report_rows
+from .mass_apply_logic import (ACTION_TEXT as MASS_ACTION_TEXT, OutdatedPreview as MassOutdatedPreview,
+                               build_plan as build_mass_plan, apply_plan as apply_mass_plan)
 from .ui_components import ActionPanel, ContentCard, action_panel, describe_context, table_card
 
-APP_TITLE = "Отчетность УК по приказу 728/пр — V1.6.2 UI COMPONENTS"
+APP_TITLE = "Отчетность УК по приказу 728/пр — V1.6.4 MASS WORKFLOW"
 
 
 def selectable_label(text: str = "") -> QLabel:
@@ -2104,325 +2106,362 @@ class ReportsTab(BaseTab):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths[0].parent)))
 
 
+class MassPreviewTable(CopyPasteTable):
+    """Review-only; copying is supported, pasting and row mutation are forbidden."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.setSelectionBehavior(QTableWidget.SelectRows)
+
+    def paste_selection(self):
+        return
+
+    def delete_selected_rows(self):
+        return
+
+    def _menu(self, pos):
+        menu = QMenu(self)
+        act_copy = QAction("Копировать выделенное", self)
+        act_copy.triggered.connect(self.copy_selection)
+        menu.addAction(act_copy)
+        menu.exec(self.viewport().mapToGlobal(pos))
+
+
 class MassApplyTab(BaseTab):
+    """Guided bulk entry: sources, calculation, targets, review, confirmation."""
+
     PREVIEW_COLUMNS = [
-        "Дом ID", "Работа ID", "Дом", "Площадь", "Услуга/работа", "Раздел", "Отчет", "Сумма", "Цена в строке", "Кол-во в строке", "Ед. изм.", "Действие"
+        "Дом", "Площадь, м²", "Раздел / работа", "Отчет", "Стоимость",
+        "Цена в строке", "Количество", "Действие",
+    ]
+    MODES = [
+        ("Цена за 1 м² площади дома", "area"),
+        ("Цена за 1 м² в месяц", "monthly"),
+        ("Готовая сумма на один дом", "fixed"),
+        ("Общая сумма на выбранные дома, распределить по площади", "split"),
+        ("Цена × количество", "quantity"),
     ]
 
     def __init__(self):
         super().__init__()
         self._preview_dirty = True
+        self._preview_plan = None
+        self._target_company_id = None
+
         root = QVBoxLayout(self)
-        root.addWidget(selectable_label(
-            "Массовое заполнение отчетов. Выберите услугу/работу и добавьте ее сразу в несколько отчетов за выбранный год. Перед записью всегда показывается предпросмотр."
-        ))
-        form = QGridLayout()
+        root.setSpacing(8)
+        top = QHBoxLayout()
+        top.setSpacing(9)
+        root.addLayout(top)
+
+        # Step 1. The work and reporting period.
+        context = ContentCard("1. Что заполняем",
+            "Выберите УО, отчетный год и конкретную работу из справочника.")
+        source = QFormLayout()
         self.company = ClickComboBox()
-        self.year = QSpinBox(); self.year.setRange(2000, 2100); self.year.setValue(2026)
+        self.company.currentIndexChanged.connect(self._company_changed)
+        self.year = QSpinBox()
+        self.year.setRange(2000, 2100)
+        self.year.setValue(2026)
         self.work = ClickComboBox()
-        self.mode = ClickComboBox(); self.mode.addItems([
-            "Цена за 1 м² площади дома",
-            "Цена за 1 м² в месяц",
-            "Готовая сумма на один дом",
-            "Общая сумма на несколько домов, распределить по площади",
-            "Цена × количество",
-        ])
-        self.mode.currentIndexChanged.connect(self.update_mode_help)
+        source.addRow(selectable_label("Управляющая организация"), self.company)
+        source.addRow(selectable_label("Отчетный год"), self.year)
+        source.addRow(selectable_label("Работа / услуга"), self.work)
+        context.add_layout(source)
+        top.addWidget(context, 1)
+
+        # Step 2. Only input controls required by the selected formula are shown.
+        calculation = ContentCard("2. Как рассчитываем")
+        form = QFormLayout()
+        self.mode = ClickComboBox()
+        for title, key in self.MODES:
+            self.mode.addItem(title, key)
         self.rate_label = selectable_label("Ставка / цена")
         self.months_label = selectable_label("Количество месяцев")
         self.quantity_label = selectable_label("Количество")
-        self.total_label = selectable_label("Готовая / общая сумма")
-        self.rate = QLineEdit(); self.rate.setPlaceholderText("например 2 или 1000")
-        self.months = QLineEdit(); self.months.setPlaceholderText("12")
-        self.months.setText("12")
-        self.quantity = QLineEdit(); self.quantity.setPlaceholderText("например 12")
-        self.total = QLineEdit(); self.total.setPlaceholderText("например 60000")
+        self.total_label = selectable_label("Сумма")
+        self.rate = QLineEdit()
+        self.rate.setPlaceholderText("Например: 6,76")
+        self.months = QLineEdit("12")
+        self.months.setPlaceholderText("От 1 до 12")
+        self.quantity = QLineEdit()
+        self.quantity.setPlaceholderText("Например: 12")
+        self.total = QLineEdit()
+        self.total.setPlaceholderText("Например: 60000")
+        form.addRow(selectable_label("Способ расчета"), self.mode)
+        for label, field in [
+            (self.rate_label, self.rate), (self.months_label, self.months),
+            (self.quantity_label, self.quantity), (self.total_label, self.total),
+        ]:
+            form.addRow(label, field)
+        calculation.add_layout(form)
         self.help = selectable_label("")
-        self.create_missing = QCheckBox("Создать отчет, если его еще нет")
-        self.update_existing = QCheckBox("Обновлять строку, если эта же услуга уже есть")
-        self.override_manual = QCheckBox("Разрешить замену строк с ручными правками")
-        self.override_manual.setToolTip("По умолчанию ручные изменения защищены от повторного массового заполнения.")
+        self.help.setObjectName("CardSubtitle")
+        calculation.add_widget(self.help)
+        top.addWidget(calculation, 1)
+
+        # Step 3. Explicitly choose which houses are eligible for the calculation.
+        targets = ContentCard("3. Какие дома заполняем",
+            "Отметьте нужные дома. Архивные дома не включаются.")
+        self.house_list = QListWidget()
+        self.house_list.setMinimumHeight(100)
+        self.house_list.setMaximumHeight(170)
+        self.house_list.itemChanged.connect(self.mark_dirty)
+        targets.add_widget(self.house_list)
+        select_all = QPushButton("Выбрать все")
+        select_all.clicked.connect(lambda: self._check_all(True))
+        clear_all = QPushButton("Снять выделение")
+        clear_all.clicked.connect(lambda: self._check_all(False))
+        targets.add_widget(action_panel("Выбор домов", select_all, clear_all))
+
+        options = ActionFlowLayout(spacing=10)
+        self.create_missing = QCheckBox("Создавать недостающие отчеты")
+        self.update_existing = QCheckBox("Обновлять существующие строки")
+        self.override_manual = QCheckBox("Разрешить замену ручных изменений")
+        self.override_manual.setToolTip(
+            "Обычно строки, которые пользователь изменил вручную, пропускаются."
+        )
         self.override_manual.setEnabled(False)
         self.update_existing.toggled.connect(self.override_manual.setEnabled)
         self.update_existing.toggled.connect(
             lambda active: self.override_manual.setChecked(False) if not active else None
         )
-        form.addWidget(selectable_label("УО"), 0, 0); form.addWidget(self.company, 0, 1)
-        form.addWidget(selectable_label("Год"), 0, 2); form.addWidget(self.year, 0, 3)
-        form.addWidget(selectable_label("Услуга"), 1, 0); form.addWidget(self.work, 1, 1, 1, 3)
-        form.addWidget(selectable_label("Способ расчета"), 2, 0); form.addWidget(self.mode, 2, 1, 1, 3)
-        form.addWidget(self.rate_label, 3, 0); form.addWidget(self.rate, 3, 1, 1, 3)
-        form.addWidget(self.months_label, 4, 0); form.addWidget(self.months, 4, 1, 1, 3)
-        form.addWidget(self.quantity_label, 5, 0); form.addWidget(self.quantity, 5, 1, 1, 3)
-        form.addWidget(self.total_label, 6, 0); form.addWidget(self.total, 6, 1, 1, 3)
-        form.addWidget(self.create_missing, 7, 1); form.addWidget(self.update_existing, 7, 2)
-        form.addWidget(self.override_manual, 8, 1, 1, 3)
-        form.addWidget(self.help, 9, 0, 1, 4)
-        root.addLayout(form)
-        preview = QPushButton("Предпросмотр"); preview.clicked.connect(self.preview)
-        apply = QPushButton("Применить"); apply.clicked.connect(self.apply)
-        mass_actions = QHBoxLayout()
-        mass_actions.addWidget(action_panel("Проверка результатов", preview, primary=preview))
-        mass_actions.addWidget(action_panel("Запись в отчеты", apply, primary=apply))
-        root.addLayout(mass_actions)
-        self.table = CopyPasteTable(0, len(self.PREVIEW_COLUMNS))
+        for option in (self.create_missing, self.update_existing, self.override_manual):
+            options.addWidget(option)
+        targets.add_layout(options)
+        root.addWidget(targets)
+
+        # Step 4. Immutable review of exact actions, including skip reasons.
+        review = ContentCard("4. Проверка перед записью",
+            "После изменения условий предыдущий расчет становится недействительным.")
+        self.preview_button = QPushButton("Рассчитать и проверить")
+        self.preview_button.clicked.connect(self.preview)
+        review.add_widget(action_panel("Предварительный просмотр",
+                                       self.preview_button, primary=self.preview_button))
+        self.status_label = selectable_label("Выберите условия, затем нажмите «Рассчитать и проверить».")
+        self.status_label.setObjectName("CardSubtitle")
+        review.add_widget(self.status_label)
+        self.summary = selectable_label("")
+        self.summary.setObjectName("ContextCaption")
+        review.add_widget(self.summary)
+        self.table = MassPreviewTable(0, len(self.PREVIEW_COLUMNS))
         self.table.setHorizontalHeaderLabels(self.PREVIEW_COLUMNS)
-        self.table.setColumnHidden(0, True)
-        self.table.setColumnHidden(1, True)
-        root.addWidget(table_card("Результат предварительного просмотра", self.table))
-        # Любое изменение условий делает старый предпросмотр недействительным.
-        # Это убирает ситуацию, когда пользователь выбрал другую услугу, а таблица
-        # все еще показывает старую строку "уже есть, пропуск".
-        for widget in (self.company, self.work, self.mode):
-            widget.currentIndexChanged.connect(self.mark_dirty)
+        review.add_widget(self.table, 1)
+        root.addWidget(review, 1)
+
+        # Step 5. Recording is impossible without a fresh, actionable preview.
+        finish = QHBoxLayout()
+        final_text = selectable_label(
+            "5. Применение: записи добавляются только после проверки и подтверждения."
+        )
+        finish.addWidget(final_text, 1)
+        self.apply_button = QPushButton("Подтвердить и применить")
+        self.apply_button.clicked.connect(self.apply)
+        self.apply_button.setObjectName("PrimaryAction")
+        self.apply_button.setEnabled(False)
+        finish.addWidget(self.apply_button)
+        root.addLayout(finish)
+
+        self.mode.currentIndexChanged.connect(self.update_mode_help)
+        for combo in (self.work, self.mode):
+            combo.currentIndexChanged.connect(self.mark_dirty)
         self.year.valueChanged.connect(self.mark_dirty)
-        self.rate.textChanged.connect(self.mark_dirty)
-        self.months.textChanged.connect(self.mark_dirty)
-        self.quantity.textChanged.connect(self.mark_dirty)
-        self.total.textChanged.connect(self.mark_dirty)
-        self.create_missing.stateChanged.connect(self.mark_dirty)
-        self.update_existing.stateChanged.connect(self.mark_dirty)
-        self.override_manual.stateChanged.connect(self.mark_dirty)
+        for field in (self.rate, self.months, self.quantity, self.total):
+            field.textChanged.connect(self.mark_dirty)
+        for option in (self.create_missing, self.update_existing, self.override_manual):
+            option.stateChanged.connect(self.mark_dirty)
         self.reload()
         self.update_mode_help()
 
-    def mark_dirty(self):
-        self._preview_dirty = True
-        self.table.setRowCount(0)
-
-    def update_mode_help(self):
-        mode = self.mode.currentText()
-
-        is_monthly_m2 = mode.startswith("Цена за 1 м² в месяц")
-        is_year_m2 = mode.startswith("Цена за 1 м² площади")
-        show_rate = is_year_m2 or is_monthly_m2 or mode.startswith("Цена ×")
-        show_months = is_monthly_m2
-        show_quantity = mode.startswith("Цена ×")
-        show_total = mode.startswith("Готовая сумма") or mode.startswith("Общая сумма")
-
-        for widget in (self.rate_label, self.rate):
-            widget.setVisible(show_rate)
-        for widget in (self.months_label, self.months):
-            widget.setVisible(show_months)
-        for widget in (self.quantity_label, self.quantity):
-            widget.setVisible(show_quantity)
-        for widget in (self.total_label, self.total):
-            widget.setVisible(show_total)
-
-        if is_monthly_m2:
-            self.rate_label.setText("Ставка за 1 м² в месяц")
-            self.rate.setPlaceholderText("например 6,76")
-            self.months_label.setText("Количество месяцев")
-            self.months.setPlaceholderText("например 12")
-            if not self.months.text().strip():
-                self.months.setText("12")
-            text = "Введите месячную ставку и количество месяцев. В отчет попадет цена за период = ставка × месяцы, количество = площадь дома."
-        elif is_year_m2:
-            self.rate_label.setText("Ставка за 1 м²")
-            self.rate.setPlaceholderText("например 2")
-            text = "Введите ставку за 1 м² за весь отчетный период. В строку отчета попадет цена = ставка, количество = площадь дома."
-        elif mode.startswith("Готовая сумма"):
-            self.total_label.setText("Сумма на один дом")
-            self.total.setPlaceholderText("например 60000")
-            text = "Введите сумму, которую нужно добавить каждому дому."
-        elif mode.startswith("Общая сумма"):
-            self.total_label.setText("Общая сумма")
-            self.total.setPlaceholderText("например 300000")
-            text = "Введите общую сумму. Она будет распределена между домами пропорционально площади."
-        else:
-            self.rate_label.setText("Цена за единицу")
-            self.rate.setPlaceholderText("например 5000")
-            self.quantity_label.setText("Количество")
-            self.quantity.setPlaceholderText("например 12")
-            text = "Введите цену за единицу и количество. Стоимость будет рассчитана как цена × количество."
-        self.help.setText(text)
-
-    def reload(self):
-        old_company = self.company.currentData()
-        fill_combo(self.company, "SELECT id, name FROM companies ORDER BY name", empty="Выберите УО")
-        if old_company is not None:
-            idx = self.company.findData(old_company)
-            if idx >= 0:
-                self.company.setCurrentIndex(idx)
-        old_data = self.work.currentData()
-        old_text = self.work.currentText()
-        self.work.blockSignals(True)
-        self.work.clear()
-        for r in db.rows("SELECT * FROM work_items WHERE is_active=1 ORDER BY group_name, subgroup_name, category, name"):
-            self.work.addItem(work_display(r), r["id"])
-        restore_combo_selection(self.work, old_data, old_text)
-        self.work.blockSignals(False)
+    def _company_changed(self):
+        self._load_target_houses()
         self.mark_dirty()
 
-    def _section_for_work(self, work: Any | None) -> str:
-        return normalize_section(row_get(work, "category", ""), "Содержание")
+    def _load_target_houses(self):
+        cid = self.company.currentData()
+        same_company = cid == self._target_company_id
+        checked = {int(self.house_list.item(i).data(Qt.UserRole))
+                   for i in range(self.house_list.count())
+                   if self.house_list.item(i).checkState() == Qt.Checked} if same_company else set()
+        self.house_list.blockSignals(True)
+        self.house_list.clear()
+        if cid is not None:
+            houses = db.rows(
+                "SELECT id,address,total_area FROM houses WHERE company_id=? AND status!='Архив' ORDER BY address,id",
+                (cid,),
+            )
+            for house in houses:
+                hid = int(house["id"])
+                item = QListWidgetItem(
+                    f'{house["address"] or "Без адреса"} · {money(house["total_area"])} м²'
+                )
+                item.setData(Qt.UserRole, hid)
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(Qt.Checked if (hid in checked or not same_company) else Qt.Unchecked)
+                self.house_list.addItem(item)
+        self.house_list.blockSignals(False)
+        self._target_company_id = cid
+        self.mark_dirty()
 
-    def _target_table(self, section: str) -> str:
-        low = (section or "").lower()
-        if "управ" in low:
-            return "report_management_items"
-        if "ремонт" in low and "тек" in low:
-            return "report_repair_items"
-        return "report_content_items"
+    def _check_all(self, value: bool):
+        state = Qt.Checked if value else Qt.Unchecked
+        for i in range(self.house_list.count()):
+            self.house_list.item(i).setCheckState(state)
+        self.mark_dirty()
 
-    def _find_existing(self, conn, table: str, report_id: int, work_id: int | None, name: str):
-        if work_id:
-            row = conn.execute(f"SELECT id, is_manual FROM {table} WHERE report_id=? AND work_item_id=? LIMIT 1", (report_id, work_id)).fetchone()
-            if row:
-                return row
-        # Запасной поиск для старых строк без work_item_id: считаем дублем только
-        # строку с тем же названием в том же разделе/таблице, а не любую услугу отчета.
-        return conn.execute(f"SELECT id, is_manual FROM {table} WHERE report_id=? AND TRIM(name)=TRIM(?) LIMIT 1", (report_id, name or "")).fetchone()
+    def selected_house_ids(self):
+        return [int(self.house_list.item(i).data(Qt.UserRole))
+                for i in range(self.house_list.count())
+                if self.house_list.item(i).checkState() == Qt.Checked]
 
-    def _calc_for_house(self, house_area: float, total_area: float) -> tuple[float, float, float, str]:
-        mode = self.mode.currentText()
-        rate = to_float(self.rate.text())
-        months = to_float(self.months.text()) or 12.0
-        qty = to_float(self.quantity.text())
-        total = to_float(self.total.text())
-        area = house_area or 0.0
-        if mode.startswith("Цена за 1 м² в месяц"):
-            line_qty = area
-            line_price = rate * months
-            cost = line_qty * line_price
-            unit = "м²"
-        elif mode.startswith("Цена за 1 м² площади"):
-            line_qty = area
-            line_price = rate
-            cost = line_qty * line_price
-            unit = "м²"
-        elif mode.startswith("Готовая сумма"):
-            cost = total
-            line_price = cost
-            line_qty = 1.0
-            unit = "усл."
-        elif mode.startswith("Общая сумма"):
-            cost = total * (area / (total_area or 1.0))
-            line_qty = area if area else 1.0
-            line_price = cost / line_qty if line_qty else cost
-            unit = "м²" if area else "усл."
-        else:
-            line_qty = qty if qty else 1.0
-            line_price = rate
-            cost = line_qty * line_price
-            unit = "усл."
-        return cost, line_price, line_qty, unit
+    def _inputs(self):
+        return {
+            "company_id": self.company.currentData(),
+            "work_id": self.work.currentData(),
+            "year": self.year.value(),
+            "house_ids": self.selected_house_ids(),
+            "mode": self.mode.currentData(),
+            "rate": self.rate.text(), "months": self.months.text(),
+            "quantity": self.quantity.text(), "total": self.total.text(),
+            "create_missing": self.create_missing.isChecked(),
+            "update_existing": self.update_existing.isChecked(),
+            "override_manual": self.override_manual.isChecked(),
+        }
+
+    def mark_dirty(self, *_):
+        self._preview_dirty = True
+        self._preview_plan = None
+        self.apply_button.setEnabled(False)
+        self.table.setRowCount(0)
+        self.summary.clear()
+        self.status_label.setText("Параметры изменены. Рассчитайте и проверьте заново.")
+
+    def update_mode_help(self, *_):
+        mode = self.mode.currentData()
+        show_rate = mode in ("area", "monthly", "quantity")
+        show_months = mode == "monthly"
+        show_quantity = mode == "quantity"
+        show_total = mode in ("fixed", "split")
+        for label, widget, visible in [
+            (self.rate_label, self.rate, show_rate),
+            (self.months_label, self.months, show_months),
+            (self.quantity_label, self.quantity, show_quantity),
+            (self.total_label, self.total, show_total),
+        ]:
+            label.setVisible(visible)
+            widget.setVisible(visible)
+        explanations = {
+            "area": "Ставка за весь период × площадь дома.",
+            "monthly": "Ставка за 1 м² за месяц × число месяцев × площадь дома.",
+            "fixed": "Одинаковая готовая сумма для каждого выбранного дома.",
+            "split": "Вся сумма распределяется по площади только между домами, в которые будет записана работа.",
+            "quantity": "Цена за единицу × указанное количество.",
+        }
+        self.help.setText(explanations.get(mode, "Укажите способ расчета."))
+        self.mark_dirty()
+
+    def reload(self):
+        previous_company = self.company.currentData()
+        fill_combo(self.company, "SELECT id,name FROM companies ORDER BY name", empty="Выберите УО")
+        if previous_company is not None and self.company.findData(previous_company) >= 0:
+            self.company.setCurrentIndex(self.company.findData(previous_company))
+        old_work = self.work.currentData()
+        self.work.blockSignals(True)
+        self.work.clear()
+        self.work.addItem("Выберите работу / услугу", None)
+        for item in db.rows(
+            "SELECT * FROM work_items WHERE is_active=1 ORDER BY group_name,subgroup_name,category,name"
+        ):
+            self.work.addItem(work_display(item), item["id"])
+        if old_work is not None and self.work.findData(old_work) >= 0:
+            self.work.setCurrentIndex(self.work.findData(old_work))
+        self.work.blockSignals(False)
+        self._load_target_houses()
 
     def preview(self):
-        self.table.setRowCount(0)
-        cid = self.company.currentData(); wid = self.work.currentData()
-        if not cid or not wid:
+        self.mark_dirty()
+        try:
+            with connect() as conn:
+                plan = build_mass_plan(conn, self._inputs())
+        except (ValueError, OSError) as exc:
+            self.status_label.setText(f"Проверьте условия: {exc}")
             return
-        work = db.row("SELECT * FROM work_items WHERE id=?", (wid,))
-        if not work:
-            return
-        service_name = work_display(work)
-        section = self._section_for_work(work)
-        table = self._target_table(section)
-        houses = db.rows("SELECT * FROM houses WHERE company_id=? AND status!='Архив' ORDER BY address", (cid,))
-        total_area = sum(to_float(h["total_area"]) for h in houses) or 1.0
-        with connect() as conn:
-            for h in houses:
-                report = conn.execute("SELECT * FROM reports WHERE house_id=? AND year=? ORDER BY id LIMIT 1", (h["id"], self.year.value())).fetchone()
-                cost, line_price, line_qty, unit = self._calc_for_house(to_float(h["total_area"]), total_area)
-                action = "нет отчета"
-                if report:
-                    existing = self._find_existing(conn, table, int(report["id"]), int(wid), str(work["name"]))
-                    if existing and int(existing["is_manual"] or 0) and not (
-                        self.update_existing.isChecked() and self.override_manual.isChecked()
-                    ):
-                        action = "изменено вручную — защищено, пропуск"
-                    elif existing and self.update_existing.isChecked():
-                        action = "эта услуга уже есть, будет обновлена"
-                    elif existing:
-                        action = "эта услуга уже есть, пропуск"
-                    else:
-                        action = "будет добавлено"
-                elif self.create_missing.isChecked():
-                    action = "будет создан отчет и добавлено"
-                row = self.table.rowCount(); self.table.insertRow(row)
-                vals = [h["id"], wid, h["address"], h["total_area"], service_name, section, report["id"] if report else "", money(cost), money(line_price), money(line_qty), unit, action]
-                for c, v in enumerate(vals):
-                    self.table.set_value(row, c, v)
-        self.table.resizeColumnsToContents()
+        self._preview_plan = plan
         self._preview_dirty = False
+        for row in plan["rows"]:
+            position = self.table.rowCount()
+            self.table.insertRow(position)
+            action_text = MASS_ACTION_TEXT[row["action"]]
+            if row["action"].startswith("skip"):
+                action_text = "Пропуск: " + action_text
+            values = [
+                row["address"], money(row["area"]),
+                f'{plan["section"]} · {plan["work_name"]}',
+                str(row["report_id"]) if row["report_id"] else "Нет отчета",
+                money(row["cost"]) if not row["action"].startswith("skip") else "—",
+                money(row["price"]) if not row["action"].startswith("skip") else "—",
+                money(row["quantity"]) if not row["action"].startswith("skip") else "—",
+                action_text,
+            ]
+            for column, value in enumerate(values):
+                self.table.set_value(position, column, value)
+        self.table.resizeColumnsToContents()
+        data = plan["summary"]
+        self.summary.setText(
+            f'Домов проверено: {len(plan["rows"])} · добавить: {data["insert"]} · '
+            f'обновить: {data["update"]} · пропустить: {data["skip"]} · '
+            f'создать отчетов: {data["create_reports"]} · '
+            f'общая сумма записей: {money(data["cost"])}'
+        )
+        count = data["insert"] + data["update"]
+        self.apply_button.setEnabled(count > 0)
+        self.status_label.setText(
+            "Предпросмотр готов. Проверьте суммы и причины пропуска для каждого дома."
+            if count else "Нет строк, которые можно добавить или обновить. Проверьте параметры."
+        )
 
     def apply(self):
-        cid = self.company.currentData(); wid = self.work.currentData()
-        if not cid or not wid:
-            self.msg("Выберите управляющую организацию и услугу/работу.")
+        if self._preview_dirty or not self._preview_plan or not self.apply_button.isEnabled():
+            self.status_label.setText("Сначала выполните актуальный предпросмотр.")
             return
-        # Всегда пересчитываем предпросмотр перед записью, чтобы не применить
-        # устаревшую таблицу после смены услуги, года или параметров заполнения.
-        self.preview()
-        if self.table.rowCount() == 0:
-            self.msg("Нет домов или отчетов для применения.")
+        plan = self._preview_plan
+        summary = plan["summary"]
+        message = (
+            f'Вы действительно хотите записать результаты?\n\n'
+            f'Добавить: {summary["insert"]}\nОбновить: {summary["update"]}\n'
+            f'Пропустить: {summary["skip"]}\n'
+            f'Сумма добавляемых и обновляемых строк: {money(summary["cost"])}'
+        )
+        if plan["inputs"]["override_manual"]:
+            message += "\n\nВНИМАНИЕ: разрешена перезапись вручную измененных строк."
+        if QMessageBox.question(self, "Подтверждение массового заполнения", message) != QMessageBox.Yes:
             return
-        confirmation = "Добавить/обновить выбранную услугу по данным предпросмотра?"
-        if self.override_manual.isChecked():
-            confirmation += "\n\nВНИМАНИЕ: вручную измененные строки будут перезаписаны!"
-        if QMessageBox.question(self, "Применить", confirmation) != QMessageBox.Yes:
+        try:
+            with connect() as conn:
+                result = apply_mass_plan(conn, plan)
+        except MassOutdatedPreview as exc:
+            self.mark_dirty()
+            self.status_label.setText(str(exc))
+            self.msg(str(exc))
             return
-        work = db.row("SELECT * FROM work_items WHERE id=?", (wid,))
-        if not work:
+        except Exception as exc:
+            self.mark_dirty()
+            self.status_label.setText(f"Запись не выполнена: {exc}")
+            self.msg(f"Массовое заполнение не выполнено: {exc}")
             return
-        section = self._section_for_work(work)
-        table = self._target_table(section)
-        applied = 0
-        skipped = 0
-        with connect() as conn:
-            for r in range(self.table.rowCount()):
-                action = self.table.value(r, 11)
-                if "пропуск" in action or action == "нет отчета":
-                    skipped += 1
-                    continue
-                hid = int(self.table.value(r, 0)); row_wid = int(to_float(self.table.value(r, 1)) or wid)
-                rid_txt = self.table.value(r, 6)
-                if not rid_txt:
-                    rid = db.create_report_in_conn(conn, int(cid), hid, int(self.year.value()))
-                else:
-                    rid = int(to_float(rid_txt))
-                cost = to_float(self.table.value(r, 7))
-                unit_price = to_float(self.table.value(r, 8))
-                qty = to_float(self.table.value(r, 9))
-                unit = self.table.value(r, 10) or (work["unit"] if work else "усл.")
-                existing = self._find_existing(conn, table, rid, row_wid, str(work["name"]))
-                if table == "report_management_items":
-                    if existing and self.update_existing.isChecked():
-                        conn.execute("UPDATE report_management_items SET unit=?, unit_price=?, qty=?, cost=?, source=?, is_manual=0 WHERE id=?", (unit, unit_price, qty, cost, "массовое применение", existing["id"]))
-                        applied += 1
-                    elif not existing:
-                        pos = conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM report_management_items WHERE report_id=?", (rid,)).fetchone()[0]
-                        conn.execute("INSERT INTO report_management_items(report_id, work_item_id, name, unit, unit_price, qty, cost, source, is_manual, position) VALUES(?,?,?,?,?,?,?,?,?,?)", (rid, row_wid, work["name"], unit, unit_price, qty, cost, "массовое применение", 0, pos))
-                        applied += 1
-                    else:
-                        skipped += 1
-                elif table == "report_repair_items":
-                    volume = f"{money(qty)} {unit}" if qty else unit
-                    if existing and self.update_existing.isChecked():
-                        conn.execute("UPDATE report_repair_items SET cost=?, volume=?, source=?, is_manual=0 WHERE id=?", (cost, volume, "массовое применение", existing["id"]))
-                        applied += 1
-                    elif not existing:
-                        pos = conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM report_repair_items WHERE report_id=?", (rid,)).fetchone()[0]
-                        conn.execute("INSERT INTO report_repair_items(report_id, work_item_id, name, basis, cost, volume, act_details, source, is_manual, position) VALUES(?,?,?,?,?,?,?,?,?,?)", (rid, row_wid, work["name"], "", cost, volume, "", "массовое применение", 0, pos))
-                        applied += 1
-                    else:
-                        skipped += 1
-                else:
-                    if existing and self.update_existing.isChecked():
-                        conn.execute("UPDATE report_content_items SET unit=?, unit_price=?, plan_qty=?, plan_cost=?, actual_qty=?, actual_cost=?, source=?, is_manual=0 WHERE id=?", (unit, unit_price, qty, cost, qty, cost, "массовое применение", existing["id"]))
-                        applied += 1
-                    elif not existing:
-                        pos = conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM report_content_items WHERE report_id=?", (rid,)).fetchone()[0]
-                        conn.execute("INSERT INTO report_content_items(report_id, work_item_id, name, unit, unit_price, plan_qty, plan_cost, actual_qty, actual_cost, source, is_manual, position) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (rid, row_wid, work["name"], unit, unit_price, qty, cost, qty, cost, "массовое применение", 0, pos))
-                        applied += 1
-                    else:
-                        skipped += 1
-            conn.commit()
-        make_backup("mass_apply")
-        self.msg(f"Массовое заполнение выполнено. Добавлено/обновлено: {applied}. Пропущено: {skipped}")
-        self.preview()
-
+        self.mark_dirty()
+        self.status_label.setText(
+            f'Выполнено: добавлено {result["insert"]}, обновлено {result["update"]}, '
+            f'пропущено {result["skip"]}. Для повторной операции обновите предпросмотр.'
+        )
+        try:
+            make_backup("mass_apply")
+        except Exception as exc:
+            self.msg(f"Данные записаны, но резервную копию создать не удалось: {exc}")
+            return
+        self.msg(f'Массовое заполнение выполнено: добавлено {result["insert"]}, '
+                 f'обновлено {result["update"]}, пропущено {result["skip"]}.')
 
 class BackupsTab(BaseTab):
     def __init__(self):
