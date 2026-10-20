@@ -1673,15 +1673,81 @@ class ReportsTab(BaseTab):
         self.report_tabs.addTab(w, "4–5. Финансы")
 
     def _build_export_tab(self):
-        w = QWidget(); layout = QVBoxLayout(w)
-        layout.addWidget(selectable_label("Выгрузка отчета 728/пр. Структура формы защищена: дополнительные поля не добавляются в официальный отчет."))
-        xlsx = QPushButton("Выгрузить в Excel (.xlsx)"); xlsx.clicked.connect(lambda: self.export("xlsx"))
-        docx = QPushButton("Выгрузить в Word (.docx)"); docx.clicked.connect(lambda: self.export("docx"))
-        pdf = QPushButton("Выгрузить в PDF (.pdf)"); pdf.clicked.connect(lambda: self.export("pdf"))
-        allb = QPushButton("Выгрузить все форматы"); allb.clicked.connect(lambda: self.export("all"))
-        for b in (xlsx, docx, pdf, allb): layout.addWidget(b)
-        layout.addStretch()
-        self.report_tabs.addTab(w, "Экспорт")
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setSpacing(9)
+
+        review_card = ContentCard(
+            "4. Проверка перед выгрузкой",
+            "Предварительная проверка полноты и непротиворечивости сведений. "
+            "Она не заменяет юридическую проверку отчета."
+        )
+        self.review_button = QPushButton("Проверить заполнение")
+        self.review_button.clicked.connect(self.run_review)
+        review_card.add_widget(action_panel("Проверка отчета", self.review_button,
+                                            primary=self.review_button))
+        self.review_status = selectable_label("Проверка еще не проводилась.")
+        self.review_status.setObjectName("CardSubtitle")
+        review_card.add_widget(self.review_status)
+        self.review_text = QTextEdit()
+        self.review_text.setReadOnly(True)
+        self.review_text.setMinimumHeight(140)
+        self.review_text.setPlaceholderText("После проверки здесь появятся результаты по разделам.")
+        review_card.add_widget(self.review_text)
+        layout.addWidget(review_card, 1)
+
+        export_card = ContentCard(
+            "5. Выгрузка официальной формы",
+            "Экспорт не меняет структуру приложения № 2 к приказу № 728/пр."
+        )
+        self.export_buttons = {}
+        for kind, label in (
+            ("xlsx", "Excel (.xlsx)"),
+            ("docx", "Word (.docx)"),
+            ("pdf", "PDF (.pdf)"),
+            ("all", "Выгрузить все форматы"),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(lambda _checked=False, k=kind: self.export(k))
+            self.export_buttons[kind] = button
+        export_card.add_widget(action_panel(
+            "Выберите формат", self.export_buttons["xlsx"],
+            self.export_buttons["docx"], self.export_buttons["pdf"]
+        ))
+        export_card.add_widget(action_panel(
+            "Выгрузить все", self.export_buttons["all"],
+            primary=self.export_buttons["all"]
+        ))
+        layout.addWidget(export_card)
+        self.report_tabs.addTab(w, "Проверка и выгрузка")
+
+    def run_review(self):
+        if not self.current_id:
+            self.review_status.setText("Сначала выберите отчет.")
+            return None
+        try:
+            self.flush_autosave()
+            bundle = db.load_report_bundle(int(self.current_id))
+            result = inspect_report(bundle)
+            self._review_snapshot = (
+                int(self.current_id), bundle_fingerprint(bundle), result
+            )
+            self._review_dirty = False
+            self.review_text.setPlainText(review_text(result))
+            if result["errors"]:
+                self.review_status.setText(
+                    f'Проверка: найдено ошибок {len(result["errors"])}. Исправьте их.'
+                )
+            else:
+                self.review_status.setText(
+                    f'Ошибок нет. Предупреждений: {len(result["warnings"])}.'
+                )
+            return result
+        except Exception as exc:
+            self._invalidate_review()
+            self.review_status.setText(f"Проверка не выполнена: {exc}")
+            self.msg(f"Проверка не выполнена: {exc}")
+            return None
 
     def reload_filters(self):
         fill_combo(self.company_filter, "SELECT id, name FROM companies ORDER BY name", empty="Все организации")
