@@ -2221,32 +2221,77 @@ class ReportsTab(BaseTab):
             self.refresh()
 
     def export(self, kind: str):
+        if kind not in ("xlsx", "docx", "pdf", "all"):
+            return
         if not self.current_id:
             self.msg("Выберите отчет для выгрузки.")
             return
-        try:
-            self.save(silent=True, refresh_after=False)
-        except Exception as exc:
-            self.msg(f"Экспорт отменен: отчет не удалось сохранить ({exc})")
+        if self._review_dirty or not self._review_snapshot:
+            self.review_status.setText(
+                "Сначала нажмите «Проверить заполнение», затем выберите формат."
+            )
+            self.report_tabs.setCurrentIndex(self.report_tabs.count() - 1)
             return
-        make_backup("before_export")
+        rid, fingerprint, review = self._review_snapshot
+        if rid != int(self.current_id):
+            self._invalidate_review()
+            self.msg("Отчет изменился. Выполните проверку заново.")
+            return
+        try:
+            self.flush_autosave()
+            current_bundle = db.load_report_bundle(rid)
+            if bundle_fingerprint(current_bundle) != fingerprint:
+                self._invalidate_review()
+                self.msg("Данные отчета изменились после проверки. Повторите ее.")
+                return
+        except Exception as exc:
+            self._invalidate_review()
+            self.msg(f"Экспорт отменен: не удалось проверить сохраненные данные ({exc})")
+            return
+        if review["errors"]:
+            self.review_status.setText(
+                "Экспорт заблокирован: исправьте ошибки и выполните проверку снова."
+            )
+            return
+        if review["warnings"]:
+            warning_text = "\n".join(review["warnings"])
+            if QMessageBox.question(
+                self, "Есть замечания к отчету",
+                "В отчете остались предупреждения:\n\n" + warning_text +
+                "\n\nПродолжить выгрузку без устранения замечаний?"
+            ) != QMessageBox.Yes:
+                return
+        try:
+            make_backup("before_export")
+        except Exception as exc:
+            self.msg(f"Выгрузка отменена: резервная копия не создана ({exc})")
+            return
         paths = []
         try:
-            if kind in ("xlsx", "all"): paths.append(export_xlsx(self.current_id))
-            if kind in ("docx", "all"): paths.append(export_docx(self.current_id))
-            if kind in ("pdf", "all"): paths.append(export_pdf(self.current_id))
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка экспорта", f"Не удалось сформировать файл.\n\n{e}")
+            for fmt, export_func in (
+                ("xlsx", export_xlsx),
+                ("docx", export_docx),
+                ("pdf", export_pdf),
+            ):
+                if kind in (fmt, "all"):
+                    paths.append(export_func(rid))
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Ошибка экспорта",
+                f"Не удалось завершить выгрузку.\n\n{exc}\n\n"
+                "Уже созданные файлы, если они есть, не удалялись."
+            )
             return
         msg = QMessageBox(self)
         msg.setIcon(QMessageBox.Information)
         msg.setWindowTitle("Готово")
-        msg.setText("Файлы сформированы:\n" + "\n".join(str(p) for p in paths))
-        open_btn = msg.addButton("Открыть папку", QMessageBox.ActionRole)
+        msg.setText("Файлы сформированы:\n" + "\n".join(str(path) for path in paths))
+        open_button = msg.addButton("Открыть папку", QMessageBox.ActionRole)
         msg.addButton("OK", QMessageBox.AcceptRole)
         msg.exec()
-        if msg.clickedButton() == open_btn and paths:
+        if msg.clickedButton() == open_button and paths:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths[0].parent)))
+
 
 
 class MassPreviewTable(CopyPasteTable):
