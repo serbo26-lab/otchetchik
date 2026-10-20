@@ -135,14 +135,20 @@ def describe_context(tab, main_window) -> tuple[str, str]:
     if name == "MassApplyTab":
         company = selected(tab.company)
         work = selected(tab.work)
-        prefix = f"Массовое заполнение   •   Год: {tab.year.value()}"
+        chosen = len(tab.selected_house_ids())
+        prefix = f"Массовое заполнение   •   Год: {tab.year.value()}   •   Домов выбрано: {chosen}"
         if company:
             prefix += f"   •   УО: {company}"
         if not company or not work:
-            return prefix, "Выберите УО, работу и способ расчета. После этого проверьте предпросмотр."
-        return prefix, ("Параметры изменены. Обновите предпросмотр, прежде чем применять изменения."
-                        if tab._preview_dirty else
-                        "Проверьте суммы и действия по домам в таблице предпросмотра, затем применяйте.")
+            return prefix, "Шаг 1: выберите УО и работу, затем укажите способ расчета."
+        if not chosen:
+            return prefix, "Шаг 3: отметьте хотя бы один дом, который нужно заполнить."
+        if tab._preview_dirty:
+            return prefix, "Шаг 4: обновите предварительный просмотр и проверьте суммы и причины пропусков."
+        count = tab._preview_plan["summary"]["insert"] + tab._preview_plan["summary"]["update"]
+        if not count:
+            return prefix, "Нет строк для записи. Проверьте выбор домов и параметры."
+        return prefix, "Шаг 5: проверьте готовый предпросмотр, затем подтвердите запись."
 
     if name == "ReportsTab":
         company = selected(tab.company_filter)

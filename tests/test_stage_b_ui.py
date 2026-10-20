@@ -71,7 +71,7 @@ class CommonUxTests(TestCase):
         self.window.navigate(5)
         self.window.refresh_context()
         self.assertIn("Массовое заполнение", self.window.page_header.context.text())
-        self.assertIn("предпросмотр", self.window.page_header.guide.text().lower())
+        self.assertIn("выберите уо и работу", self.window.page_header.guide.text().lower())
         self.window.navigate(6)
         self.window.refresh_context()
         self.assertIn("Отчетный год", self.window.page_header.context.text())
