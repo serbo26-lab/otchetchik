@@ -46,11 +46,12 @@ from .utils import full_year_period, iso_date, money, to_float
 from .ui_style import apply_theme
 from .ui_shell import ActionFlowLayout, NavigationSidebar, PageChrome, PAGES
 from .report_storage import sync_report_rows
+from .report_review import inspect_report, review_text, bundle_fingerprint
 from .mass_apply_logic import (ACTION_TEXT as MASS_ACTION_TEXT, OutdatedPreview as MassOutdatedPreview,
                                build_plan as build_mass_plan, apply_plan as apply_mass_plan)
 from .ui_components import ActionPanel, ContentCard, action_panel, describe_context, table_card
 
-APP_TITLE = "Отчетность УК по приказу 728/пр — V1.6.4 MASS WORKFLOW"
+APP_TITLE = "Отчетность УК по приказу 728/пр — V1.6.5 REPORT WORKFLOW"
 
 
 def selectable_label(text: str = "") -> QLabel:
@@ -1369,30 +1370,46 @@ class ReportsTab(BaseTab):
         self._loading_report = False
         self._saving_report = False
         self._dirty_report = False
+        self._review_dirty = True
+        self._review_snapshot = None
+        self._report_tab_index = 0
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.timeout.connect(self._autosave_current_report)
         root = QHBoxLayout(self)
         splitter = QSplitter(); root.addWidget(splitter)
         left = QWidget(); left_l = QVBoxLayout(left)
-        self.company_filter = ClickComboBox(); self.company_filter.currentIndexChanged.connect(self.reload_houses_filter)
+        self.company_filter = ClickComboBox(); self.company_filter.currentIndexChanged.connect(lambda _i: self.reload_houses_filter())
         self.house_filter = ClickComboBox(); self.house_filter.currentIndexChanged.connect(self.refresh)
         self.year_filter = QSpinBox(); self.year_filter.setRange(2000, 2100); self.year_filter.setValue(2026); self.year_filter.valueChanged.connect(self.refresh)
-        left_l.addWidget(selectable_label("УО")); left_l.addWidget(self.company_filter)
-        left_l.addWidget(selectable_label("Дом")); left_l.addWidget(self.house_filter)
-        left_l.addWidget(selectable_label("Год")); left_l.addWidget(self.year_filter)
-        self.list = QListWidget(); self.list.currentItemChanged.connect(self._load_current)
-        left_l.addWidget(self.list)
-        create = QPushButton("Создать отчет за выбранный год"); create.clicked.connect(self.create_report)
-        self.delete_report_btn = QPushButton("Удалить отчет")
+        context_card = ContentCard("1. Выберите УО, дом и отчетный год")
+        choices = QFormLayout()
+        choices.addRow(selectable_label("УО"), self.company_filter)
+        choices.addRow(selectable_label("Дом"), self.house_filter)
+        choices.addRow(selectable_label("Год"), self.year_filter)
+        context_card.add_layout(choices)
+        left_l.addWidget(context_card)
+        reports_card = ContentCard("2. Выберите или создайте отчет",
+                                   "Для одного дома могут существовать отчеты за разные периоды.")
+        self.list = QListWidget()
+        self.list.currentItemChanged.connect(self._load_current)
+        reports_card.add_widget(self.list, 1)
+        self.create_report_btn = QPushButton("Создать отчет за выбранный год")
+        self.create_report_btn.clicked.connect(self.create_report)
+        reports_card.add_widget(action_panel("Создание", self.create_report_btn,
+                                             primary=self.create_report_btn))
+        left_l.addWidget(reports_card, 1)
+        self.delete_report_btn = QPushButton("Удалить выбранный отчет")
         self.delete_report_btn.clicked.connect(self.delete_report)
-        left_l.addWidget(action_panel("Создание отчета", create, primary=create))
         left_l.addWidget(action_panel("Удаление отчета", self.delete_report_btn, purpose="danger"))
         splitter.addWidget(left)
 
         right = QWidget(); right_l = QVBoxLayout(right)
+        right_l.addWidget(selectable_label(
+            "3. Заполнение разделов → 4. Проверка отчета → 5. Выгрузка документов"
+        ))
         self.report_tabs = QTabWidget()
-        right_l.addWidget(self.report_tabs)
+        right_l.addWidget(self.report_tabs, 1)
         self._build_general_tab()
         self._build_content_tab()
         self._build_repair_tab()
@@ -1400,12 +1417,74 @@ class ReportsTab(BaseTab):
         self._build_finance_tab()
         self._build_export_tab()
         self.report_tabs.setEnabled(False)
-        save = QPushButton("Сохранить отчет"); save.clicked.connect(self.save)
-        right_l.addWidget(action_panel("Сохранение отчета", save, primary=save))
+        self.save_button = QPushButton("Сохранить отчет")
+        self.save_button.clicked.connect(self.save)
+        right_l.addWidget(action_panel("Сохранение выбранного отчета", self.save_button,
+                                       primary=self.save_button))
         splitter.addWidget(right)
         splitter.setSizes([300, 1000])
         self._connect_autosave_signals()
         self.reload_filters()
+        self._update_report_actions()
+
+    def _update_report_actions(self):
+        has_report = bool(self.current_id)
+        self.report_tabs.setEnabled(has_report)
+        self.save_button.setEnabled(has_report)
+        self.delete_report_btn.setEnabled(has_report)
+        self.create_report_btn.setEnabled(
+            self.company_filter.currentData() is not None
+            and self.house_filter.currentData() is not None
+        )
+
+    def _invalidate_review(self):
+        self._review_dirty = True
+        self._review_snapshot = None
+        if hasattr(self, "review_status"):
+            self.review_status.setText(
+                "Отчет изменен. Перед выгрузкой повторите проверку."
+            )
+
+    def _on_report_section_changed(self, index):
+        previous_index = self._report_tab_index
+        if previous_index == index:
+            return
+        try:
+            self.flush_autosave()
+        except Exception as exc:
+            blocked = self.report_tabs.blockSignals(True)
+            self.report_tabs.setCurrentIndex(previous_index)
+            self.report_tabs.blockSignals(blocked)
+            self.msg(f"Переход отменен: отчет не сохранен ({exc})")
+            return
+        self._report_tab_index = index
+
+    def _go_to_report_section(self, index):
+        if not self.current_id:
+            return
+        try:
+            self.flush_autosave()
+        except Exception as exc:
+            self.msg(f"Не удалось сохранить отчет: {exc}")
+            return
+        self.report_tabs.setCurrentIndex(index)
+
+    def _next_report_action(self, layout, title, next_index):
+        button = QPushButton(title)
+        button.clicked.connect(lambda _checked=False, i=next_index: self._go_to_report_section(i))
+        layout.addWidget(action_panel("Следующий шаг", button, primary=button))
+
+    def _delete_selected_report_rows(self, table):
+        count = len({cell.row() for cell in table.selectedIndexes()})
+        if count == 0:
+            self.msg("Выделите строки, которые требуется удалить.")
+            return
+        if QMessageBox.question(
+            self, "Удаление строк", f"Удалить из отчета выбранные строки ({count})?"
+        ) != QMessageBox.Yes:
+            return
+        table.delete_selected_rows()
+        self.schedule_autosave()
 
     def _connect_autosave_signals(self) -> None:
         # Автосохранение отчета должно срабатывать не только при переходе между
@@ -1426,12 +1505,13 @@ class ReportsTab(BaseTab):
         self.repair_table.itemChanged.connect(lambda _item: self.schedule_autosave())
         self.management_table.itemChanged.connect(lambda _item: self.schedule_autosave())
         self.finance_table.itemChanged.connect(lambda _item: self.schedule_autosave())
-        self.report_tabs.currentChanged.connect(lambda _idx: self.flush_autosave())
+        self.report_tabs.currentChanged.connect(self._on_report_section_changed)
 
     def schedule_autosave(self, *args) -> None:
         if self._loading_report or self._saving_report or not self.current_id:
             return
         self._dirty_report = True
+        self._invalidate_review()
         self._autosave_timer.start(700)
         win = self.window()
         if hasattr(win, "set_save_status"):
@@ -1457,7 +1537,10 @@ class ReportsTab(BaseTab):
             self.msg(f"Не удалось сохранить отчет: {exc}")
 
     def _build_general_tab(self):
-        w = QWidget(); form = QFormLayout(w)
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        card = ContentCard("Общие сведения", "Укажите отчетный год, фактический период управления и статус.")
+        form = QFormLayout()
         self.year = QSpinBox(); self.year.setRange(2000, 2100); self.year.setValue(2026)
         self.period_start = QLineEdit(); self.period_start.setPlaceholderText("дд.мм.гггг или гггг-мм-дд")
         self.period_end = QLineEdit(); self.period_end.setPlaceholderText("дд.мм.гггг или гггг-мм-дд")
@@ -1474,6 +1557,10 @@ class ReportsTab(BaseTab):
         form.addRow(selectable_label("Дата размещения отчета"), self.publish)
         form.addRow(selectable_label("Статус"), self.status)
         form.addRow(selectable_label("Примечание"), self.notes)
+        card.add_layout(form)
+        layout.addWidget(card)
+        self._next_report_action(layout, "Перейти к содержанию", 1)
+        layout.addStretch()
         self.report_tabs.addTab(form_scroll(w), "Общие сведения")
 
     def _build_content_tab(self):
@@ -1498,6 +1585,10 @@ class ReportsTab(BaseTab):
         self._content_recalc_lock = False
         self.content_table.itemChanged.connect(self.on_content_item_changed)
         layout.addWidget(table_card("Строки содержания", self.content_table))
+        delete = QPushButton("Удалить выбранные строки")
+        delete.clicked.connect(lambda: self._delete_selected_report_rows(self.content_table))
+        layout.addWidget(action_panel("Удаление строк", delete, purpose="danger"))
+        self._next_report_action(layout, "Перейти к текущему ремонту", 2)
         self.report_tabs.addTab(w, "1. Содержание")
 
     def _build_repair_tab(self):
@@ -1511,7 +1602,10 @@ class ReportsTab(BaseTab):
             ("Остаток/перерасход на 31 декабря", self.repair_end),
         ]:
             form.addRow(selectable_label(label), widget)
-        layout.addLayout(form)
+        balance_card = ContentCard("Остаток и начисления текущего ремонта",
+                                   "Сведения о фонде текущего ремонта заполняются отдельно от перечня работ.")
+        balance_card.add_layout(form)
+        layout.addWidget(balance_card)
         template_row = QHBoxLayout()
         self.repair_template_combo = ClickComboBox()
         template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.repair_template_combo, 1)
@@ -1528,6 +1622,10 @@ class ReportsTab(BaseTab):
         self.repair_table.setColumnHidden(0, True); self.repair_table.setColumnHidden(1, True)
         self.repair_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_repair_items", "basis", COMMON_REPAIR_BASIS), self.repair_table))
         layout.addWidget(table_card("Работы текущего ремонта", self.repair_table))
+        delete = QPushButton("Удалить выбранные строки")
+        delete.clicked.connect(lambda: self._delete_selected_report_rows(self.repair_table))
+        layout.addWidget(action_panel("Удаление строк", delete, purpose="danger"))
+        self._next_report_action(layout, "Перейти к управлению", 3)
         self.report_tabs.addTab(w, "2. Текущий ремонт")
 
     def _build_management_tab(self):
@@ -1549,6 +1647,10 @@ class ReportsTab(BaseTab):
         box_l.addLayout(recalc_row)
         layout.addWidget(box)
 
+        layout.addWidget(selectable_label(
+            "Внутренняя детализация ниже не изменяет итог раздела 3 автоматически. "
+            "Кнопка «Посчитать из строк ниже» применяется только по вашему выбору."
+        ))
         template_row = QHBoxLayout()
         self.management_template_combo = ClickComboBox()
         template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.management_template_combo, 1)
@@ -1567,10 +1669,14 @@ class ReportsTab(BaseTab):
         self.management_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_management_items", "unit", distinct_texts("work_items", "unit", COMMON_UNITS)), self.management_table))
         self._management_recalc_lock = False
         self.management_table.itemChanged.connect(self.on_management_item_changed)
-        layout.addWidget(table_card("Расчет по услугам управления", self.management_table))
+        layout.addWidget(table_card("Внутренний расчет услуг управления", self.management_table))
+        delete = QPushButton("Удалить выбранные строки")
+        delete.clicked.connect(lambda: self._delete_selected_report_rows(self.management_table))
+        layout.addWidget(action_panel("Удаление строк расчета", delete, purpose="danger"))
         layout.addWidget(selectable_label(
-            "В форму 728/пр по разделу 3 выводится итоговая сумма. Строки выше нужны, чтобы удобно ее заполнить."
+            "В официальной форме раздел 3 содержит итоговую сумму, а не внутренние строки расчета."
         ))
+        self._next_report_action(layout, "Перейти к финансам", 4)
         self.report_tabs.addTab(w, "3. Управление")
 
     def _build_finance_tab(self):
@@ -1589,19 +1695,86 @@ class ReportsTab(BaseTab):
         self.finance_table.setItemDelegateForColumn(1, EditableComboDelegate(lambda: distinct_texts("report_financials", "payer_type", COMMON_PAYER_TYPES), self.finance_table))
         self.finance_table.set_value(0, 1, "Собственники")
         self.finance_table.set_value(1, 1, "Наниматели")
-        layout.addWidget(table_card("Начисления и поступления", self.finance_table))
+        layout.addWidget(table_card("5. Начисления и поступления", self.finance_table))
+        self._next_report_action(layout, "Проверить и выгрузить отчет", 5)
         self.report_tabs.addTab(w, "4–5. Финансы")
 
     def _build_export_tab(self):
-        w = QWidget(); layout = QVBoxLayout(w)
-        layout.addWidget(selectable_label("Выгрузка отчета 728/пр. Структура формы защищена: дополнительные поля не добавляются в официальный отчет."))
-        xlsx = QPushButton("Выгрузить в Excel (.xlsx)"); xlsx.clicked.connect(lambda: self.export("xlsx"))
-        docx = QPushButton("Выгрузить в Word (.docx)"); docx.clicked.connect(lambda: self.export("docx"))
-        pdf = QPushButton("Выгрузить в PDF (.pdf)"); pdf.clicked.connect(lambda: self.export("pdf"))
-        allb = QPushButton("Выгрузить все форматы"); allb.clicked.connect(lambda: self.export("all"))
-        for b in (xlsx, docx, pdf, allb): layout.addWidget(b)
-        layout.addStretch()
-        self.report_tabs.addTab(w, "Экспорт")
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setSpacing(9)
+
+        review_card = ContentCard(
+            "4. Проверка перед выгрузкой",
+            "Предварительная проверка полноты и непротиворечивости сведений. "
+            "Она не заменяет юридическую проверку отчета."
+        )
+        self.review_button = QPushButton("Проверить заполнение")
+        self.review_button.clicked.connect(self.run_review)
+        review_card.add_widget(action_panel("Проверка отчета", self.review_button,
+                                            primary=self.review_button))
+        self.review_status = selectable_label("Проверка еще не проводилась.")
+        self.review_status.setObjectName("CardSubtitle")
+        review_card.add_widget(self.review_status)
+        self.review_text = QTextEdit()
+        self.review_text.setReadOnly(True)
+        self.review_text.setMinimumHeight(140)
+        self.review_text.setPlaceholderText("После проверки здесь появятся результаты по разделам.")
+        review_card.add_widget(self.review_text)
+        layout.addWidget(review_card, 1)
+
+        export_card = ContentCard(
+            "5. Выгрузка официальной формы",
+            "Экспорт не меняет структуру приложения № 2 к приказу № 728/пр."
+        )
+        self.export_buttons = {}
+        for kind, label in (
+            ("xlsx", "Excel (.xlsx)"),
+            ("docx", "Word (.docx)"),
+            ("pdf", "PDF (.pdf)"),
+            ("all", "Выгрузить все форматы"),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(lambda _checked=False, k=kind: self.export(k))
+            self.export_buttons[kind] = button
+        export_card.add_widget(action_panel(
+            "Выберите формат", self.export_buttons["xlsx"],
+            self.export_buttons["docx"], self.export_buttons["pdf"]
+        ))
+        export_card.add_widget(action_panel(
+            "Выгрузить все", self.export_buttons["all"],
+            primary=self.export_buttons["all"]
+        ))
+        layout.addWidget(export_card)
+        self.report_tabs.addTab(w, "Проверка и выгрузка")
+
+    def run_review(self):
+        if not self.current_id:
+            self.review_status.setText("Сначала выберите отчет.")
+            return None
+        try:
+            self.flush_autosave()
+            bundle = db.load_report_bundle(int(self.current_id))
+            result = inspect_report(bundle)
+            self._review_snapshot = (
+                int(self.current_id), bundle_fingerprint(bundle), result
+            )
+            self._review_dirty = False
+            self.review_text.setPlainText(review_text(result))
+            if result["errors"]:
+                self.review_status.setText(
+                    f'Проверка: найдено ошибок {len(result["errors"])}. Исправьте их.'
+                )
+            else:
+                self.review_status.setText(
+                    f'Ошибок нет. Предупреждений: {len(result["warnings"])}.'
+                )
+            return result
+        except Exception as exc:
+            self._invalidate_review()
+            self.review_status.setText(f"Проверка не выполнена: {exc}")
+            self.msg(f"Проверка не выполнена: {exc}")
+            return None
 
     def reload_filters(self):
         fill_combo(self.company_filter, "SELECT id, name FROM companies ORDER BY name", empty="Все организации")
@@ -1685,8 +1858,7 @@ class ReportsTab(BaseTab):
         else:
             self.current_id = None
             self.report_tabs.setEnabled(False)
-        if hasattr(self, "delete_report_btn"):
-            self.delete_report_btn.setEnabled(bool(self.current_id))
+        self._update_report_actions()
 
     def fill_full_year(self):
         y = self.year.value()
@@ -1763,13 +1935,11 @@ class ReportsTab(BaseTab):
                 return
         self.current_id = new_id
         if not self.current_id:
-            self.report_tabs.setEnabled(False)
-            if hasattr(self, "delete_report_btn"):
-                self.delete_report_btn.setEnabled(False)
+            self._invalidate_review()
+            self._update_report_actions()
             return
-        self.report_tabs.setEnabled(True)
-        if hasattr(self, "delete_report_btn"):
-            self.delete_report_btn.setEnabled(True)
+        self._invalidate_review()
+        self._update_report_actions()
         self._loading_report = True
         try:
             bundle = db.load_report_bundle(self.current_id)
@@ -1958,12 +2128,30 @@ class ReportsTab(BaseTab):
         template_section = self._template_section(int(tid), target_section)
         added = 0
         skipped = 0
+        target_table = (
+            self.content_table if target_section == "Содержание"
+            else self.repair_table if target_section == "Текущий ремонт"
+            else self.management_table
+        )
+        known_ids = {target_table.value(row, 1)
+                     for row in range(target_table.rowCount()) if target_table.value(row, 1)}
+        known_names = {target_table.value(row, 2).strip().casefold()
+                       for row in range(target_table.rowCount()) if target_table.value(row, 2).strip()}
         for it in db.rows("SELECT * FROM template_items WHERE template_id=? ORDER BY position,id", (tid,)):
             item_section = self._template_item_section(it, template_section)
             if item_section != target_section:
                 skipped += 1
                 continue
+            work_key = str(it["work_item_id"] or "")
+            name_key = str(it["name"] or "").strip().casefold()
+            if (work_key and work_key in known_ids) or (name_key and name_key in known_names):
+                skipped += 1
+                continue
             cost = to_float(it["unit_price"]) * to_float(it["plan_qty"])
+            if work_key:
+                known_ids.add(work_key)
+            if name_key:
+                known_names.add(name_key)
             if target_section == "Управление":
                 self.add_management_row({"work_item_id": it["work_item_id"], "name": it["name"], "unit": it["unit"], "unit_price": it["unit_price"], "qty": it["plan_qty"], "cost": cost, "source": "шаблон"})
             elif target_section == "Текущий ремонт":
@@ -2043,18 +2231,49 @@ class ReportsTab(BaseTab):
                         records.append({**common, **fields})
                     result = sync_report_rows(conn, table_name, rid, records)
                     inserted_rows.append((widget, result))
-                conn.execute("DELETE FROM report_financials WHERE report_id=?", (rid,))
-                for r in range(self.finance_table.rowCount()):
-                    payer = self.finance_table.value(r, 1)
+                # Keep stable financial row IDs rather than deleting and recreating
+                # all owner/tenant rows on every autosave.
+                payer_types = []
+                for row_index in range(self.finance_table.rowCount()):
+                    payer = self.finance_table.value(row_index, 1).strip()
                     if not payer:
                         continue
+                    if payer in payer_types:
+                        raise ValueError(f"Повторяется вид плательщика: {payer}")
+                    payer_types.append(payer)
                     conn.execute(
-                        "INSERT INTO report_financials(report_id, payer_type, debt_start, accrued, paid, debt_end) VALUES(?,?,?,?,?,?)",
-                        (rid, payer, to_float(self.finance_table.value(r,2)), to_float(self.finance_table.value(r,3)), to_float(self.finance_table.value(r,4)), to_float(self.finance_table.value(r,5))),
+                        """INSERT INTO report_financials
+                           (report_id,payer_type,debt_start,accrued,paid,debt_end)
+                           VALUES(?,?,?,?,?,?)
+                           ON CONFLICT(report_id,payer_type) DO UPDATE SET
+                           debt_start=excluded.debt_start,
+                           accrued=excluded.accrued,
+                           paid=excluded.paid,
+                           debt_end=excluded.debt_end""",
+                        (rid, payer, to_float(self.finance_table.value(row_index, 2)),
+                         to_float(self.finance_table.value(row_index, 3)),
+                         to_float(self.finance_table.value(row_index, 4)),
+                         to_float(self.finance_table.value(row_index, 5))),
                     )
+                if payer_types:
+                    placeholders = ",".join("?" for _ in payer_types)
+                    conn.execute(
+                        f"DELETE FROM report_financials WHERE report_id=? "
+                        f"AND payer_type NOT IN ({placeholders})", (rid, *payer_types)
+                    )
+                else:
+                    conn.execute("DELETE FROM report_financials WHERE report_id=?", (rid,))
                 conn.execute(
-                    "INSERT OR REPLACE INTO report_claims(report_id, pretensions_count, lawsuits_count, recovered_amount) VALUES(?,?,?,?)",
-                    (rid, int(to_float(self.claim_pret.text())), int(to_float(self.claim_lawsuits.text())), to_float(self.claim_amount.text())),
+                    """INSERT INTO report_claims
+                       (report_id,pretensions_count,lawsuits_count,recovered_amount)
+                       VALUES(?,?,?,?)
+                       ON CONFLICT(report_id) DO UPDATE SET
+                       pretensions_count=excluded.pretensions_count,
+                       lawsuits_count=excluded.lawsuits_count,
+                       recovered_amount=excluded.recovered_amount""",
+                    (rid, int(to_float(self.claim_pret.text())),
+                     int(to_float(self.claim_lawsuits.text())),
+                     to_float(self.claim_amount.text())),
                 )
                 conn.commit()
                 # Update hidden IDs before allowing UI change signals to mark new edits.
@@ -2078,32 +2297,77 @@ class ReportsTab(BaseTab):
             self.refresh()
 
     def export(self, kind: str):
+        if kind not in ("xlsx", "docx", "pdf", "all"):
+            return
         if not self.current_id:
             self.msg("Выберите отчет для выгрузки.")
             return
-        try:
-            self.save(silent=True, refresh_after=False)
-        except Exception as exc:
-            self.msg(f"Экспорт отменен: отчет не удалось сохранить ({exc})")
+        if self._review_dirty or not self._review_snapshot:
+            self.review_status.setText(
+                "Сначала нажмите «Проверить заполнение», затем выберите формат."
+            )
+            self.report_tabs.setCurrentIndex(self.report_tabs.count() - 1)
             return
-        make_backup("before_export")
+        rid, fingerprint, review = self._review_snapshot
+        if rid != int(self.current_id):
+            self._invalidate_review()
+            self.msg("Отчет изменился. Выполните проверку заново.")
+            return
+        try:
+            self.flush_autosave()
+            current_bundle = db.load_report_bundle(rid)
+            if bundle_fingerprint(current_bundle) != fingerprint:
+                self._invalidate_review()
+                self.msg("Данные отчета изменились после проверки. Повторите ее.")
+                return
+        except Exception as exc:
+            self._invalidate_review()
+            self.msg(f"Экспорт отменен: не удалось проверить сохраненные данные ({exc})")
+            return
+        if review["errors"]:
+            self.review_status.setText(
+                "Экспорт заблокирован: исправьте ошибки и выполните проверку снова."
+            )
+            return
+        if review["warnings"]:
+            warning_text = "\n".join(review["warnings"])
+            if QMessageBox.question(
+                self, "Есть замечания к отчету",
+                "В отчете остались предупреждения:\n\n" + warning_text +
+                "\n\nПродолжить выгрузку без устранения замечаний?"
+            ) != QMessageBox.Yes:
+                return
+        try:
+            make_backup("before_export")
+        except Exception as exc:
+            self.msg(f"Выгрузка отменена: резервная копия не создана ({exc})")
+            return
         paths = []
         try:
-            if kind in ("xlsx", "all"): paths.append(export_xlsx(self.current_id))
-            if kind in ("docx", "all"): paths.append(export_docx(self.current_id))
-            if kind in ("pdf", "all"): paths.append(export_pdf(self.current_id))
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка экспорта", f"Не удалось сформировать файл.\n\n{e}")
+            for fmt, export_func in (
+                ("xlsx", export_xlsx),
+                ("docx", export_docx),
+                ("pdf", export_pdf),
+            ):
+                if kind in (fmt, "all"):
+                    paths.append(export_func(rid))
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Ошибка экспорта",
+                f"Не удалось завершить выгрузку.\n\n{exc}\n\n"
+                "Уже созданные файлы, если они есть, не удалялись."
+            )
             return
         msg = QMessageBox(self)
         msg.setIcon(QMessageBox.Information)
         msg.setWindowTitle("Готово")
-        msg.setText("Файлы сформированы:\n" + "\n".join(str(p) for p in paths))
-        open_btn = msg.addButton("Открыть папку", QMessageBox.ActionRole)
+        msg.setText("Файлы сформированы:\n" + "\n".join(str(path) for path in paths))
+        open_button = msg.addButton("Открыть папку", QMessageBox.ActionRole)
         msg.addButton("OK", QMessageBox.AcceptRole)
         msg.exec()
-        if msg.clickedButton() == open_btn and paths:
+        if msg.clickedButton() == open_button and paths:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths[0].parent)))
+
 
 
 class MassPreviewTable(CopyPasteTable):
