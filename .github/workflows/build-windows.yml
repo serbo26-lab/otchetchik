@@ -47,6 +47,12 @@ jobs:
           python -m compileall -q main.py src
           if ($LASTEXITCODE -ne 0) { throw 'Python syntax check failed.' }
 
+      - name: Install acceptance test utilities
+        shell: pwsh
+        run: |
+          python -m pip install "pypdf>=5,<7"
+          if ($LASTEXITCODE -ne 0) { throw 'PDF inspection dependency installation failed.' }
+
       - name: UI and navigation tests
         shell: pwsh
         env:
@@ -54,6 +60,22 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_*.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'UI tests failed.' }
+
+      - name: Capture acceptance UI screenshots
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m scripts.capture_acceptance_ui --out-dir "$env:RUNNER_TEMP/otchetchik-acceptance-screens"
+          if ($LASTEXITCODE -ne 0) { throw 'UI screenshot capture failed.' }
+
+      - name: Upload acceptance screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: Acceptance_UI_${{ github.run_number }}
+          path: ${{ runner.temp }}/otchetchik-acceptance-screens/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Build standalone Windows EXE
         shell: pwsh
