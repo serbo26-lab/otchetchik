@@ -46,11 +46,12 @@ from .utils import full_year_period, iso_date, money, to_float
 from .ui_style import apply_theme
 from .ui_shell import ActionFlowLayout, NavigationSidebar, PageChrome, PAGES
 from .report_storage import sync_report_rows
+from .report_review import inspect_report, review_text, bundle_fingerprint
 from .mass_apply_logic import (ACTION_TEXT as MASS_ACTION_TEXT, OutdatedPreview as MassOutdatedPreview,
                                build_plan as build_mass_plan, apply_plan as apply_mass_plan)
 from .ui_components import ActionPanel, ContentCard, action_panel, describe_context, table_card
 
-APP_TITLE = "Отчетность УК по приказу 728/пр — V1.6.4 MASS WORKFLOW"
+APP_TITLE = "Отчетность УК по приказу 728/пр — V1.6.5 REPORT WORKFLOW"
 
 
 def selectable_label(text: str = "") -> QLabel:
@@ -1369,6 +1370,9 @@ class ReportsTab(BaseTab):
         self._loading_report = False
         self._saving_report = False
         self._dirty_report = False
+        self._review_dirty = True
+        self._review_snapshot = None
+        self._report_tab_index = 0
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.timeout.connect(self._autosave_current_report)
@@ -1432,6 +1436,7 @@ class ReportsTab(BaseTab):
         if self._loading_report or self._saving_report or not self.current_id:
             return
         self._dirty_report = True
+        self._invalidate_review()
         self._autosave_timer.start(700)
         win = self.window()
         if hasattr(win, "set_save_status"):
