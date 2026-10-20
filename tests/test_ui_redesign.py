@@ -95,7 +95,7 @@ class ShellTests(unittest.TestCase):
                 (rid,wid,"Уборка","м²",6.76,100,676,100,676,"массовое применение",0,1))
             line_id = int(cur.lastrowid)
             conn.commit()
-        self.window.navigate(5)
+        self.window.navigate(6)
         page = self.window.reports_tab
         page.year_filter.setValue(2025)
         self.assertEqual(page.current_id, rid)
@@ -120,7 +120,7 @@ class ShellTests(unittest.TestCase):
         cid = db.execute("INSERT INTO companies(name) VALUES(?)", ("УО",))
         hid = db.execute("INSERT INTO houses(company_id,address) VALUES(?,?)", (cid,"Дом 2"))
         rid = db.create_report(cid,hid,2025)
-        self.window.navigate(5)
+        self.window.navigate(6)
         page = self.window.reports_tab
         page.year_filter.setValue(2025)
         self.assertEqual(page.current_id, rid)
@@ -128,8 +128,8 @@ class ShellTests(unittest.TestCase):
         self.assertTrue(page._dirty_report)
         with patch("src.uk728.app.connect", side_effect=OSError("readonly database")):
             self.window.navigate(0)
-        self.assertEqual(self.window.tabs.currentIndex(), 5)
-        self.assertEqual(self.window.sidebar.navigation.currentRow(), 5)
+        self.assertEqual(self.window.tabs.currentIndex(), 6)
+        self.assertEqual(self.window.sidebar.navigation.currentRow(), 6)
         self.assertTrue(page._dirty_report)
         self.assertEqual(page.period_start.text(), "2025-02-01")
         self.assertEqual(self.window.page_header.save_status.property("state"), "error")

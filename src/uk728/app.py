@@ -2504,8 +2504,8 @@ class MainWindow(QMainWindow):
         self.backups_tab = BackupsTab()
         for tab in (
             self.company_tab, self.houses_tab, self.categories_tab,
-            self.works_tab, self.templates_tab, self.reports_tab,
-            self.mass_tab, self.backups_tab,
+            self.works_tab, self.templates_tab, self.mass_tab,
+            self.reports_tab, self.backups_tab,
         ):
             self.tabs.addWidget(tab)
 

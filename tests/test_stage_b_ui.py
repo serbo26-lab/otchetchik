@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QPushButton, QAbstractItemView
 
 from src.uk728 import db
 from src.uk728.app import MainWindow, CopyPasteTable
@@ -84,7 +84,7 @@ class CommonUxTests(TestCase):
         self.assertEqual(table.item(0, 0).toolTip(), long_name)
         table.item(0, 0).setText(long_name + " — уточнение")
         self.assertEqual(table.item(0, 0).toolTip(), long_name + " — уточнение")
-        self.assertTrue(table.horizontalScrollMode() == table.ScrollPerPixel)
+        self.assertTrue(table.horizontalScrollMode() == QAbstractItemView.ScrollMode.ScrollPerPixel)
 
     def test_themes_consistently_style_cards_and_actions(self):
         self.window.switch_theme()
