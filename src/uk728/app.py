@@ -2128,12 +2128,30 @@ class ReportsTab(BaseTab):
         template_section = self._template_section(int(tid), target_section)
         added = 0
         skipped = 0
+        target_table = (
+            self.content_table if target_section == "Содержание"
+            else self.repair_table if target_section == "Текущий ремонт"
+            else self.management_table
+        )
+        known_ids = {target_table.value(row, 1)
+                     for row in range(target_table.rowCount()) if target_table.value(row, 1)}
+        known_names = {target_table.value(row, 2).strip().casefold()
+                       for row in range(target_table.rowCount()) if target_table.value(row, 2).strip()}
         for it in db.rows("SELECT * FROM template_items WHERE template_id=? ORDER BY position,id", (tid,)):
             item_section = self._template_item_section(it, template_section)
             if item_section != target_section:
                 skipped += 1
                 continue
+            work_key = str(it["work_item_id"] or "")
+            name_key = str(it["name"] or "").strip().casefold()
+            if (work_key and work_key in known_ids) or (name_key and name_key in known_names):
+                skipped += 1
+                continue
             cost = to_float(it["unit_price"]) * to_float(it["plan_qty"])
+            if work_key:
+                known_ids.add(work_key)
+            if name_key:
+                known_names.add(name_key)
             if target_section == "Управление":
                 self.add_management_row({"work_item_id": it["work_item_id"], "name": it["name"], "unit": it["unit"], "unit_price": it["unit_price"], "qty": it["plan_qty"], "cost": cost, "source": "шаблон"})
             elif target_section == "Текущий ремонт":
@@ -2213,18 +2231,49 @@ class ReportsTab(BaseTab):
                         records.append({**common, **fields})
                     result = sync_report_rows(conn, table_name, rid, records)
                     inserted_rows.append((widget, result))
-                conn.execute("DELETE FROM report_financials WHERE report_id=?", (rid,))
-                for r in range(self.finance_table.rowCount()):
-                    payer = self.finance_table.value(r, 1)
+                # Keep stable financial row IDs rather than deleting and recreating
+                # all owner/tenant rows on every autosave.
+                payer_types = []
+                for row_index in range(self.finance_table.rowCount()):
+                    payer = self.finance_table.value(row_index, 1).strip()
                     if not payer:
                         continue
+                    if payer in payer_types:
+                        raise ValueError(f"Повторяется вид плательщика: {payer}")
+                    payer_types.append(payer)
                     conn.execute(
-                        "INSERT INTO report_financials(report_id, payer_type, debt_start, accrued, paid, debt_end) VALUES(?,?,?,?,?,?)",
-                        (rid, payer, to_float(self.finance_table.value(r,2)), to_float(self.finance_table.value(r,3)), to_float(self.finance_table.value(r,4)), to_float(self.finance_table.value(r,5))),
+                        """INSERT INTO report_financials
+                           (report_id,payer_type,debt_start,accrued,paid,debt_end)
+                           VALUES(?,?,?,?,?,?)
+                           ON CONFLICT(report_id,payer_type) DO UPDATE SET
+                           debt_start=excluded.debt_start,
+                           accrued=excluded.accrued,
+                           paid=excluded.paid,
+                           debt_end=excluded.debt_end""",
+                        (rid, payer, to_float(self.finance_table.value(row_index, 2)),
+                         to_float(self.finance_table.value(row_index, 3)),
+                         to_float(self.finance_table.value(row_index, 4)),
+                         to_float(self.finance_table.value(row_index, 5))),
                     )
+                if payer_types:
+                    placeholders = ",".join("?" for _ in payer_types)
+                    conn.execute(
+                        f"DELETE FROM report_financials WHERE report_id=? "
+                        f"AND payer_type NOT IN ({placeholders})", (rid, *payer_types)
+                    )
+                else:
+                    conn.execute("DELETE FROM report_financials WHERE report_id=?", (rid,))
                 conn.execute(
-                    "INSERT OR REPLACE INTO report_claims(report_id, pretensions_count, lawsuits_count, recovered_amount) VALUES(?,?,?,?)",
-                    (rid, int(to_float(self.claim_pret.text())), int(to_float(self.claim_lawsuits.text())), to_float(self.claim_amount.text())),
+                    """INSERT INTO report_claims
+                       (report_id,pretensions_count,lawsuits_count,recovered_amount)
+                       VALUES(?,?,?,?)
+                       ON CONFLICT(report_id) DO UPDATE SET
+                       pretensions_count=excluded.pretensions_count,
+                       lawsuits_count=excluded.lawsuits_count,
+                       recovered_amount=excluded.recovered_amount""",
+                    (rid, int(to_float(self.claim_pret.text())),
+                     int(to_float(self.claim_lawsuits.text())),
+                     to_float(self.claim_amount.text())),
                 )
                 conn.commit()
                 # Update hidden IDs before allowing UI change signals to mark new edits.
