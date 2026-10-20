@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QSplitter
 from src.uk728 import db
 from src.uk728.app import MainWindow
 from src.uk728.ui_components import ActionPanel, ContentCard
@@ -43,11 +43,19 @@ class DirectoryFlowTests(unittest.TestCase):
             ("templates_tab", ["1. Выберите шаблон", "2. Основные сведения шаблона", "3. Наполнение шаблона"]),
         ]
         for attr, headings in expectations:
-            found = self.titles(getattr(self.window, attr))
+            page = getattr(self.window, attr)
+            found = self.titles(page)
             for heading in headings:
                 self.assertIn(heading, found, attr)
-            self.assertEqual([found.index(h) for h in headings],
-                             sorted(found.index(h) for h in headings))
+            # Two-column screens are navigated from left to right. Within each
+            # column the numbered steps must follow their actual visual order.
+            splits = page.findChildren(QSplitter)
+            areas = ([splits[0].widget(0), splits[0].widget(1)] if splits else [page])
+            for area in areas:
+                local_titles = self.titles(area)
+                steps = [int(t.split(".", 1)[0]) for t in local_titles
+                         if t[:1].isdigit() and "." in t]
+                self.assertEqual(steps, sorted(steps), (attr, local_titles))
 
     def test_empty_forms_disable_edit_and_destructive_operations(self):
         company = self.window.company_tab
@@ -58,6 +66,10 @@ class DirectoryFlowTests(unittest.TestCase):
         self.assertFalse(company.delete_button.isEnabled())
         self.assertFalse(house.add_button.isEnabled())
         self.assertFalse(house.delete_button.isEnabled())
+        # The application ships with sample categories. Explicitly clear the
+        # selection to verify disabled-state behavior regardless of seed data.
+        category.list.setCurrentRow(-1)
+        self.assertIsNone(category.current_id)
         self.assertFalse(category.add_sub_button.isEnabled())
         self.assertFalse(category.delete_sub_button.isEnabled())
         self.assertFalse(category.save_button.isEnabled())
@@ -124,13 +136,16 @@ class DirectoryFlowTests(unittest.TestCase):
         work.category_combo.setCurrentIndex(work.category_combo.findData(cid))
         self.assertTrue(work.add_from_category_button.isEnabled())
         work.add_from_category()
-        self.assertEqual(work.table.value(0, 3), "Уборка")
-        self.assertEqual(work.table.value(0, 4), "Содержание")
+        created_index = work.table.rowCount() - 1
+        self.assertEqual(work.table.value(created_index, 3), "Уборка")
+        self.assertEqual(work.table.value(created_index, 4), "Содержание")
         work.add_row()
-        work.table.set_value(1, 3, "Новая услуга")
-        work.table.set_value(1, 4, "Управление")
+        manual_index = work.table.rowCount() - 1
+        work.table.set_value(manual_index, 3, "Новая услуга")
+        work.table.set_value(manual_index, 4, "Управление")
+        previous_count = len(db.rows("SELECT id FROM work_items WHERE is_active=1"))
         work.save()
-        self.assertEqual(len(db.rows("SELECT id FROM work_items WHERE is_active=1")), 2)
+        self.assertEqual(len(db.rows("SELECT id FROM work_items WHERE is_active=1")), previous_count + 2)
 
     def test_template_filters_by_section_and_prevents_duplicates(self):
         w1 = db.execute("INSERT INTO work_items(name,category,unit,default_price) VALUES(?,?,?,?)",
