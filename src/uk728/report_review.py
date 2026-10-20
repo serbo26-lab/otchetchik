@@ -102,6 +102,14 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+
+def bundle_fingerprint(bundle: dict[str, Any]) -> str:
+    """Stable digest detects SQLite changes after the user reviewed the report."""
+    import hashlib
+    import json
+    serial = json.dumps(bundle, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(serial.encode("utf-8")).hexdigest()
+
 def review_text(result: dict[str, Any]) -> str:
     items = [
         "Предварительная проверка введенных данных (не является юридической экспертизой).",
