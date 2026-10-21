@@ -303,7 +303,8 @@ class BaseTab(QWidget):
         selected_id = getattr(self, "current_id", None)
         self.current_id = old_id
         try:
-            self.save(refresh_after=False)
+            if self.save(refresh_after=False) is False:
+                raise ValueError("Исправьте ошибки перед переключением записи.")
         except Exception as exc:
             # Keep old values visible and revert list selection after any write failure.
             self.current_id = old_id
@@ -1126,6 +1127,18 @@ class WorksTab(BaseTab):
         for c, val in enumerate(vals): self.table.set_value(row, c, val)
 
     def save(self):
+        # A row without an official section can never be used reliably in
+        # templates, bulk application or appendix 2. Reject it before writing.
+        for index in range(self.table.rowCount()):
+            name = self.table.value(index, 3)
+            section = self.table.value(index, 4)
+            if not name or normalize_section(section, "") not in COMMON_SECTIONS:
+                QMessageBox.warning(
+                    self, "Проверьте справочник",
+                    f"Строка {index + 1}: заполните наименование и раздел формы "
+                    "(Содержание, Текущий ремонт или Управление).",
+                )
+                return False
         with connect() as conn:
             active_ids: list[int] = []
             for r in range(self.table.rowCount()):
@@ -1318,6 +1331,9 @@ class TemplatesTab(BaseTab):
                 self.table.selectRow(row_index)
                 return
         r = db.row("SELECT * FROM work_items WHERE id=?", (wid,))
+        if not r or normalize_section(r["category"], "") != normalize_section(self.category.currentText(), ""):
+            QMessageBox.warning(self, "Раздел шаблона", "Работа не соответствует разделу выбранного шаблона.")
+            return
         row = self.table.rowCount(); self.table.insertRow(row)
         vals = ["", wid, r["name"], r["unit"], r["default_price"], "0"]
         for c, val in enumerate(vals): self.table.set_value(row, c, val)
@@ -1326,6 +1342,22 @@ class TemplatesTab(BaseTab):
         if not self.current_id:
             self.msg("Нажмите «Добавить шаблон», затем заполните поля и сохраните.")
             return
+        section = normalize_section(self.category.currentText(), "")
+        if section not in COMMON_SECTIONS:
+            QMessageBox.warning(self, "Раздел шаблона", "Выберите официальный раздел формы.")
+            return False
+        for index in range(self.table.rowCount()):
+            wid = int(self.table.value(index, 1) or 0)
+            if not wid:
+                continue  # Retained legacy row with no active work ID.
+            work = db.row("SELECT category FROM work_items WHERE id=?", (wid,))
+            if work and normalize_section(work["category"], "") != section:
+                QMessageBox.warning(
+                    self, "Несоответствие шаблона",
+                    f"Работа в строке {index + 1} относится к другому разделу. "
+                    "Исправьте состав шаблона или верните прежний раздел.",
+                )
+                return False
         with connect() as conn:
             conn.execute("UPDATE templates SET name=?, category=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (self.name.text(), self.category.currentText(), self.notes.toPlainText(), self.current_id))
             conn.execute("DELETE FROM template_items WHERE template_id=?", (self.current_id,))
@@ -2924,7 +2956,8 @@ class MainWindow(QMainWindow):
                 # No pending edit may be thrown away when selecting another page.
                 previous.flush_autosave()
             elif self._can_autosave_tab(previous):
-                previous.save()
+                if previous.save() is False:
+                    raise ValueError("Исправьте ошибки заполнения перед переходом.")
         except Exception as exc:
             self.set_save_status("error")
             self.statusBar().showMessage(f"Не удалось сохранить изменения: {exc}", 12000)
@@ -2979,7 +3012,8 @@ class MainWindow(QMainWindow):
             if isinstance(tab, ReportsTab):
                 tab.flush_autosave()
             elif self._can_autosave_tab(tab):
-                tab.save()
+                if tab.save() is False:
+                    raise ValueError("Не все обязательные поля заполнены.")
             path = make_backup("auto")
             self.statusBar().showMessage(f"Резервная копия создана: {path.name if path else ''}", 5000)
         except Exception as exc:
@@ -2993,7 +3027,8 @@ class MainWindow(QMainWindow):
             if isinstance(tab, ReportsTab):
                 tab.flush_autosave()
             elif self._can_autosave_tab(tab):
-                tab.save()
+                if tab.save() is False:
+                    raise ValueError("Не все обязательные поля заполнены.")
         except Exception as exc:
             self.set_save_status("error")
             self.statusBar().showMessage(f"Закрытие отменено: данные не сохранены ({exc})", 12000)
