@@ -70,7 +70,10 @@ def make_backup(reason: str = "auto") -> Path | None:
 
 def cleanup_backups(max_files: int = 120) -> None:
     folder = data_dir() / "backups"
-    files = sorted(folder.glob("reporting_728_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+    # Only rotate automatic copies. Manual and pre-change safety snapshots
+    # must never silently disappear after the 120 newest auto backups.
+    files = sorted(folder.glob("reporting_728_auto_*.db"),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
     for item in files[max_files:]:
         try:
             item.unlink()
