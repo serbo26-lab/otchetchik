@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
+import sqlite3
 import sys
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -46,9 +47,23 @@ def make_backup(reason: str = "auto") -> Path | None:
     src = db_path()
     if not src.exists():
         return None
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # SQLite uses WAL: copying only the .db file can omit committed data
+    # that is still stored in the -wal journal. The online backup API
+    # creates a consistent snapshot, including those committed transactions.
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     out = data_dir() / "backups" / f"reporting_728_{reason}_{stamp}.db"
-    shutil.copy2(src, out)
+    temporary = out.with_suffix(".tmp")
+    try:
+        # Close actual handles before renaming: Windows locks open SQLite files.
+        with closing(sqlite3.connect(str(src), timeout=30)) as source:
+            with closing(sqlite3.connect(str(temporary), timeout=30)) as destination:
+                source.backup(destination)
+                if destination.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    raise RuntimeError("Резервная копия SQLite не прошла проверку целостности.")
+        os.replace(temporary, out)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
     cleanup_backups(max_files=120)
     return out
 

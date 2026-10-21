@@ -113,6 +113,11 @@ class NavigationSidebar(QFrame):
         brand = QLabel("ОТЧЕТНОСТЬ УК")
         brand.setObjectName("AppBrand")
         layout.addWidget(brand)
+        self.organization_caption = QLabel("УО не выбрана")
+        self.organization_caption.setObjectName("ContextCaption")
+        self.organization_caption.setWordWrap(True)
+        self.organization_caption.setToolTip("Выберите организацию в разделе «Управляющие организации».")
+        layout.addWidget(self.organization_caption)
         tagline = QLabel("Приказ Минстроя № 728/пр")
         tagline.setObjectName("PageSubtitle")
         layout.addWidget(tagline)
@@ -155,6 +160,13 @@ class NavigationSidebar(QFrame):
         for index, (_title, glyph, _subtitle, _help) in enumerate(PAGES):
             self.navigation.item(index).setIcon(svg_icon(glyph, theme))
 
+    def set_company_name(self, name: str):
+        self.organization_caption.setText(name or "УО не выбрана")
+        self.organization_caption.setToolTip(
+            (name + "\n" if name else "")
+            + "Организация выбирается в разделе «Управляющие организации»."
+        )
+
     def select(self, index: int):
         if not 0 <= index < self.navigation.count():
             return
@@ -193,6 +205,14 @@ class PageChrome(QFrame):
         self.guide_button.toggled.connect(self._toggle_guide)
         context_row.addWidget(self.guide_button)
         container.addLayout(context_row)
+
+        next_row = QHBoxLayout()
+        next_row.addStretch(1)
+        self.next_button = QPushButton()
+        self.next_button.setObjectName("PrimaryAction")
+        self.next_button.hide()
+        next_row.addWidget(self.next_button)
+        container.addLayout(next_row)
 
         self.guide = QLabel()
         self.guide.setObjectName("Guide")

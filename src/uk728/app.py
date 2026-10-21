@@ -246,10 +246,18 @@ class CopyPasteTable(QTableWidget):
                     continue
                 self.setItem(row, col, QTableWidgetItem(value))
 
-    def delete_selected_rows(self):
+    def delete_selected_rows(self, confirmed: bool = False):
         rows = sorted({i.row() for i in self.selectedIndexes()}, reverse=True)
+        if not rows:
+            return False
+        if not confirmed and QMessageBox.question(
+            self, "Удаление строк",
+            f"Удалить выбранные строки ({len(rows)})? Изменения будут сохранены при следующем сохранении формы.",
+        ) != QMessageBox.Yes:
+            return False
         for row in rows:
             self.removeRow(row)
+        return True
 
     def set_value(self, row: int, col: int, value: Any):
         text = "" if value is None else str(value)
@@ -295,7 +303,8 @@ class BaseTab(QWidget):
         selected_id = getattr(self, "current_id", None)
         self.current_id = old_id
         try:
-            self.save(refresh_after=False)
+            if self.save(refresh_after=False) is False:
+                raise ValueError("Исправьте ошибки перед переключением записи.")
         except Exception as exc:
             # Keep old values visible and revert list selection after any write failure.
             self.current_id = old_id
@@ -517,7 +526,7 @@ class CompaniesTab(BaseTab):
         self.list.blockSignals(False)
         if select_row >= 0:
             self.list.setCurrentRow(select_row)
-        elif self.list.count() and target_id is None:
+        elif self.list.count() == 1 and target_id is None:
             self.list.setCurrentRow(0)
 
     def _load_current(self):
@@ -553,8 +562,25 @@ class CompaniesTab(BaseTab):
     def delete_company(self):
         if not self.current_id:
             return
-        if QMessageBox.question(self, "Удалить?", "Удалить выбранную организацию? Дома и отчеты останутся, но привязка может быть очищена.") == QMessageBox.Yes:
-            db.execute("DELETE FROM companies WHERE id=?", (self.current_id,))
+        linked = db.row(
+            "SELECT (SELECT COUNT(*) FROM houses WHERE company_id=?) + "
+            "(SELECT COUNT(*) FROM reports WHERE company_id=?) AS total",
+            (self.current_id, self.current_id),
+        )
+        if linked and linked["total"]:
+            QMessageBox.warning(
+                self, "Удаление невозможно",
+                "У организации есть дома или отчеты. Сначала перенесите связанные объекты "
+                "в другую УО или удалите их отдельно. Связи не будут потеряны.",
+            )
+            return
+        if QMessageBox.question(self, "Удалить?", "Удалить выбранную организацию без связанных домов и отчетов?") == QMessageBox.Yes:
+            try:
+                make_backup("before_delete_company")
+                db.execute("DELETE FROM companies WHERE id=?", (self.current_id,))
+            except Exception as exc:
+                QMessageBox.warning(self, "Удаление отменено", f"Не удалось сохранить резервную копию или удалить УО: {exc}")
+                return
             self.current_id = None
             self.refresh()
             self.update_form_state()
@@ -603,6 +629,10 @@ class HousesTab(BaseTab):
 
         formw = QWidget(); form_l = QVBoxLayout(formw)
         self.company = ClickComboBox()
+        self.company.setToolTip(
+            "УО определяется выбранным домом. Изменение принадлежности дома "
+            "не выполняется через карточку, чтобы не потерять связи отчетов."
+        )
         self.address = QTextEdit(); self.address.setFixedHeight(70)
         self.area = QLineEdit()
         self.start = QLineEdit(); self.start.setPlaceholderText("дд.мм.гггг или оставить пустым")
@@ -651,6 +681,7 @@ class HousesTab(BaseTab):
     def update_form_state(self):
         has_record = self.current_id is not None
         set_widgets_enabled(self.form_widgets + [self.save_button], has_record)
+        self.company.setEnabled(False)  # belong to the house; never reassign implicitly
         self.delete_button.setEnabled(has_record)
         if not has_record:
             self._clear_form()
@@ -762,8 +793,21 @@ class HousesTab(BaseTab):
     def delete_house(self):
         if not self.current_id:
             return
-        if QMessageBox.question(self, "Удалить?", "Удалить выбранный дом? Отчеты по нему также могут быть удалены.") == QMessageBox.Yes:
-            db.execute("DELETE FROM houses WHERE id=?", (self.current_id,))
+        linked = db.row("SELECT COUNT(*) AS total FROM reports WHERE house_id=?", (self.current_id,))
+        if linked and linked["total"]:
+            QMessageBox.warning(
+                self, "Удаление невозможно",
+                "У дома есть отчеты. Чтобы сохранить их привязку к дому, удаление запрещено. "
+                "Если дом выбыл из управления, установите соответствующий статус.",
+            )
+            return
+        if QMessageBox.question(self, "Удалить?", "Удалить выбранный дом без отчетов?") == QMessageBox.Yes:
+            try:
+                make_backup("before_delete_house")
+                db.execute("DELETE FROM houses WHERE id=?", (self.current_id,))
+            except Exception as exc:
+                QMessageBox.warning(self, "Удаление отменено", f"Не удалось сохранить резервную копию или удалить дом: {exc}")
+                return
             self.current_id = None
             self.refresh()
             self.update_form_state()
@@ -1088,6 +1132,18 @@ class WorksTab(BaseTab):
         for c, val in enumerate(vals): self.table.set_value(row, c, val)
 
     def save(self):
+        # A row without an official section can never be used reliably in
+        # templates, bulk application or appendix 2. Reject it before writing.
+        for index in range(self.table.rowCount()):
+            name = self.table.value(index, 3)
+            section = self.table.value(index, 4)
+            if not name or normalize_section(section, "") not in COMMON_SECTIONS:
+                QMessageBox.warning(
+                    self, "Проверьте справочник",
+                    f"Строка {index + 1}: заполните наименование и раздел формы "
+                    "(Содержание, Текущий ремонт или Управление).",
+                )
+                return False
         with connect() as conn:
             active_ids: list[int] = []
             for r in range(self.table.rowCount()):
@@ -1259,7 +1315,12 @@ class TemplatesTab(BaseTab):
 
     def delete_template(self):
         if self.current_id and QMessageBox.question(self, "Удалить?", "Удалить шаблон?") == QMessageBox.Yes:
-            db.execute("DELETE FROM templates WHERE id=?", (self.current_id,))
+            try:
+                make_backup("before_delete_template")
+                db.execute("DELETE FROM templates WHERE id=?", (self.current_id,))
+            except Exception as exc:
+                QMessageBox.warning(self, "Удаление отменено", f"Не удалось сохранить резервную копию или удалить шаблон: {exc}")
+                return
             self.current_id = None; self.refresh(); self.table.setRowCount(0); self.update_form_state()
 
     def add_work_to_template(self):
@@ -1275,6 +1336,9 @@ class TemplatesTab(BaseTab):
                 self.table.selectRow(row_index)
                 return
         r = db.row("SELECT * FROM work_items WHERE id=?", (wid,))
+        if not r or normalize_section(r["category"], "") != normalize_section(self.category.currentText(), ""):
+            QMessageBox.warning(self, "Раздел шаблона", "Работа не соответствует разделу выбранного шаблона.")
+            return
         row = self.table.rowCount(); self.table.insertRow(row)
         vals = ["", wid, r["name"], r["unit"], r["default_price"], "0"]
         for c, val in enumerate(vals): self.table.set_value(row, c, val)
@@ -1283,6 +1347,22 @@ class TemplatesTab(BaseTab):
         if not self.current_id:
             self.msg("Нажмите «Добавить шаблон», затем заполните поля и сохраните.")
             return
+        section = normalize_section(self.category.currentText(), "")
+        if section not in COMMON_SECTIONS:
+            QMessageBox.warning(self, "Раздел шаблона", "Выберите официальный раздел формы.")
+            return False
+        for index in range(self.table.rowCount()):
+            wid = int(self.table.value(index, 1) or 0)
+            if not wid:
+                continue  # Retained legacy row with no active work ID.
+            work = db.row("SELECT category FROM work_items WHERE id=?", (wid,))
+            if work and normalize_section(work["category"], "") != section:
+                QMessageBox.warning(
+                    self, "Несоответствие шаблона",
+                    f"Работа в строке {index + 1} относится к другому разделу. "
+                    "Исправьте состав шаблона или верните прежний раздел.",
+                )
+                return False
         with connect() as conn:
             conn.execute("UPDATE templates SET name=?, category=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (self.name.text(), self.category.currentText(), self.notes.toPlainText(), self.current_id))
             conn.execute("DELETE FROM template_items WHERE template_id=?", (self.current_id,))
@@ -1483,7 +1563,7 @@ class ReportsTab(BaseTab):
             self, "Удаление строк", f"Удалить из отчета выбранные строки ({count})?"
         ) != QMessageBox.Yes:
             return
-        table.delete_selected_rows()
+        table.delete_selected_rows(confirmed=True)
         self.schedule_autosave()
 
     def _connect_autosave_signals(self) -> None:
@@ -1777,7 +1857,11 @@ class ReportsTab(BaseTab):
             return None
 
     def reload_filters(self):
-        fill_combo(self.company_filter, "SELECT id, name FROM companies ORDER BY name", empty="Все организации")
+        fill_combo(self.company_filter, "SELECT id, name FROM companies ORDER BY name", empty="Выберите организацию")
+        # A single UO needs no extra selection; never silently choose
+        # the first of several organizations.
+        if self.company_filter.count() == 2 and self.company_filter.currentData() is None:
+            self.company_filter.setCurrentIndex(1)
         self.reload_houses_filter(refresh=False)
         self.reload_template_combo()
         self.refresh()
@@ -1792,14 +1876,16 @@ class ReportsTab(BaseTab):
         old_text = self.house_filter.currentText()
         cid = self.company_filter.currentData()
         self.house_filter.blockSignals(True)
-        self.house_filter.clear(); self.house_filter.addItem("Все дома", None)
-        if cid:
-            data = db.rows("SELECT id, address AS name FROM houses WHERE company_id=? ORDER BY address", (cid,))
-        else:
-            data = db.rows("SELECT id, address AS name FROM houses ORDER BY address")
+        self.house_filter.clear(); self.house_filter.addItem("Выберите дом", None)
+        data = db.rows(
+            "SELECT id, address AS name FROM houses WHERE company_id=? ORDER BY address",
+            (cid,),
+        ) if cid is not None else []
         for r in data:
             self.house_filter.addItem(r["name"], r["id"])
         restore_combo_selection(self.house_filter, old_data, old_text)
+        if len(data) == 1 and self.house_filter.currentData() is None:
+            self.house_filter.setCurrentIndex(1)
         self.house_filter.blockSignals(False)
         if refresh:
             self.refresh()
@@ -1838,14 +1924,25 @@ class ReportsTab(BaseTab):
         self.list.clear()
         params = [self.year_filter.value()]
         sql = "SELECT r.*, h.address FROM reports r LEFT JOIN houses h ON h.id=r.house_id WHERE r.year=?"
-        if self.company_filter.currentData():
-            sql += " AND r.company_id=?"; params.append(self.company_filter.currentData())
-        if self.house_filter.currentData():
-            sql += " AND r.house_id=?"; params.append(self.house_filter.currentData())
+        # A report must not appear until the user has a specific UO
+        # and a specific house. Avoid opening the first report in a global list.
+        if self.company_filter.currentData() is None or self.house_filter.currentData() is None:
+            self.list.blockSignals(False)
+            self.current_id = None
+            self._invalidate_review()
+            self._update_report_actions()
+            return
+        sql += " AND r.company_id=? AND r.house_id=?"
+        params.extend((self.company_filter.currentData(), self.house_filter.currentData()))
         sql += " ORDER BY h.address, r.period_start"
         select_row = -1
         for r in db.rows(sql, tuple(params)):
-            item = QListWidgetItem(f"{r['address'] or 'Дом'} · {r['year']} · {r['status']}")
+            start = r["period_start"] or "начало не указано"
+            end = r["period_end"] or "конец не указан"
+            item = QListWidgetItem(
+                f"{r['address'] or 'Дом'} · {r['year']} · {start} — {end} · {r['status']}"
+            )
+            item.setToolTip(item.text())
             item.setData(Qt.UserRole, r["id"])
             self.list.addItem(item)
             if target_id is not None and r["id"] == target_id:
@@ -1905,8 +2002,9 @@ class ReportsTab(BaseTab):
         ) != QMessageBox.Yes:
             return
         try:
+            if make_backup("before_delete_report") is None:
+                raise RuntimeError("Резервная копия базы не создана.")
             db.execute("DELETE FROM reports WHERE id=?", (int(self.current_id),))
-            make_backup("delete_report")
             self.current_id = None
             self.refresh()
             self.msg("Отчет удален")
@@ -2473,6 +2571,8 @@ class MassApplyTab(BaseTab):
         self.house_list.setMaximumHeight(170)
         self.house_list.itemChanged.connect(self.mark_dirty)
         targets.add_widget(self.house_list)
+        self.selected_house_count = selectable_label("Выбрано домов: 0")
+        targets.add_widget(self.selected_house_count)
         select_all = QPushButton("Выбрать все")
         select_all.clicked.connect(lambda: self._check_all(True))
         clear_all = QPushButton("Снять выделение")
@@ -2562,7 +2662,8 @@ class MassApplyTab(BaseTab):
                 )
                 item.setData(Qt.UserRole, hid)
                 item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-                item.setCheckState(Qt.Checked if (hid in checked or not same_company) else Qt.Unchecked)
+                # Never silently select every house when switching UO.
+                item.setCheckState(Qt.Checked if (same_company and hid in checked) else Qt.Unchecked)
                 self.house_list.addItem(item)
         self.house_list.blockSignals(False)
         self._target_company_id = cid
@@ -2596,6 +2697,10 @@ class MassApplyTab(BaseTab):
     def mark_dirty(self, *_):
         self._preview_dirty = True
         self._preview_plan = None
+        if hasattr(self, "selected_house_count"):
+            self.selected_house_count.setText(
+                f"Выбрано домов: {len(self.selected_house_ids())} из {self.house_list.count()}"
+            )
         self.apply_button.setEnabled(False)
         self.table.setRowCount(0)
         self.summary.clear()
@@ -2820,6 +2925,9 @@ class MainWindow(QMainWindow):
         self.sidebar.select(0)
         self.page_header.show_page(0)
         self._decorate_buttons()
+        self._active_company_id = self.company_tab.current_id
+        self._next_page = None
+        self.page_header.next_button.clicked.connect(self._follow_next_action)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.auto_backup)
@@ -2856,6 +2964,63 @@ class MainWindow(QMainWindow):
         elif "сохран" in low and any(word in low for word in ("выполнено", "сохранен", "сохранён", "сохранена")):
             self.set_save_status("saved")
 
+    def _remember_company_context(self, page):
+        company = None
+        if isinstance(page, CompaniesTab):
+            company = page.current_id
+        elif isinstance(page, HousesTab):
+            company = page.company_filter.currentData()
+        elif isinstance(page, ReportsTab):
+            company = page.company_filter.currentData()
+        elif isinstance(page, MassApplyTab):
+            company = page.company.currentData()
+        if company is not None or isinstance(page, CompaniesTab):
+            self._active_company_id = company
+
+    def _apply_company_context(self, page):
+        cid = self._active_company_id
+        if cid is None:
+            return
+        if isinstance(page, CompaniesTab):
+            for row in range(page.list.count()):
+                if page.list.item(row).data(Qt.UserRole) == cid:
+                    if page.list.currentRow() != row:
+                        page.list.setCurrentRow(row)
+                    break
+        else:
+            combo = None
+            if isinstance(page, HousesTab):
+                combo = page.company_filter
+            elif isinstance(page, ReportsTab):
+                combo = page.company_filter
+            elif isinstance(page, MassApplyTab):
+                combo = page.company
+            if combo is not None:
+                index = combo.findData(cid)
+                if index >= 0 and combo.currentIndex() != index:
+                    combo.setCurrentIndex(index)
+
+    def _follow_next_action(self):
+        if self._next_page is not None:
+            self.navigate(self._next_page)
+
+    def _update_next_action(self, page):
+        action = None
+        if isinstance(page, CompaniesTab) and page.current_id:
+            action = ("Далее: дома →", 1)
+        elif isinstance(page, HousesTab) and page.current_id:
+            action = ("Далее: категории работ →", 2)
+        elif isinstance(page, CategoriesTab) and page.current_id:
+            action = ("Далее: справочник работ →", 3)
+        elif isinstance(page, WorksTab) and page.table.rowCount():
+            action = ("Далее: шаблоны →", 4)
+        elif isinstance(page, TemplatesTab) and page.current_id:
+            action = ("Далее: отчеты →", 6)
+        self._next_page = action[1] if action else None
+        self.page_header.next_button.setVisible(action is not None)
+        if action:
+            self.page_header.next_button.setText(action[0])
+
     def navigate(self, index: int):
         if not 0 <= index < self.tabs.count():
             return
@@ -2867,12 +3032,14 @@ class MainWindow(QMainWindow):
                 # No pending edit may be thrown away when selecting another page.
                 previous.flush_autosave()
             elif self._can_autosave_tab(previous):
-                previous.save()
+                if previous.save() is False:
+                    raise ValueError("Исправьте ошибки заполнения перед переходом.")
         except Exception as exc:
             self.set_save_status("error")
             self.statusBar().showMessage(f"Не удалось сохранить изменения: {exc}", 12000)
             self.sidebar.select(self._last_tab)
             return
+        self._remember_company_context(previous)
         self.tabs.setCurrentIndex(index)
 
     def on_tab_changed(self, index: int):
@@ -2891,6 +3058,7 @@ class MainWindow(QMainWindow):
                 current.refresh()
             except Exception as exc:
                 self.statusBar().showMessage(f"Не удалось обновить вкладку: {exc}", 8000)
+        self._apply_company_context(current)
         self.refresh_context()
         if isinstance(current, ReportsTab) and current.current_id and not current._dirty_report:
             self.set_save_status("saved")
@@ -2902,6 +3070,16 @@ class MainWindow(QMainWindow):
             context, guidance = describe_context(current, self)
             self.page_header.set_context(context)
             self.page_header.guide.setText(guidance)
+            display_cid = current.current_id if isinstance(current, CompaniesTab) else self._active_company_id
+            if isinstance(current, HousesTab):
+                display_cid = current.company_filter.currentData()
+            elif isinstance(current, ReportsTab):
+                display_cid = current.company_filter.currentData()
+            elif isinstance(current, MassApplyTab):
+                display_cid = current.company.currentData()
+            company = db.row("SELECT name FROM companies WHERE id=?", (display_cid,)) if display_cid else None
+            self.sidebar.set_company_name(str(company["name"]) if company else "")
+            self._update_next_action(current)
         except (AttributeError, RuntimeError):
             self.page_header.set_context("Рабочий контекст")
 
@@ -2922,7 +3100,8 @@ class MainWindow(QMainWindow):
             if isinstance(tab, ReportsTab):
                 tab.flush_autosave()
             elif self._can_autosave_tab(tab):
-                tab.save()
+                if tab.save() is False:
+                    raise ValueError("Не все обязательные поля заполнены.")
             path = make_backup("auto")
             self.statusBar().showMessage(f"Резервная копия создана: {path.name if path else ''}", 5000)
         except Exception as exc:
@@ -2936,7 +3115,8 @@ class MainWindow(QMainWindow):
             if isinstance(tab, ReportsTab):
                 tab.flush_autosave()
             elif self._can_autosave_tab(tab):
-                tab.save()
+                if tab.save() is False:
+                    raise ValueError("Не все обязательные поля заполнены.")
         except Exception as exc:
             self.set_save_status("error")
             self.statusBar().showMessage(f"Закрытие отменено: данные не сохранены ({exc})", 12000)

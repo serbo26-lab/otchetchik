@@ -21,10 +21,12 @@ class ActionPanel(QFrame):
         self.setObjectName("ActionPanel")
         self.setProperty("purpose", purpose)
         layout = QVBoxLayout(self)
+        self.body = layout
         layout.setContentsMargins(9, 7, 9, 8)
         layout.setSpacing(5)
         heading = QLabel(title)
         heading.setObjectName("ActionPanelTitle")
+        self.heading = heading
         layout.addWidget(heading)
         self.actions = ActionFlowLayout(spacing=7)
         layout.addLayout(self.actions)
@@ -47,6 +49,13 @@ def action_panel(title: str, *buttons: QPushButton, purpose: str = "normal", pri
     for button in buttons:
         role = "danger" if purpose == "danger" else "primary" if button is primary else "neutral"
         panel.add_action(button, role=role)
+    # A single operation should be a visible button, not a nested
+    # frame with another heading repeating the purpose of the button.
+    if len(buttons) == 1:
+        panel.setProperty("compact", True)
+        panel.heading.hide()
+        panel.body.setContentsMargins(0, 0, 0, 0)
+        panel.body.setSpacing(0)
     return panel
 
 
