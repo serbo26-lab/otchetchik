@@ -25,9 +25,13 @@ SCREENS = [
     ("uo", 0, None),
     ("houses", 1, None),
     ("categories", 2, None),
+    ("works", 3, None),
     ("templates", 4, None),
     ("bulk", 5, None),
     ("reports_content", 6, 1),
+    ("reports_repair", 6, 2),
+    ("reports_management", 6, 3),
+    ("reports_finance", 6, 4),
     ("reports_export", 6, 5),
 ]
 
