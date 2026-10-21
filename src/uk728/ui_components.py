@@ -93,6 +93,32 @@ def table_card(title: str, table: QTableWidget, *, subtitle: str = "") -> Conten
     return card
 
 
+def table_card_with_selection(title: str, table: QTableWidget, *,
+                              name_column: int, subtitle: str = "") -> ContentCard:
+    """Keep the work name readable while users scroll wide financial tables."""
+    card = table_card(title, table, subtitle=subtitle)
+    selected_label = QLabel()
+    selected_label.setObjectName("SelectedWorkLabel")
+    selected_label.setWordWrap(True)
+    selected_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    selected_label.hide()
+    # The card already owns a title, optional explanation and the table.
+    # Insert the changing row caption immediately above the table.
+    card.body.insertWidget(card.body.indexOf(table), selected_label)
+
+    def refresh_label(*_args):
+        row = table.currentRow()
+        cell = table.item(row, name_column) if row >= 0 else None
+        name = cell.text().strip() if cell else ""
+        selected_label.setText(f"Выбрана строка: {name}" if name else "")
+        selected_label.setVisible(bool(name))
+
+    table.currentCellChanged.connect(refresh_label)
+    table.itemChanged.connect(refresh_label)
+    card.selected_work_label = selected_label
+    return card
+
+
 def describe_context(tab, main_window) -> tuple[str, str]:
     """Current page-specific context and relevant next step; no mutations."""
     name = tab.__class__.__name__

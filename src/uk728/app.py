@@ -50,7 +50,10 @@ from .report_storage import sync_report_rows
 from .report_review import inspect_report, review_text, bundle_fingerprint
 from .mass_apply_logic import (ACTION_TEXT as MASS_ACTION_TEXT, OutdatedPreview as MassOutdatedPreview,
                                build_plan as build_mass_plan, apply_plan as apply_mass_plan)
-from .ui_components import ActionPanel, ContentCard, action_panel, describe_context, table_card
+from .ui_components import (
+    ActionPanel, ContentCard, action_panel, describe_context,
+    table_card, table_card_with_selection,
+)
 
 APP_TITLE = "Отчетность УК по приказу № 728/пр"
 
@@ -1628,6 +1631,7 @@ class ReportsTab(BaseTab):
         self.report_empty_hint.setObjectName("CardSubtitle")
         right_l.addWidget(self.report_empty_hint)
         self.report_tabs = QTabWidget()
+        self.report_tabs.setUsesScrollButtons(True)
         right_l.addWidget(self.report_tabs, 1)
         self._build_general_tab()
         self._build_content_tab()
@@ -1702,6 +1706,22 @@ class ReportsTab(BaseTab):
         button = QPushButton(title)
         button.clicked.connect(lambda _checked=False, i=next_index: self._go_to_report_section(i))
         layout.addWidget(action_panel("Следующий шаг", button, primary=button))
+
+    def add_blank_report_row(self, section: str):
+        if not self.current_id:
+            return
+        if section == "Содержание":
+            table, add = self.content_table, self.add_content_row
+        elif section == "Текущий ремонт":
+            table, add = self.repair_table, self.add_repair_row
+        else:
+            table, add = self.management_table, self.add_management_row
+        add({})
+        row = table.rowCount() - 1
+        if row >= 0:
+            table.setCurrentCell(row, 2)
+            table.scrollToBottom()
+            table.setFocus()
 
     def _delete_selected_report_rows(self, table):
         count = len({cell.row() for cell in table.selectedIndexes()})
@@ -1798,27 +1818,32 @@ class ReportsTab(BaseTab):
         layout.addWidget(help_text)
         template_row = QHBoxLayout()
         self.content_template_combo = ClickComboBox()
+        self.content_template_combo.currentTextChanged.connect(self.content_template_combo.setToolTip)
         template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.content_template_combo, 1)
         layout.addLayout(template_row)
         apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template("Содержание", self.content_template_combo))
         add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference("Содержание"))
-        add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_content_row({}))
-        groups = QHBoxLayout()
-        groups.addWidget(action_panel("Применение шаблона", apply))
-        groups.addWidget(action_panel("Добавление строк", add_ref, add_empty, primary=add_ref))
-        layout.addLayout(groups)
+        add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_blank_report_row("Содержание"))
+        # Keep the complete template title on its own wide row. Actions
+        # can wrap below, instead of shrinking the selection field.
+        layout.addWidget(action_panel(
+            "Наполнение раздела", apply, add_ref, add_empty, primary=add_ref
+        ))
         self.content_table = CopyPasteTable(0, 9)
         self.content_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование работы/услуги", "Ед. изм.", "Цена единицы", "Кол-во по перечню", "Стоимость по перечню", "Выполнено кол-во", "Стоимость выполнено"])
         self.content_table.setColumnHidden(0, True); self.content_table.setColumnHidden(1, True)
         self.content_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_content_items", "unit", distinct_texts("work_items", "unit", COMMON_UNITS)), self.content_table))
         self._content_recalc_lock = False
         self.content_table.itemChanged.connect(self.on_content_item_changed)
-        self.content_table.context_add_handler = lambda: self.add_content_row({})
+        self.content_table.context_add_handler = lambda: self.add_blank_report_row("Содержание")
         self.content_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.content_table)
-        layout.addWidget(table_card("Строки содержания", self.content_table))
+        content_card = table_card_with_selection(
+            "Строки содержания", self.content_table, name_column=2
+        )
+        layout.addWidget(content_card, 1)
         delete = QPushButton("Удалить выбранные строки")
         delete.clicked.connect(lambda: self._delete_selected_report_rows(self.content_table))
-        layout.addWidget(action_panel("Удаление строк", delete, purpose="danger"))
+        content_card.add_widget(action_panel("Удаление строк", delete, purpose="danger"))
         self._next_report_action(layout, "Перейти к текущему ремонту", 2)
         self.report_tabs.addTab(w, "1. Содержание")
 
@@ -1839,25 +1864,30 @@ class ReportsTab(BaseTab):
         layout.addWidget(balance_card)
         template_row = QHBoxLayout()
         self.repair_template_combo = ClickComboBox()
+        self.repair_template_combo.currentTextChanged.connect(self.repair_template_combo.setToolTip)
         template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.repair_template_combo, 1)
         layout.addLayout(template_row)
         apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template("Текущий ремонт", self.repair_template_combo))
         add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference("Текущий ремонт"))
-        add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_repair_row({}))
-        groups = QHBoxLayout()
-        groups.addWidget(action_panel("Применение шаблона", apply))
-        groups.addWidget(action_panel("Добавление строк", add_ref, add_empty, primary=add_ref))
-        layout.addLayout(groups)
+        add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_blank_report_row("Текущий ремонт"))
+        # Keep the complete template title on its own wide row. Actions
+        # can wrap below, instead of shrinking the selection field.
+        layout.addWidget(action_panel(
+            "Наполнение раздела", apply, add_ref, add_empty, primary=add_ref
+        ))
         self.repair_table = CopyPasteTable(0, 7)
         self.repair_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование работы", "Основание", "Стоимость", "Объем", "Акт/ссылка"])
         self.repair_table.setColumnHidden(0, True); self.repair_table.setColumnHidden(1, True)
         self.repair_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_repair_items", "basis", COMMON_REPAIR_BASIS), self.repair_table))
-        self.repair_table.context_add_handler = lambda: self.add_repair_row({})
+        self.repair_table.context_add_handler = lambda: self.add_blank_report_row("Текущий ремонт")
         self.repair_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.repair_table)
-        layout.addWidget(table_card("Работы текущего ремонта", self.repair_table))
+        repair_card = table_card_with_selection(
+            "Работы текущего ремонта", self.repair_table, name_column=2
+        )
+        layout.addWidget(repair_card, 1)
         delete = QPushButton("Удалить выбранные строки")
         delete.clicked.connect(lambda: self._delete_selected_report_rows(self.repair_table))
-        layout.addWidget(action_panel("Удаление строк", delete, purpose="danger"))
+        repair_card.add_widget(action_panel("Удаление строк", delete, purpose="danger"))
         self._next_report_action(layout, "Перейти к управлению", 3)
         self.report_tabs.addTab(w, "2. Текущий ремонт")
 
@@ -1886,15 +1916,17 @@ class ReportsTab(BaseTab):
         ))
         template_row = QHBoxLayout()
         self.management_template_combo = ClickComboBox()
+        self.management_template_combo.currentTextChanged.connect(self.management_template_combo.setToolTip)
         template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.management_template_combo, 1)
         layout.addLayout(template_row)
         apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template("Управление", self.management_template_combo))
         add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference("Управление"))
-        add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_management_row({}))
-        groups = QHBoxLayout()
-        groups.addWidget(action_panel("Применение шаблона", apply))
-        groups.addWidget(action_panel("Добавление строк", add_ref, add_empty, primary=add_ref))
-        layout.addLayout(groups)
+        add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_blank_report_row("Управление"))
+        # Keep the complete template title on its own wide row. Actions
+        # can wrap below, instead of shrinking the selection field.
+        layout.addWidget(action_panel(
+            "Наполнение раздела", apply, add_ref, add_empty, primary=add_ref
+        ))
 
         self.management_table = CopyPasteTable(0, 7)
         self.management_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование услуги", "Ед. изм.", "Цена единицы", "Кол-во", "Стоимость"])
@@ -1902,12 +1934,15 @@ class ReportsTab(BaseTab):
         self.management_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_management_items", "unit", distinct_texts("work_items", "unit", COMMON_UNITS)), self.management_table))
         self._management_recalc_lock = False
         self.management_table.itemChanged.connect(self.on_management_item_changed)
-        self.management_table.context_add_handler = lambda: self.add_management_row({})
+        self.management_table.context_add_handler = lambda: self.add_blank_report_row("Управление")
         self.management_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.management_table)
-        layout.addWidget(table_card("Внутренний расчет услуг управления", self.management_table))
+        management_card = table_card_with_selection(
+            "Внутренний расчет услуг управления", self.management_table, name_column=2
+        )
+        layout.addWidget(management_card, 1)
         delete = QPushButton("Удалить выбранные строки")
         delete.clicked.connect(lambda: self._delete_selected_report_rows(self.management_table))
-        layout.addWidget(action_panel("Удаление строк расчета", delete, purpose="danger"))
+        management_card.add_widget(action_panel("Удаление строк расчета", delete, purpose="danger"))
         layout.addWidget(selectable_label(
             "В официальной форме раздел 3 содержит итоговую сумму, а не внутренние строки расчета."
         ))
@@ -1938,7 +1973,9 @@ class ReportsTab(BaseTab):
         self.finance_table.context_delete_handler = lambda: self.msg(
             "Строки плательщиков не удаляются: при необходимости оставьте значения пустыми."
         )
-        layout.addWidget(table_card("5. Начисления и поступления", self.finance_table))
+        layout.addWidget(table_card_with_selection(
+            "5. Начисления и поступления", self.finance_table, name_column=1
+        ), 1)
         self._next_report_action(layout, "Проверить и выгрузить отчет", 5)
         self.report_tabs.addTab(w, "4–5. Финансы")
 
@@ -2063,8 +2100,11 @@ class ReportsTab(BaseTab):
             r_section = normalize_section(row_get(r, "category", ""), "")
             if r_section != target:
                 continue
-            combo.addItem(f"{r['name']} · {r_section}", r["id"])
+            title = f"{r['name']} · {r_section}"
+            combo.addItem(title, r["id"])
+            combo.setItemData(combo.count() - 1, title, Qt.ToolTipRole)
         restore_combo_selection(combo, old_data, old_text)
+        combo.setToolTip(combo.currentText())
         combo.blockSignals(False)
 
     def reload_template_combo(self):
