@@ -1581,6 +1581,12 @@ class ReportsTab(BaseTab):
         right_l.addWidget(selectable_label(
             "3. Заполнение разделов → 4. Проверка отчета → 5. Выгрузка документов"
         ))
+        self.report_empty_hint = selectable_label(
+            "Чтобы начать, выберите конкретную управляющую организацию, дом и год. "
+            "Затем откройте существующий отчет или создайте новый."
+        )
+        self.report_empty_hint.setObjectName("CardSubtitle")
+        right_l.addWidget(self.report_empty_hint)
         self.report_tabs = QTabWidget()
         right_l.addWidget(self.report_tabs, 1)
         self._build_general_tab()
@@ -1603,6 +1609,16 @@ class ReportsTab(BaseTab):
     def _update_report_actions(self):
         has_report = bool(self.current_id)
         self.report_tabs.setEnabled(has_report)
+        self.report_tabs.setVisible(has_report)
+        self.report_empty_hint.setVisible(not has_report)
+        if not has_report:
+            if self.company_filter.currentData() is None:
+                instruction = "Сначала выберите управляющую организацию."
+            elif self.house_filter.currentData() is None:
+                instruction = "Выберите дом выбранной организации."
+            else:
+                instruction = "Выберите существующий отчет или создайте его за указанный год."
+            self.report_empty_hint.setText(instruction)
         self.save_button.setEnabled(has_report)
         self.delete_report_btn.setEnabled(has_report)
         self.create_report_btn.setEnabled(
@@ -2914,6 +2930,10 @@ class MassApplyTab(BaseTab):
         if QMessageBox.question(self, "Подтверждение массового заполнения", message) != QMessageBox.Yes:
             return
         try:
+            # A backup taken after mass application cannot restore the
+            # previous values. Require a verified pre-change snapshot.
+            if make_backup("before_mass_apply") is None:
+                raise RuntimeError("Не удалось создать резервную копию перед записью.")
             with connect() as conn:
                 result = apply_mass_plan(conn, plan)
         except MassOutdatedPreview as exc:
@@ -2931,13 +2951,9 @@ class MassApplyTab(BaseTab):
             f'Выполнено: добавлено {result["insert"]}, обновлено {result["update"]}, '
             f'пропущено {result["skip"]}. Для повторной операции обновите предпросмотр.'
         )
-        try:
-            make_backup("mass_apply")
-        except Exception as exc:
-            self.msg(f"Данные записаны, но резервную копию создать не удалось: {exc}")
-            return
         self.msg(f'Массовое заполнение выполнено: добавлено {result["insert"]}, '
-                 f'обновлено {result["update"]}, пропущено {result["skip"]}.')
+                 f'обновлено {result["update"]}, пропущено {result["skip"]}. '
+                 'Резервная копия создана до записи.')
 
 class BackupsTab(BaseTab):
     def __init__(self):
