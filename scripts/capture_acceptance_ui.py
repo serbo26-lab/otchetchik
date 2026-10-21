@@ -18,6 +18,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PySide6.QtWidgets import QApplication
 
 from src.uk728 import db
+from src.uk728.paths import make_backup
 from src.uk728.app import MainWindow
 
 
@@ -33,6 +34,7 @@ SCREENS = [
     ("reports_management", 6, 3),
     ("reports_finance", 6, 4),
     ("reports_export", 6, 5),
+    ("backups", 7, None),
 ]
 
 
@@ -57,6 +59,7 @@ def main():
             house = db.execute("INSERT INTO houses(company_id,address,total_area) VALUES(?,?,?)",
                                (org, "ул. Центральная, д. 5", 1500))
             db.create_report(org, house, 2026)
+            make_backup("manual")
             window = MainWindow()
             window.resize(1366, 900)
             window.show()
