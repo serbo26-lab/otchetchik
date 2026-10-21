@@ -170,6 +170,10 @@ class CopyPasteTable(QTableWidget):
         self.itemChanged.connect(self._sync_cell_tooltip)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._menu)
+        # A report row needs its own initializer and autosave after deletion.
+        # Keep generic behavior for standalone directories and editing tables.
+        self.context_add_handler = None
+        self.context_delete_handler = None
 
     def _sync_cell_tooltip(self, item):
         if item and item.toolTip() != item.text():
@@ -204,10 +208,16 @@ class CopyPasteTable(QTableWidget):
         act_paste.triggered.connect(self.paste_selection)
         menu.addAction(act_paste)
         act_add = QAction("Добавить строку", self)
-        act_add.triggered.connect(lambda: self.insertRow(self.rowCount()))
+        act_add.triggered.connect(
+            self.context_add_handler if self.context_add_handler is not None
+            else lambda: self.insertRow(self.rowCount())
+        )
         menu.addAction(act_add)
         act_del = QAction("Удалить выбранные строки", self)
-        act_del.triggered.connect(self.delete_selected_rows)
+        act_del.triggered.connect(
+            self.context_delete_handler if self.context_delete_handler is not None
+            else self.delete_selected_rows
+        )
         menu.addAction(act_del)
         menu.exec(self.viewport().mapToGlobal(pos))
 
@@ -879,6 +889,7 @@ class CategoriesTab(BaseTab):
         self.sub_table.setColumnHidden(0, True)
         self.sub_table.setItemDelegateForColumn(2, EditableComboDelegate(lambda: distinct_texts("work_categories", "section", ["Не выбрано", *COMMON_SECTIONS]), self.sub_table))
         self.sub_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("work_categories", "unit", ["Не выбрано", *COMMON_UNITS]), self.sub_table))
+        self.sub_table.context_add_handler = self.add_subcategory
         subcategories = table_card("3. Подкатегории", self.sub_table,
                                    subtitle="Сначала добавьте строку, затем заполните ее поля.")
         self.add_sub_button = QPushButton("Добавить подкатегорию")
@@ -889,8 +900,8 @@ class CategoriesTab(BaseTab):
         self.delete_sub_button.clicked.connect(self.sub_table.delete_selected_rows)
         self.save_button = QPushButton("Сохранить категорию и подкатегории")
         self.save_button.clicked.connect(self.save)
-        right_l.addWidget(action_panel("Удаление строк", self.delete_sub_button, purpose="danger"))
-        right_l.addWidget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
+        subcategories.add_widget(action_panel("Удаление строк", self.delete_sub_button, purpose="danger"))
+        subcategories.add_widget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
         self.form_widgets = [self.name, self.section, self.unit, self.price, self.notes, self.sub_table]
         splitter.addWidget(right)
         splitter.setSizes([300, 900])
@@ -1047,6 +1058,7 @@ class WorksTab(BaseTab):
         self.table.setItemDelegateForColumn(2, EditableComboDelegate(lambda: self.subcategory_names(), self.table))
         self.table.setItemDelegateForColumn(4, EditableComboDelegate(lambda: distinct_texts("work_items", "category", COMMON_SECTIONS), self.table))
         self.table.setItemDelegateForColumn(5, EditableComboDelegate(lambda: distinct_texts("work_items", "unit", COMMON_UNITS), self.table))
+        self.table.context_add_handler = self.add_row
         self.form_widgets = [self.table]
         self._initial_work_rows = {}
         entries = table_card("2. Справочник работ и услуг", self.table,
@@ -1070,8 +1082,8 @@ class WorksTab(BaseTab):
         delete.clicked.connect(self.table.delete_selected_rows)
         save = QPushButton("Сохранить справочник")
         save.clicked.connect(self.save)
-        root.addWidget(action_panel("Удаление строк", delete, purpose="danger"))
-        root.addWidget(action_panel("3. Сохранение справочника", save, primary=save))
+        entries.add_widget(action_panel("Удаление строк", delete, purpose="danger"))
+        entries.add_widget(action_panel("3. Сохранение справочника", save, primary=save))
         self.reload_category_combo()
         self.refresh()
 
@@ -1272,14 +1284,16 @@ class TemplatesTab(BaseTab):
         self.table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование", "Ед. изм.", "Цена", "Кол-во по перечню"])
         self.table.setColumnHidden(0, True); self.table.setColumnHidden(1, True)
         self.table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("work_items", "unit", COMMON_UNITS), self.table))
-        right_l.addWidget(table_card("4. Состав шаблона", self.table,
-                             subtitle="Проверьте цену и количество в каждой строке."), 1)
+        self.table.context_add_handler = self.add_work_to_template
+        composition = table_card("4. Состав шаблона", self.table,
+                                 subtitle="Проверьте цену и количество в каждой строке.")
+        right_l.addWidget(composition, 1)
         self.remove_item_button = QPushButton("Удалить выбранные строки")
         self.remove_item_button.clicked.connect(self.table.delete_selected_rows)
         self.save_button = QPushButton("Сохранить шаблон")
         self.save_button.clicked.connect(self.save)
-        right_l.addWidget(action_panel("Удаление строк", self.remove_item_button, purpose="danger"))
-        right_l.addWidget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
+        composition.add_widget(action_panel("Удаление строк", self.remove_item_button, purpose="danger"))
+        composition.add_widget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
         splitter.addWidget(right)
         splitter.setSizes([280, 800])
         self.reload_work_combo()
@@ -1716,6 +1730,8 @@ class ReportsTab(BaseTab):
         self.content_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_content_items", "unit", distinct_texts("work_items", "unit", COMMON_UNITS)), self.content_table))
         self._content_recalc_lock = False
         self.content_table.itemChanged.connect(self.on_content_item_changed)
+        self.content_table.context_add_handler = lambda: self.add_content_row({})
+        self.content_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.content_table)
         layout.addWidget(table_card("Строки содержания", self.content_table))
         delete = QPushButton("Удалить выбранные строки")
         delete.clicked.connect(lambda: self._delete_selected_report_rows(self.content_table))
@@ -1753,6 +1769,8 @@ class ReportsTab(BaseTab):
         self.repair_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование работы", "Основание", "Стоимость", "Объем", "Акт/ссылка"])
         self.repair_table.setColumnHidden(0, True); self.repair_table.setColumnHidden(1, True)
         self.repair_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_repair_items", "basis", COMMON_REPAIR_BASIS), self.repair_table))
+        self.repair_table.context_add_handler = lambda: self.add_repair_row({})
+        self.repair_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.repair_table)
         layout.addWidget(table_card("Работы текущего ремонта", self.repair_table))
         delete = QPushButton("Удалить выбранные строки")
         delete.clicked.connect(lambda: self._delete_selected_report_rows(self.repair_table))
@@ -1801,6 +1819,8 @@ class ReportsTab(BaseTab):
         self.management_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_management_items", "unit", distinct_texts("work_items", "unit", COMMON_UNITS)), self.management_table))
         self._management_recalc_lock = False
         self.management_table.itemChanged.connect(self.on_management_item_changed)
+        self.management_table.context_add_handler = lambda: self.add_management_row({})
+        self.management_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.management_table)
         layout.addWidget(table_card("Внутренний расчет услуг управления", self.management_table))
         delete = QPushButton("Удалить выбранные строки")
         delete.clicked.connect(lambda: self._delete_selected_report_rows(self.management_table))
@@ -1827,6 +1847,14 @@ class ReportsTab(BaseTab):
         self.finance_table.setItemDelegateForColumn(1, EditableComboDelegate(lambda: distinct_texts("report_financials", "payer_type", COMMON_PAYER_TYPES), self.finance_table))
         self.finance_table.set_value(0, 1, "Собственники")
         self.finance_table.set_value(1, 1, "Наниматели")
+        # The official finance section has fixed payers; arbitrary insertion
+        # from the generic context menu would violate the payer layout.
+        self.finance_table.context_add_handler = lambda: self.msg(
+            "В разделе 5 предусмотрены строки для собственников и нанимателей."
+        )
+        self.finance_table.context_delete_handler = lambda: self.msg(
+            "Строки плательщиков не удаляются: при необходимости оставьте значения пустыми."
+        )
         layout.addWidget(table_card("5. Начисления и поступления", self.finance_table))
         self._next_report_action(layout, "Проверить и выгрузить отчет", 5)
         self.report_tabs.addTab(w, "4–5. Финансы")
