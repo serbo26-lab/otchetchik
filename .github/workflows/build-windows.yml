@@ -69,6 +69,21 @@ jobs:
           python -m scripts.capture_acceptance_ui --out-dir "$env:RUNNER_TEMP/otchetchik-acceptance-screens"
           if ($LASTEXITCODE -ne 0) { throw 'UI screenshot capture failed.' }
 
+      - name: Capture additional high-DPI layout simulations
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          # Qt DPI simulations find clipping; they do not replace testing
+          # on real Windows monitors at 125% and 150% scale.
+          foreach ($factor in @('1.25', '1.50')) {
+            $env:QT_SCALE_FACTOR = $factor
+            $label = $factor.Replace('.', '')
+            python -m scripts.capture_acceptance_ui --out-dir "$env:RUNNER_TEMP/otchetchik-acceptance-screens/qt_dpi_$label"
+            if ($LASTEXITCODE -ne 0) { throw "UI capture failed for DPI $factor." }
+          }
+          Remove-Item Env:QT_SCALE_FACTOR -ErrorAction SilentlyContinue
+
       - name: Upload acceptance screenshots
         uses: actions/upload-artifact@v4
         with:
