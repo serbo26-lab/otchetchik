@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
+import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -46,9 +46,20 @@ def make_backup(reason: str = "auto") -> Path | None:
     src = db_path()
     if not src.exists():
         return None
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # SQLite uses WAL: copying only the .db file can omit committed data
+    # that is still stored in the -wal journal. The online backup API
+    # creates a consistent snapshot, including those committed transactions.
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     out = data_dir() / "backups" / f"reporting_728_{reason}_{stamp}.db"
-    shutil.copy2(src, out)
+    temporary = out.with_suffix(".tmp")
+    try:
+        with sqlite3.connect(str(src), timeout=30) as source:
+            with sqlite3.connect(str(temporary), timeout=30) as destination:
+                source.backup(destination)
+        os.replace(temporary, out)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
     cleanup_backups(max_files=120)
     return out
 
