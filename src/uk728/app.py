@@ -2460,6 +2460,9 @@ class ReportsTab(BaseTab):
         try:
             self.save()
         except (ValueError, OSError) as exc:
+            win = self.window()
+            if hasattr(win, "set_save_status"):
+                win.set_save_status("error")
             QMessageBox.warning(self, "Проверьте отчет", str(exc))
 
     def save(self, silent: bool = False, refresh_after: bool = True):
