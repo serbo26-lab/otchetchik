@@ -44,7 +44,12 @@ def main():
     app = QApplication.instance() or QApplication([])
     app.setQuitOnLastWindowClosed(False)
 
-    result = {"scale": 100, "windows_size": [1366, 900], "screens": []}
+    result = {
+        "internal_scale": 100,
+        "qt_scale_factor": os.environ.get("QT_SCALE_FACTOR", "1.0"),
+        "windows_size": [1366, 900],
+        "screens": [],
+    }
     with tempfile.TemporaryDirectory(prefix="otchetchik-ui-", ignore_cleanup_errors=True) as workdir:
         with patch("src.uk728.paths.app_dir", return_value=Path(workdir)):
             db.init_db()
