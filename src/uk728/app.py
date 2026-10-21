@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import traceback
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, QEvent, QUrl, QSettings
@@ -74,6 +75,22 @@ COMMON_FILL_MODES = [
 ]
 COMMON_PAYER_TYPES = ["Собственники", "Наниматели"]
 COMMON_REPAIR_BASIS = ["Решение ОСС", "План текущего ремонта", "Акт осмотра", "Предписание", "Договор управления", "Заявка", "Иное"]
+
+
+def numeric_error(value: Any, label: str, *, whole: bool = False) -> str | None:
+    """Validate before to_float: invalid text must never silently become zero."""
+    raw = str(value or "").strip().replace("\xa0", "").replace(" ", "").replace(",", ".")
+    if not raw:
+        return None  # Blank is allowed; zero remains an explicit numeric value.
+    try:
+        amount = Decimal(raw)
+    except (InvalidOperation, ValueError):
+        return f"«{label}»: укажите число, например 1200 или 1 200,50."
+    if not amount.is_finite():
+        return f"«{label}»: некорректное числовое значение."
+    if whole and (amount < 0 or amount != amount.to_integral_value()):
+        return f"«{label}»: требуется целое неотрицательное количество."
+    return None
 
 
 def distinct_texts(table: str, column: str, extra: list[str] | None = None) -> list[str]:
@@ -830,6 +847,10 @@ class HousesTab(BaseTab):
         if not self.current_id:
             self.msg("Сначала выберите или добавьте дом, затем заполните поля и сохраните.")
             return
+        problem = numeric_error(self.area.text(), "Площадь помещений")
+        if problem:
+            QMessageBox.warning(self, "Проверьте площадь", problem)
+            return False
         with connect() as conn:
             conn.execute(
                 "UPDATE houses SET company_id=?, address=?, total_area=?, management_start=?, management_end=?, status=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -1007,6 +1028,14 @@ class CategoriesTab(BaseTab):
         if normalize_section(section, "") not in COMMON_SECTIONS:
             QMessageBox.warning(self, "Раздел формы",
                 "Выберите раздел формы: Содержание, Текущий ремонт или Управление.")
+            return False
+        problem = numeric_error(self.price.text(), "Цена / ставка категории")
+        for index in range(self.sub_table.rowCount()):
+            problem = problem or numeric_error(
+                self.sub_table.value(index, 4), f"Цена подкатегории, строка {index + 1}"
+            )
+        if problem:
+            QMessageBox.warning(self, "Проверьте стоимость", problem)
             return False
         prior = {int(r["id"]) for r in db.rows(
             "SELECT id FROM work_categories WHERE parent_id=? AND is_active=1", (self.current_id,)
@@ -1227,6 +1256,10 @@ class WorksTab(BaseTab):
                     "(Содержание, Текущий ремонт или Управление).",
                 )
                 return False
+            problem = numeric_error(self.table.value(index, 6), f"Цена работы, строка {index + 1}")
+            if problem:
+                QMessageBox.warning(self, "Проверьте цену", problem)
+                return False
         visible_ids = {
             int(self.table.value(row, 0))
             for row in range(self.table.rowCount()) if self.table.value(row, 0)
@@ -1445,6 +1478,13 @@ class TemplatesTab(BaseTab):
             QMessageBox.warning(self, "Раздел шаблона", "Выберите официальный раздел формы.")
             return False
         for index in range(self.table.rowCount()):
+            for column, label in ((4, "Цена"), (5, "Количество")):
+                problem = numeric_error(
+                    self.table.value(index, column), f"{label} шаблона, строка {index + 1}"
+                )
+                if problem:
+                    QMessageBox.warning(self, "Проверьте числа", problem)
+                    return False
             wid = int(self.table.value(index, 1) or 0)
             if not wid:
                 continue  # Retained legacy row with no active work ID.
@@ -1597,7 +1637,7 @@ class ReportsTab(BaseTab):
         self._build_export_tab()
         self.report_tabs.setEnabled(False)
         self.save_button = QPushButton("Сохранить отчет")
-        self.save_button.clicked.connect(self.save)
+        self.save_button.clicked.connect(self.save_manually)
         right_l.addWidget(action_panel("Сохранение выбранного отчета", self.save_button,
                                        primary=self.save_button))
         splitter.addWidget(right)
@@ -2382,11 +2422,52 @@ class ReportsTab(BaseTab):
             added += 1
         self.msg(f"Шаблон применен. Раздел: {target_section}. Добавлено: {added}. Пропущено: {skipped}")
 
+    def validate_numeric_fields(self) -> None:
+        inputs = [
+            (self.management_cost.text(), "Стоимость управления"),
+            (self.repair_start.text(), "Остаток на начало текущего ремонта"),
+            (self.repair_accrual.text(), "Начисления на текущий ремонт"),
+            (self.repair_work_cost.text(), "Стоимость текущего ремонта"),
+            (self.repair_end.text(), "Остаток на конец текущего ремонта"),
+            (self.claim_amount.text(), "Сумма поступивших средств по претензиям"),
+        ]
+        for widget, label in ((self.claim_pret, "Количество претензий"),
+                              (self.claim_lawsuits, "Количество исков")):
+            problem = numeric_error(widget.text(), label, whole=True)
+            if problem:
+                raise ValueError(problem)
+        for value, label in inputs:
+            problem = numeric_error(value, label)
+            if problem:
+                raise ValueError(problem)
+        sections = (
+            (self.content_table, "Содержание", (4, 5, 6, 7, 8)),
+            (self.repair_table, "Текущий ремонт", (4,)),
+            (self.management_table, "Управление", (4, 5, 6)),
+            (self.finance_table, "Финансы", (2, 3, 4, 5)),
+        )
+        for table, section, columns in sections:
+            for row in range(table.rowCount()):
+                for column in columns:
+                    problem = numeric_error(
+                        table.value(row, column),
+                        f"{section}, строка {row + 1}, графа «{table.horizontalHeaderItem(column).text()}»",
+                    )
+                    if problem:
+                        raise ValueError(problem)
+
+    def save_manually(self):
+        try:
+            self.save()
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Проверьте отчет", str(exc))
+
     def save(self, silent: bool = False, refresh_after: bool = True):
         if not self.current_id:
             if not silent:
                 self.msg("Сначала выберите или создайте отчет, затем заполните поля и сохраните.")
             return
+        self.validate_numeric_fields()
         rid = self.current_id
         self._saving_report = True
         win = self.window()
