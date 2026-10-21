@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sys
 import traceback
+from datetime import datetime
+from pathlib import Path
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -16,6 +18,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QFrame,
+    QFileDialog,
     QStackedWidget,
     QHBoxLayout,
     QHeaderView,
@@ -43,6 +46,10 @@ from . import db
 from .db import connect
 from .exporters import export_docx, export_pdf, export_xlsx
 from .paths import data_dir, make_backup
+from .backup_restore import (
+    verify_backup, pending_restore, stage_restore,
+    cancel_restore, apply_pending_restore,
+)
 from .utils import full_year_period, iso_date, money, to_float
 from .ui_style import apply_theme
 from .ui_shell import ActionFlowLayout, NavigationSidebar, PageChrome, PAGES
@@ -3080,33 +3087,197 @@ class MassApplyTab(BaseTab):
                  'Резервная копия создана до записи.')
 
 class BackupsTab(BaseTab):
+    """Browse, verify and stage a restore; never touch a live SQLite database."""
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
-        layout.addWidget(selectable_label("Данные программы хранятся в папке data рядом с EXE/исходным файлом. Резервная копия создается автоматически раз в 5 минут."))
-        backup = QPushButton("Создать резервную копию сейчас"); backup.clicked.connect(self.backup_now)
-        open_data = QPushButton("Показать путь к папке data"); open_data.clicked.connect(self.show_data_path)
-        backup_actions = QHBoxLayout()
-        backup_actions.addWidget(action_panel("Создание копии", backup, primary=backup))
-        backup_actions.addWidget(action_panel("Расположение данных", open_data))
-        layout.addLayout(backup_actions)
-        self.info = QTextEdit(); self.info.setReadOnly(True)
+        overview = ContentCard(
+            "Резервные копии базы",
+            "Автоматическая копия создаётся каждые 5 минут. Ручные копии и "
+            "защитные снимки перед изменениями не удаляются автоматически."
+        )
+        self.archive_list = QListWidget()
+        self.archive_list.currentItemChanged.connect(self.update_controls)
+        overview.add_widget(self.archive_list, 1)
+        layout.addWidget(overview, 1)
+
+        make = QPushButton("Создать копию")
+        make.clicked.connect(self.backup_now)
+        check = QPushButton("Проверить выбранную")
+        check.clicked.connect(self.check_backup)
+        self.check_button = check
+        restore = QPushButton("Восстановить выбранную")
+        restore.clicked.connect(self.restore_selected)
+        self.restore_button = restore
+        external = QPushButton("Выбрать файл .db…")
+        external.clicked.connect(self.choose_external)
+        self.external_button = external
+        refresh = QPushButton("Обновить список")
+        refresh.clicked.connect(self.refresh)
+        open_data = QPushButton("Открыть папку data")
+        open_data.clicked.connect(self.show_data_path)
+        layout.addWidget(action_panel(
+            "Работа с копиями", make, check, restore, external, refresh, open_data,
+            primary=make
+        ))
+        self.pending_message = selectable_label("")
+        self.pending_message.setObjectName("CardSubtitle")
+        layout.addWidget(self.pending_message)
+        cancel = QPushButton("Отменить подготовленное восстановление")
+        cancel.clicked.connect(self.cancel_pending)
+        self.cancel_button = cancel
+        layout.addWidget(action_panel("Отмена восстановления", cancel))
+        self.info = QTextEdit()
+        self.info.setReadOnly(True)
+        self.info.setMaximumHeight(125)
         layout.addWidget(self.info)
         self.refresh()
 
+    def _selected_path(self):
+        item = self.archive_list.currentItem()
+        return Path(item.data(Qt.UserRole)) if item else None
+
+    def update_controls(self, *_args):
+        try:
+            request = pending_restore()
+        except ValueError as exc:
+            request = {"selected_name": f"Ошибка заявки: {exc}"}
+        selected = self._selected_path() is not None
+        self.check_button.setEnabled(selected)
+        self.restore_button.setEnabled(selected and request is None)
+        self.external_button.setEnabled(request is None)
+        self.cancel_button.setEnabled(request is not None)
+        if request:
+            self.pending_message.setText(
+                "Восстановление подготовлено: "
+                f"{request.get('selected_name', 'неизвестная копия')}. "
+                "Закройте программу и откройте её снова. Текущая база будет "
+                "сохранена отдельно перед восстановлением."
+            )
+        else:
+            self.pending_message.setText(
+                "Для восстановления выберите копию. После подтверждения "
+                "перезапустите программу: открытая база не заменяется."
+            )
+
     def refresh(self):
-        folder = data_dir()
-        backups = sorted((folder / "backups").glob("*.db"), key=lambda p: p.stat().st_mtime, reverse=True)[:20]
-        text = f"Папка данных:\n{folder}\n\nПоследние резервные копии:\n" + "\n".join(str(p.name) for p in backups)
-        self.info.setPlainText(text)
+        selected = self._selected_path()
+        folder = data_dir() / "backups"
+        backups = sorted(
+            folder.glob("reporting_728_*.db"),
+            key=lambda p: p.stat().st_mtime, reverse=True
+        )
+        self.archive_list.blockSignals(True)
+        self.archive_list.clear()
+        for source in backups:
+            stamp = datetime.fromtimestamp(source.stat().st_mtime).strftime("%d.%m.%Y %H:%M")
+            size = source.stat().st_size / (1024 * 1024)
+            item = QListWidgetItem(f"{stamp} · {size:.2f} МБ · {source.name}")
+            item.setToolTip(str(source))
+            item.setData(Qt.UserRole, str(source))
+            self.archive_list.addItem(item)
+            if selected == source:
+                self.archive_list.setCurrentItem(item)
+        self.archive_list.blockSignals(False)
+        self.update_controls()
+        self.info.setPlainText(
+            f"Папка данных: {data_dir()}\n"
+            f"Резервных копий в архиве: {len(backups)}\n"
+            "Перед восстановлением проверяется целостность и структура базы. "
+            "Последняя текущая база также будет сохранена защитной копией."
+        )
 
     def backup_now(self):
-        path = make_backup("manual")
-        self.msg(f"Резервная копия создана: {path}")
+        try:
+            path = make_backup("manual")
+            if path is None:
+                raise RuntimeError("Рабочая база данных ещё не создана.")
+        except Exception as exc:
+            QMessageBox.warning(self, "Резервная копия не создана", str(exc))
+            return
         self.refresh()
+        self.msg(f"Резервная копия создана: {path.name}")
+
+    def check_backup(self):
+        source = self._selected_path()
+        if source is None:
+            return
+        try:
+            result = verify_backup(source)
+        except Exception as exc:
+            QMessageBox.warning(self, "Копия не прошла проверку", str(exc))
+            return
+        self.info.setPlainText(
+            f"Копия проверена: {source.name}\n"
+            f"УО: {result['companies']} · домов: {result['houses']} · "
+            f"отчётов: {result['reports']} · "
+            f"структура: {result['schema_version'] or 'предыдущая версия'}"
+        )
+        self.msg("Целостность резервной копии проверена.")
+
+    def _confirm_restore(self, source: Path):
+        try:
+            result = verify_backup(source)
+        except Exception as exc:
+            QMessageBox.warning(self, "Копия не прошла проверку", str(exc))
+            return
+        answer = QMessageBox.question(
+            self, "Подготовить восстановление?",
+            f"Файл: {source.name}\n"
+            f"УО: {result['companies']}, домов: {result['houses']}, "
+            f"отчётов: {result['reports']}.\n\n"
+            "После следующего запуска текущая база будет заменена "
+            "данными выбранной копии. Сначала программа создаст "
+            "отдельную защитную копию текущей базы.\n\n"
+            "Подготовить восстановление?"
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            stage_restore(source)
+        except Exception as exc:
+            QMessageBox.warning(self, "Восстановление не подготовлено", str(exc))
+            return
+        self.refresh()
+        QMessageBox.information(
+            self, "Восстановление подготовлено",
+            "Закройте «Отчётность УК» и запустите программу заново. "
+            "Восстановление произойдёт до открытия базы. До перезапуска "
+            "его можно отменить в этом разделе."
+        )
+
+    def restore_selected(self):
+        path = self._selected_path()
+        if path:
+            self._confirm_restore(path)
+
+    def choose_external(self):
+        filename, _selected_filter = QFileDialog.getOpenFileName(
+            self, "Выберите резервную копию Отчётности УК",
+            str(data_dir() / "backups"), "База SQLite (*.db);;Все файлы (*)"
+        )
+        if filename:
+            self._confirm_restore(Path(filename))
+
+    def cancel_pending(self):
+        if QMessageBox.question(
+            self, "Отменить восстановление?",
+            "Отменить подготовленное восстановление? "
+            "Текущая база останется без изменений."
+        ) != QMessageBox.Yes:
+            return
+        try:
+            cancel_restore()
+        except Exception as exc:
+            QMessageBox.warning(self, "Не удалось отменить", str(exc))
+            return
+        self.refresh()
+        self.msg("Восстановление отменено.")
 
     def show_data_path(self):
-        self.msg(f"Папка data: {data_dir()}")
+        folder = data_dir()
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+            self.msg(f"Папка data: {folder}")
 
 
 class MainWindow(QMainWindow):
@@ -3390,9 +3561,28 @@ def install_exception_hook():
 
 
 def main():
-    db.init_db()
     app = QApplication(sys.argv)
     install_exception_hook()
+    try:
+        # A restore is only safe before opening SQLite through any app page.
+        protected = apply_pending_restore()
+        db.init_db()
+    except Exception as exc:
+        QMessageBox.critical(
+            None, "Не удалось открыть базу",
+            f"Восстановление или открытие базы не завершено:\n{exc}\n\n"
+            "Программа остановлена, чтобы не затереть пользовательские данные. "
+            "Проверьте подготовленную копию и файлы в папке data/backups."
+        )
+        return 1
     window = MainWindow()
     window.show()
+    if protected is not None:
+        QTimer.singleShot(
+            0, lambda: QMessageBox.information(
+                window, "База восстановлена",
+                "Восстановление выполнено. Предыдущая база сохранена как:\n"
+                + str(protected)
+            )
+        )
     sys.exit(app.exec())
