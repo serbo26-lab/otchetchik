@@ -305,6 +305,10 @@ class BaseTab(QWidget):
         self._loaded_form_id = getattr(self, "current_id", None)
         self._form_snapshot = self._form_signature()
 
+    def has_unsaved_changes(self):
+        snapshot = getattr(self, "_form_snapshot", None)
+        return snapshot is not None and self._form_signature() != snapshot
+
     def _commit_form_before_load(self, new_id):
         """Persist the *previous* record before selection, refresh or reload replaces it."""
         old_id = getattr(self, "_loaded_form_id", None)
@@ -972,7 +976,13 @@ class CategoriesTab(BaseTab):
         if not self.current_id:
             return
         if QMessageBox.question(self, "Удалить?", "Удалить категорию и ее подкатегории? Справочник работ не будет удален.") == QMessageBox.Yes:
-            db.execute("UPDATE work_categories SET is_active=0 WHERE id=? OR parent_id=?", (self.current_id, self.current_id))
+            try:
+                if make_backup("before_category_deletion") is None:
+                    raise RuntimeError("Не удалось создать резервную копию.")
+                db.execute("UPDATE work_categories SET is_active=0 WHERE id=? OR parent_id=?", (self.current_id, self.current_id))
+            except Exception as exc:
+                QMessageBox.warning(self, "Удаление отменено", str(exc))
+                return
             self.current_id = None
             self.refresh(); self.sub_table.setRowCount(0); self.update_form_state()
 
@@ -990,8 +1000,25 @@ class CategoriesTab(BaseTab):
         if not self.current_id:
             self.msg("Нажмите «Добавить категорию», затем заполните поля и сохраните.")
             return
+        if not self.has_unsaved_changes():
+            return True
         section = "" if self.section.currentText() == "Не выбрано" else self.section.currentText()
         unit = "" if self.unit.currentText() == "Не выбрано" else self.unit.currentText()
+        if normalize_section(section, "") not in COMMON_SECTIONS:
+            QMessageBox.warning(self, "Раздел формы",
+                "Выберите раздел формы: Содержание, Текущий ремонт или Управление.")
+            return False
+        prior = {int(r["id"]) for r in db.rows(
+            "SELECT id FROM work_categories WHERE parent_id=? AND is_active=1", (self.current_id,)
+        )}
+        remaining = {
+            int(self.sub_table.value(row, 0))
+            for row in range(self.sub_table.rowCount())
+            if self.sub_table.value(row, 0) and self.sub_table.value(row, 1)
+        }
+        if prior - remaining:
+            if make_backup("before_subcategory_deletion") is None:
+                raise RuntimeError("Не удалось создать резервную копию перед удалением подкатегорий.")
         with connect() as conn:
             conn.execute(
                 "UPDATE work_categories SET name=?, section=?, unit=?, default_price=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -3089,11 +3116,14 @@ class MainWindow(QMainWindow):
         if isinstance(page, CompaniesTab) and page.current_id:
             action = ("Далее: дома →", 1)
         elif isinstance(page, HousesTab) and page.current_id:
-            action = ("Далее: категории работ →", 2)
+            # Categories and templates are helpful but optional once the
+            # directory is populated. Do not force users to visit them.
+            has_works = db.row("SELECT id FROM work_items WHERE is_active=1 LIMIT 1")
+            action = ("Далее: отчеты →", 6) if has_works else ("Далее: справочник работ →", 3)
         elif isinstance(page, CategoriesTab) and page.current_id:
             action = ("Далее: справочник работ →", 3)
         elif isinstance(page, WorksTab) and page.table.rowCount():
-            action = ("Далее: шаблоны →", 4)
+            action = ("Далее: отчеты →", 6)
         elif isinstance(page, TemplatesTab) and page.current_id:
             action = ("Далее: отчеты →", 6)
         self._next_page = action[1] if action else None
@@ -3160,6 +3190,13 @@ class MainWindow(QMainWindow):
             company = db.row("SELECT name FROM companies WHERE id=?", (display_cid,)) if display_cid else None
             self.sidebar.set_company_name(str(company["name"]) if company else "")
             self._update_next_action(current)
+            if isinstance(current, BaseTab) and not isinstance(current, ReportsTab):
+                if current.has_unsaved_changes():
+                    if self.page_header.save_status.property("state") not in ("pending", "error"):
+                        self.set_save_status("pending")
+                elif (self._can_autosave_tab(current)
+                      and self.page_header.save_status.property("state") == "pending"):
+                    self.set_save_status("saved")
         except (AttributeError, RuntimeError):
             self.page_header.set_context("Рабочий контекст")
 
