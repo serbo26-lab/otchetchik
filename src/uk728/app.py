@@ -526,7 +526,7 @@ class CompaniesTab(BaseTab):
         self.list.blockSignals(False)
         if select_row >= 0:
             self.list.setCurrentRow(select_row)
-        elif self.list.count() and target_id is None:
+        elif self.list.count() == 1 and target_id is None:
             self.list.setCurrentRow(0)
 
     def _load_current(self):
@@ -2909,6 +2909,9 @@ class MainWindow(QMainWindow):
         self.sidebar.select(0)
         self.page_header.show_page(0)
         self._decorate_buttons()
+        self._active_company_id = self.company_tab.current_id
+        self._next_page = None
+        self.page_header.next_button.clicked.connect(self._follow_next_action)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.auto_backup)
@@ -2945,6 +2948,63 @@ class MainWindow(QMainWindow):
         elif "сохран" in low and any(word in low for word in ("выполнено", "сохранен", "сохранён", "сохранена")):
             self.set_save_status("saved")
 
+    def _remember_company_context(self, page):
+        company = None
+        if isinstance(page, CompaniesTab):
+            company = page.current_id
+        elif isinstance(page, HousesTab):
+            company = page.company_filter.currentData()
+        elif isinstance(page, ReportsTab):
+            company = page.company_filter.currentData()
+        elif isinstance(page, MassApplyTab):
+            company = page.company.currentData()
+        if company is not None or isinstance(page, CompaniesTab):
+            self._active_company_id = company
+
+    def _apply_company_context(self, page):
+        cid = self._active_company_id
+        if cid is None:
+            return
+        if isinstance(page, CompaniesTab):
+            for row in range(page.list.count()):
+                if page.list.item(row).data(Qt.UserRole) == cid:
+                    if page.list.currentRow() != row:
+                        page.list.setCurrentRow(row)
+                    break
+        else:
+            combo = None
+            if isinstance(page, HousesTab):
+                combo = page.company_filter
+            elif isinstance(page, ReportsTab):
+                combo = page.company_filter
+            elif isinstance(page, MassApplyTab):
+                combo = page.company
+            if combo is not None:
+                index = combo.findData(cid)
+                if index >= 0 and combo.currentIndex() != index:
+                    combo.setCurrentIndex(index)
+
+    def _follow_next_action(self):
+        if self._next_page is not None:
+            self.navigate(self._next_page)
+
+    def _update_next_action(self, page):
+        action = None
+        if isinstance(page, CompaniesTab) and page.current_id:
+            action = ("Далее: дома →", 1)
+        elif isinstance(page, HousesTab) and page.current_id:
+            action = ("Далее: категории работ →", 2)
+        elif isinstance(page, CategoriesTab) and page.current_id:
+            action = ("Далее: справочник работ →", 3)
+        elif isinstance(page, WorksTab) and page.table.rowCount():
+            action = ("Далее: шаблоны →", 4)
+        elif isinstance(page, TemplatesTab) and page.current_id:
+            action = ("Далее: отчеты →", 6)
+        self._next_page = action[1] if action else None
+        self.page_header.next_button.setVisible(action is not None)
+        if action:
+            self.page_header.next_button.setText(action[0])
+
     def navigate(self, index: int):
         if not 0 <= index < self.tabs.count():
             return
@@ -2963,6 +3023,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Не удалось сохранить изменения: {exc}", 12000)
             self.sidebar.select(self._last_tab)
             return
+        self._remember_company_context(previous)
         self.tabs.setCurrentIndex(index)
 
     def on_tab_changed(self, index: int):
@@ -2981,6 +3042,7 @@ class MainWindow(QMainWindow):
                 current.refresh()
             except Exception as exc:
                 self.statusBar().showMessage(f"Не удалось обновить вкладку: {exc}", 8000)
+        self._apply_company_context(current)
         self.refresh_context()
         if isinstance(current, ReportsTab) and current.current_id and not current._dirty_report:
             self.set_save_status("saved")
@@ -2992,6 +3054,16 @@ class MainWindow(QMainWindow):
             context, guidance = describe_context(current, self)
             self.page_header.set_context(context)
             self.page_header.guide.setText(guidance)
+            display_cid = current.current_id if isinstance(current, CompaniesTab) else self._active_company_id
+            if isinstance(current, HousesTab):
+                display_cid = current.company_filter.currentData()
+            elif isinstance(current, ReportsTab):
+                display_cid = current.company_filter.currentData()
+            elif isinstance(current, MassApplyTab):
+                display_cid = current.company.currentData()
+            company = db.row("SELECT name FROM companies WHERE id=?", (display_cid,)) if display_cid else None
+            self.sidebar.set_company_name(str(company["name"]) if company else "")
+            self._update_next_action(current)
         except (AttributeError, RuntimeError):
             self.page_header.set_context("Рабочий контекст")
 
