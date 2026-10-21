@@ -51,7 +51,7 @@ from .mass_apply_logic import (ACTION_TEXT as MASS_ACTION_TEXT, OutdatedPreview 
                                build_plan as build_mass_plan, apply_plan as apply_mass_plan)
 from .ui_components import ActionPanel, ContentCard, action_panel, describe_context, table_card
 
-APP_TITLE = "Отчетность УК по приказу 728/пр — V1.6.5 REPORT WORKFLOW"
+APP_TITLE = "Отчетность УК по приказу № 728/пр"
 
 
 def selectable_label(text: str = "") -> QLabel:
@@ -550,8 +550,8 @@ class CompaniesTab(BaseTab):
         self._remember_form_state()
 
     def add_company(self):
-        if self.current_id:
-            self.save()
+        if self.current_id and self.save() is False:
+            return
         cid = db.execute("INSERT INTO companies(name) VALUES(?)", ("Новая управляющая организация",))
         self.current_id = cid
         self.refresh()
@@ -777,8 +777,8 @@ class HousesTab(BaseTab):
         self._remember_form_state()
 
     def add_house(self):
-        if self.current_id:
-            self.save()
+        if self.current_id and self.save() is False:
+            return
         cid = self.company_filter.currentData()
         if not cid:
             self.msg("Выберите управляющую организацию, затем нажмите «Добавить дом».")
@@ -945,8 +945,8 @@ class CategoriesTab(BaseTab):
         self._remember_form_state()
 
     def add_category(self):
-        if self.current_id:
-            self.save()
+        if self.current_id and self.save() is False:
+            return
         cid = db.execute(
             "INSERT INTO work_categories(name, section, unit) VALUES(?,?,?)",
             ("Новая категория", "", ""),
@@ -1047,8 +1047,20 @@ class WorksTab(BaseTab):
         self.table.setItemDelegateForColumn(2, EditableComboDelegate(lambda: self.subcategory_names(), self.table))
         self.table.setItemDelegateForColumn(4, EditableComboDelegate(lambda: distinct_texts("work_items", "category", COMMON_SECTIONS), self.table))
         self.table.setItemDelegateForColumn(5, EditableComboDelegate(lambda: distinct_texts("work_items", "unit", COMMON_UNITS), self.table))
+        self.form_widgets = [self.table]
+        self._initial_work_rows = {}
         entries = table_card("2. Справочник работ и услуг", self.table,
             subtitle="Заполните раздел формы, наименование, единицу измерения и цену.")
+        search_row = QHBoxLayout()
+        self.work_search = QLineEdit()
+        self.work_search.setPlaceholderText("Поиск по названию, категории, разделу или единице…")
+        self.work_search.setClearButtonEnabled(True)
+        self.work_search.textChanged.connect(self.filter_rows)
+        search_row.addWidget(self.work_search, 1)
+        self.work_match_count = QLabel("Показано: 0")
+        self.work_match_count.setObjectName("CardSubtitle")
+        search_row.addWidget(self.work_match_count)
+        entries.body.insertLayout(2, search_row)
         self.add_manual_button = QPushButton("Добавить работу вручную")
         self.add_manual_button.clicked.connect(self.add_row)
         entries.add_widget(action_panel("Добавление строки", self.add_manual_button,
@@ -1100,6 +1112,19 @@ class WorksTab(BaseTab):
         self.reload_category_combo()
         self.refresh()
 
+    def filter_rows(self, *_args):
+        query = self.work_search.text().strip().casefold()
+        shown = 0
+        for row in range(self.table.rowCount()):
+            searchable = " ".join(self.table.value(row, col) for col in range(1, 8)).casefold()
+            matches = not query or query in searchable
+            self.table.setRowHidden(row, not matches)
+            shown += int(matches)
+        self.work_match_count.setText(f"Показано: {shown} из {self.table.rowCount()}")
+
+    def _row_signature(self, row):
+        return tuple(self.table.value(row, col) for col in range(1, 8))
+
     def refresh(self):
         self.table.setRowCount(0)
         for r in db.rows("SELECT * FROM work_items WHERE is_active=1 ORDER BY group_name, subgroup_name, category, name"):
@@ -1108,11 +1133,21 @@ class WorksTab(BaseTab):
             for col, val in enumerate(vals):
                 self.table.set_value(row, col, val)
         self.table.resizeColumnsToContents()
+        self._initial_work_rows = {
+            self.table.value(row, 0): self._row_signature(row)
+            for row in range(self.table.rowCount())
+        }
+        self._remember_form_state()
+        self.filter_rows()
 
     def add_row(self):
+        self.work_search.clear()
         row = self.table.rowCount(); self.table.insertRow(row)
         for c, val in enumerate(["", "", "", "Новая работа", "", "усл.", "0", ""]):
             self.table.set_value(row, c, val)
+        self.table.setCurrentCell(row, 3)
+        self.table.scrollToBottom()
+        self.filter_rows()
 
     def add_from_category(self):
         cid = self.category_combo.currentData()
@@ -1127,14 +1162,23 @@ class WorksTab(BaseTab):
         group_name = cat["name"] if cat else ""
         subgroup_name = sub["name"] if sub else ""
         name = subgroup_name or group_name or "Новая работа"
+        self.work_search.clear()
         row = self.table.rowCount(); self.table.insertRow(row)
         vals = ["", group_name, subgroup_name, name, source["section"], source["unit"], source["default_price"], source["notes"]]
         for c, val in enumerate(vals): self.table.set_value(row, c, val)
+        self.table.setCurrentCell(row, 3)
+        self.table.scrollToBottom()
+        self.filter_rows()
 
     def save(self):
-        # A row without an official section can never be used reliably in
-        # templates, bulk application or appendix 2. Reject it before writing.
+        # Navigation and timed backups should not rewrite an untouched
+        # directory or block users because of incomplete legacy records.
+        if self._form_signature() == getattr(self, "_form_snapshot", None):
+            return True
         for index in range(self.table.rowCount()):
+            existing = self.table.value(index, 0)
+            if existing and self._initial_work_rows.get(existing) == self._row_signature(index):
+                continue  # Preserve unchanged legacy work, including missing section.
             name = self.table.value(index, 3)
             section = self.table.value(index, 4)
             if not name or normalize_section(section, "") not in COMMON_SECTIONS:
@@ -1144,6 +1188,14 @@ class WorksTab(BaseTab):
                     "(Содержание, Текущий ремонт или Управление).",
                 )
                 return False
+        visible_ids = {
+            int(self.table.value(row, 0))
+            for row in range(self.table.rowCount()) if self.table.value(row, 0)
+        }
+        active_ids_before = {int(row["id"]) for row in db.rows("SELECT id FROM work_items WHERE is_active=1")}
+        if active_ids_before - visible_ids:
+            if make_backup("before_work_deletion") is None:
+                raise RuntimeError("Не удалось создать резервную копию справочника перед удалением.")
         with connect() as conn:
             active_ids: list[int] = []
             for r in range(self.table.rowCount()):
@@ -1305,8 +1357,8 @@ class TemplatesTab(BaseTab):
         self._remember_form_state()
 
     def add_template(self):
-        if self.current_id:
-            self.save()
+        if self.current_id and self.save() is False:
+            return
         tid = db.execute("INSERT INTO templates(name, category) VALUES(?,?)", ("Новый шаблон", "Содержание"))
         self.current_id = tid; self.refresh()
         for i in range(self.list.count()):
