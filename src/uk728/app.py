@@ -1820,7 +1820,11 @@ class ReportsTab(BaseTab):
             return None
 
     def reload_filters(self):
-        fill_combo(self.company_filter, "SELECT id, name FROM companies ORDER BY name", empty="Все организации")
+        fill_combo(self.company_filter, "SELECT id, name FROM companies ORDER BY name", empty="Выберите организацию")
+        # A single UO needs no extra selection; never silently choose
+        # the first of several organizations.
+        if self.company_filter.count() == 2 and self.company_filter.currentData() is None:
+            self.company_filter.setCurrentIndex(1)
         self.reload_houses_filter(refresh=False)
         self.reload_template_combo()
         self.refresh()
@@ -1835,14 +1839,16 @@ class ReportsTab(BaseTab):
         old_text = self.house_filter.currentText()
         cid = self.company_filter.currentData()
         self.house_filter.blockSignals(True)
-        self.house_filter.clear(); self.house_filter.addItem("Все дома", None)
-        if cid:
-            data = db.rows("SELECT id, address AS name FROM houses WHERE company_id=? ORDER BY address", (cid,))
-        else:
-            data = db.rows("SELECT id, address AS name FROM houses ORDER BY address")
+        self.house_filter.clear(); self.house_filter.addItem("Выберите дом", None)
+        data = db.rows(
+            "SELECT id, address AS name FROM houses WHERE company_id=? ORDER BY address",
+            (cid,),
+        ) if cid is not None else []
         for r in data:
             self.house_filter.addItem(r["name"], r["id"])
         restore_combo_selection(self.house_filter, old_data, old_text)
+        if len(data) == 1 and self.house_filter.currentData() is None:
+            self.house_filter.setCurrentIndex(1)
         self.house_filter.blockSignals(False)
         if refresh:
             self.refresh()
@@ -1881,10 +1887,16 @@ class ReportsTab(BaseTab):
         self.list.clear()
         params = [self.year_filter.value()]
         sql = "SELECT r.*, h.address FROM reports r LEFT JOIN houses h ON h.id=r.house_id WHERE r.year=?"
-        if self.company_filter.currentData():
-            sql += " AND r.company_id=?"; params.append(self.company_filter.currentData())
-        if self.house_filter.currentData():
-            sql += " AND r.house_id=?"; params.append(self.house_filter.currentData())
+        # A report must not appear until the user has a specific UO
+        # and a specific house. Avoid opening the first report in a global list.
+        if self.company_filter.currentData() is None or self.house_filter.currentData() is None:
+            self.list.blockSignals(False)
+            self.current_id = None
+            self._invalidate_review()
+            self._update_report_actions()
+            return
+        sql += " AND r.company_id=? AND r.house_id=?"
+        params.extend((self.company_filter.currentData(), self.house_filter.currentData()))
         sql += " ORDER BY h.address, r.period_start"
         select_row = -1
         for r in db.rows(sql, tuple(params)):
@@ -2606,7 +2618,8 @@ class MassApplyTab(BaseTab):
                 )
                 item.setData(Qt.UserRole, hid)
                 item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-                item.setCheckState(Qt.Checked if (hid in checked or not same_company) else Qt.Unchecked)
+                # Never silently select every house when switching UO.
+                item.setCheckState(Qt.Checked if (same_company and hid in checked) else Qt.Unchecked)
                 self.house_list.addItem(item)
         self.house_list.blockSignals(False)
         self._target_company_id = cid
