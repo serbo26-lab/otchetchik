@@ -52,6 +52,9 @@ class MassWorkflowTests(TestCase):
         self.ui = self.window.mass_tab
         self.ui.reload()
         self.ui.company.setCurrentIndex(self.ui.company.findData(self.company_id))
+        # Changing UO no longer checks every house automatically.
+        self.assertEqual(self.ui.selected_house_ids(), [])
+        self.ui._check_all(True)
         self.ui.work.setCurrentIndex(self.ui.work.findData(self.work_id))
         self.ui.year.setValue(2025)
         self.ui.create_missing.setChecked(True)
@@ -85,6 +88,7 @@ class MassWorkflowTests(TestCase):
         self.assertEqual(set(self.ui.selected_house_ids()), {self.house_1, self.house_2})
         self.assertNotIn(self.house_archive, self.ui.selected_house_ids())
         self.ui._check_all(False)
+        self.assertEqual(self.ui.selected_house_ids(), [])
         self.ui.rate.setText("3")
         self.ui.preview()
         self.assertTrue(self.ui._preview_dirty)
