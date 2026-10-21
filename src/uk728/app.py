@@ -2561,6 +2561,8 @@ class MassApplyTab(BaseTab):
         self.house_list.setMaximumHeight(170)
         self.house_list.itemChanged.connect(self.mark_dirty)
         targets.add_widget(self.house_list)
+        self.selected_house_count = selectable_label("Выбрано домов: 0")
+        targets.add_widget(self.selected_house_count)
         select_all = QPushButton("Выбрать все")
         select_all.clicked.connect(lambda: self._check_all(True))
         clear_all = QPushButton("Снять выделение")
@@ -2685,6 +2687,10 @@ class MassApplyTab(BaseTab):
     def mark_dirty(self, *_):
         self._preview_dirty = True
         self._preview_plan = None
+        if hasattr(self, "selected_house_count"):
+            self.selected_house_count.setText(
+                f"Выбрано домов: {len(self.selected_house_ids())} из {self.house_list.count()}"
+            )
         self.apply_button.setEnabled(False)
         self.table.setRowCount(0)
         self.summary.clear()
