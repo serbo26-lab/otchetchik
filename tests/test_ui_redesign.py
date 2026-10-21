@@ -177,6 +177,7 @@ class ShellTests(unittest.TestCase):
         page.add_category()
         cid = page.current_id
         page.name.setText("Содержание")
+        page.section.setCurrentText("Содержание")
         page.add_subcategory()
         page.save(refresh_after=False)
         page.save(refresh_after=False)
