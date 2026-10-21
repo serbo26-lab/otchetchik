@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import traceback
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, QEvent, QUrl, QSettings
@@ -51,7 +52,7 @@ from .mass_apply_logic import (ACTION_TEXT as MASS_ACTION_TEXT, OutdatedPreview 
                                build_plan as build_mass_plan, apply_plan as apply_mass_plan)
 from .ui_components import ActionPanel, ContentCard, action_panel, describe_context, table_card
 
-APP_TITLE = "Отчетность УК по приказу 728/пр — V1.6.5 REPORT WORKFLOW"
+APP_TITLE = "Отчетность УК по приказу № 728/пр"
 
 
 def selectable_label(text: str = "") -> QLabel:
@@ -74,6 +75,22 @@ COMMON_FILL_MODES = [
 ]
 COMMON_PAYER_TYPES = ["Собственники", "Наниматели"]
 COMMON_REPAIR_BASIS = ["Решение ОСС", "План текущего ремонта", "Акт осмотра", "Предписание", "Договор управления", "Заявка", "Иное"]
+
+
+def numeric_error(value: Any, label: str, *, whole: bool = False) -> str | None:
+    """Validate before to_float: invalid text must never silently become zero."""
+    raw = str(value or "").strip().replace("\xa0", "").replace(" ", "").replace(",", ".")
+    if not raw:
+        return None  # Blank is allowed; zero remains an explicit numeric value.
+    try:
+        amount = Decimal(raw)
+    except (InvalidOperation, ValueError):
+        return f"«{label}»: укажите число, например 1200 или 1 200,50."
+    if not amount.is_finite():
+        return f"«{label}»: некорректное числовое значение."
+    if whole and (amount < 0 or amount != amount.to_integral_value()):
+        return f"«{label}»: требуется целое неотрицательное количество."
+    return None
 
 
 def distinct_texts(table: str, column: str, extra: list[str] | None = None) -> list[str]:
@@ -170,6 +187,10 @@ class CopyPasteTable(QTableWidget):
         self.itemChanged.connect(self._sync_cell_tooltip)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._menu)
+        # A report row needs its own initializer and autosave after deletion.
+        # Keep generic behavior for standalone directories and editing tables.
+        self.context_add_handler = None
+        self.context_delete_handler = None
 
     def _sync_cell_tooltip(self, item):
         if item and item.toolTip() != item.text():
@@ -204,10 +225,16 @@ class CopyPasteTable(QTableWidget):
         act_paste.triggered.connect(self.paste_selection)
         menu.addAction(act_paste)
         act_add = QAction("Добавить строку", self)
-        act_add.triggered.connect(lambda: self.insertRow(self.rowCount()))
+        act_add.triggered.connect(
+            self.context_add_handler if self.context_add_handler is not None
+            else lambda: self.insertRow(self.rowCount())
+        )
         menu.addAction(act_add)
         act_del = QAction("Удалить выбранные строки", self)
-        act_del.triggered.connect(self.delete_selected_rows)
+        act_del.triggered.connect(
+            self.context_delete_handler if self.context_delete_handler is not None
+            else self.delete_selected_rows
+        )
         menu.addAction(act_del)
         menu.exec(self.viewport().mapToGlobal(pos))
 
@@ -294,6 +321,10 @@ class BaseTab(QWidget):
     def _remember_form_state(self):
         self._loaded_form_id = getattr(self, "current_id", None)
         self._form_snapshot = self._form_signature()
+
+    def has_unsaved_changes(self):
+        snapshot = getattr(self, "_form_snapshot", None)
+        return snapshot is not None and self._form_signature() != snapshot
 
     def _commit_form_before_load(self, new_id):
         """Persist the *previous* record before selection, refresh or reload replaces it."""
@@ -550,8 +581,8 @@ class CompaniesTab(BaseTab):
         self._remember_form_state()
 
     def add_company(self):
-        if self.current_id:
-            self.save()
+        if self.current_id and self.save() is False:
+            return
         cid = db.execute("INSERT INTO companies(name) VALUES(?)", ("Новая управляющая организация",))
         self.current_id = cid
         self.refresh()
@@ -777,8 +808,8 @@ class HousesTab(BaseTab):
         self._remember_form_state()
 
     def add_house(self):
-        if self.current_id:
-            self.save()
+        if self.current_id and self.save() is False:
+            return
         cid = self.company_filter.currentData()
         if not cid:
             self.msg("Выберите управляющую организацию, затем нажмите «Добавить дом».")
@@ -816,6 +847,10 @@ class HousesTab(BaseTab):
         if not self.current_id:
             self.msg("Сначала выберите или добавьте дом, затем заполните поля и сохраните.")
             return
+        problem = numeric_error(self.area.text(), "Площадь помещений")
+        if problem:
+            QMessageBox.warning(self, "Проверьте площадь", problem)
+            return False
         with connect() as conn:
             conn.execute(
                 "UPDATE houses SET company_id=?, address=?, total_area=?, management_start=?, management_end=?, status=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -879,6 +914,7 @@ class CategoriesTab(BaseTab):
         self.sub_table.setColumnHidden(0, True)
         self.sub_table.setItemDelegateForColumn(2, EditableComboDelegate(lambda: distinct_texts("work_categories", "section", ["Не выбрано", *COMMON_SECTIONS]), self.sub_table))
         self.sub_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("work_categories", "unit", ["Не выбрано", *COMMON_UNITS]), self.sub_table))
+        self.sub_table.context_add_handler = self.add_subcategory
         subcategories = table_card("3. Подкатегории", self.sub_table,
                                    subtitle="Сначала добавьте строку, затем заполните ее поля.")
         self.add_sub_button = QPushButton("Добавить подкатегорию")
@@ -889,8 +925,8 @@ class CategoriesTab(BaseTab):
         self.delete_sub_button.clicked.connect(self.sub_table.delete_selected_rows)
         self.save_button = QPushButton("Сохранить категорию и подкатегории")
         self.save_button.clicked.connect(self.save)
-        right_l.addWidget(action_panel("Удаление строк", self.delete_sub_button, purpose="danger"))
-        right_l.addWidget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
+        subcategories.add_widget(action_panel("Удаление строк", self.delete_sub_button, purpose="danger"))
+        subcategories.add_widget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
         self.form_widgets = [self.name, self.section, self.unit, self.price, self.notes, self.sub_table]
         splitter.addWidget(right)
         splitter.setSizes([300, 900])
@@ -945,8 +981,8 @@ class CategoriesTab(BaseTab):
         self._remember_form_state()
 
     def add_category(self):
-        if self.current_id:
-            self.save()
+        if self.current_id and self.save() is False:
+            return
         cid = db.execute(
             "INSERT INTO work_categories(name, section, unit) VALUES(?,?,?)",
             ("Новая категория", "", ""),
@@ -961,7 +997,13 @@ class CategoriesTab(BaseTab):
         if not self.current_id:
             return
         if QMessageBox.question(self, "Удалить?", "Удалить категорию и ее подкатегории? Справочник работ не будет удален.") == QMessageBox.Yes:
-            db.execute("UPDATE work_categories SET is_active=0 WHERE id=? OR parent_id=?", (self.current_id, self.current_id))
+            try:
+                if make_backup("before_category_deletion") is None:
+                    raise RuntimeError("Не удалось создать резервную копию.")
+                db.execute("UPDATE work_categories SET is_active=0 WHERE id=? OR parent_id=?", (self.current_id, self.current_id))
+            except Exception as exc:
+                QMessageBox.warning(self, "Удаление отменено", str(exc))
+                return
             self.current_id = None
             self.refresh(); self.sub_table.setRowCount(0); self.update_form_state()
 
@@ -979,8 +1021,33 @@ class CategoriesTab(BaseTab):
         if not self.current_id:
             self.msg("Нажмите «Добавить категорию», затем заполните поля и сохраните.")
             return
+        if not self.has_unsaved_changes():
+            return True
         section = "" if self.section.currentText() == "Не выбрано" else self.section.currentText()
         unit = "" if self.unit.currentText() == "Не выбрано" else self.unit.currentText()
+        if normalize_section(section, "") not in COMMON_SECTIONS:
+            QMessageBox.warning(self, "Раздел формы",
+                "Выберите раздел формы: Содержание, Текущий ремонт или Управление.")
+            return False
+        problem = numeric_error(self.price.text(), "Цена / ставка категории")
+        for index in range(self.sub_table.rowCount()):
+            problem = problem or numeric_error(
+                self.sub_table.value(index, 4), f"Цена подкатегории, строка {index + 1}"
+            )
+        if problem:
+            QMessageBox.warning(self, "Проверьте стоимость", problem)
+            return False
+        prior = {int(r["id"]) for r in db.rows(
+            "SELECT id FROM work_categories WHERE parent_id=? AND is_active=1", (self.current_id,)
+        )}
+        remaining = {
+            int(self.sub_table.value(row, 0))
+            for row in range(self.sub_table.rowCount())
+            if self.sub_table.value(row, 0) and self.sub_table.value(row, 1)
+        }
+        if prior - remaining:
+            if make_backup("before_subcategory_deletion") is None:
+                raise RuntimeError("Не удалось создать резервную копию перед удалением подкатегорий.")
         with connect() as conn:
             conn.execute(
                 "UPDATE work_categories SET name=?, section=?, unit=?, default_price=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -1047,8 +1114,21 @@ class WorksTab(BaseTab):
         self.table.setItemDelegateForColumn(2, EditableComboDelegate(lambda: self.subcategory_names(), self.table))
         self.table.setItemDelegateForColumn(4, EditableComboDelegate(lambda: distinct_texts("work_items", "category", COMMON_SECTIONS), self.table))
         self.table.setItemDelegateForColumn(5, EditableComboDelegate(lambda: distinct_texts("work_items", "unit", COMMON_UNITS), self.table))
+        self.table.context_add_handler = self.add_row
+        self.form_widgets = [self.table]
+        self._initial_work_rows = {}
         entries = table_card("2. Справочник работ и услуг", self.table,
             subtitle="Заполните раздел формы, наименование, единицу измерения и цену.")
+        search_row = QHBoxLayout()
+        self.work_search = QLineEdit()
+        self.work_search.setPlaceholderText("Поиск по названию, категории, разделу или единице…")
+        self.work_search.setClearButtonEnabled(True)
+        self.work_search.textChanged.connect(self.filter_rows)
+        search_row.addWidget(self.work_search, 1)
+        self.work_match_count = QLabel("Показано: 0")
+        self.work_match_count.setObjectName("CardSubtitle")
+        search_row.addWidget(self.work_match_count)
+        entries.body.insertLayout(2, search_row)
         self.add_manual_button = QPushButton("Добавить работу вручную")
         self.add_manual_button.clicked.connect(self.add_row)
         entries.add_widget(action_panel("Добавление строки", self.add_manual_button,
@@ -1058,8 +1138,8 @@ class WorksTab(BaseTab):
         delete.clicked.connect(self.table.delete_selected_rows)
         save = QPushButton("Сохранить справочник")
         save.clicked.connect(self.save)
-        root.addWidget(action_panel("Удаление строк", delete, purpose="danger"))
-        root.addWidget(action_panel("3. Сохранение справочника", save, primary=save))
+        entries.add_widget(action_panel("Удаление строк", delete, purpose="danger"))
+        entries.add_widget(action_panel("3. Сохранение справочника", save, primary=save))
         self.reload_category_combo()
         self.refresh()
 
@@ -1100,6 +1180,19 @@ class WorksTab(BaseTab):
         self.reload_category_combo()
         self.refresh()
 
+    def filter_rows(self, *_args):
+        query = self.work_search.text().strip().casefold()
+        shown = 0
+        for row in range(self.table.rowCount()):
+            searchable = " ".join(self.table.value(row, col) for col in range(1, 8)).casefold()
+            matches = not query or query in searchable
+            self.table.setRowHidden(row, not matches)
+            shown += int(matches)
+        self.work_match_count.setText(f"Показано: {shown} из {self.table.rowCount()}")
+
+    def _row_signature(self, row):
+        return tuple(self.table.value(row, col) for col in range(1, 8))
+
     def refresh(self):
         self.table.setRowCount(0)
         for r in db.rows("SELECT * FROM work_items WHERE is_active=1 ORDER BY group_name, subgroup_name, category, name"):
@@ -1108,11 +1201,21 @@ class WorksTab(BaseTab):
             for col, val in enumerate(vals):
                 self.table.set_value(row, col, val)
         self.table.resizeColumnsToContents()
+        self._initial_work_rows = {
+            self.table.value(row, 0): self._row_signature(row)
+            for row in range(self.table.rowCount())
+        }
+        self._remember_form_state()
+        self.filter_rows()
 
     def add_row(self):
+        self.work_search.clear()
         row = self.table.rowCount(); self.table.insertRow(row)
         for c, val in enumerate(["", "", "", "Новая работа", "", "усл.", "0", ""]):
             self.table.set_value(row, c, val)
+        self.table.setCurrentCell(row, 3)
+        self.table.scrollToBottom()
+        self.filter_rows()
 
     def add_from_category(self):
         cid = self.category_combo.currentData()
@@ -1127,14 +1230,23 @@ class WorksTab(BaseTab):
         group_name = cat["name"] if cat else ""
         subgroup_name = sub["name"] if sub else ""
         name = subgroup_name or group_name or "Новая работа"
+        self.work_search.clear()
         row = self.table.rowCount(); self.table.insertRow(row)
         vals = ["", group_name, subgroup_name, name, source["section"], source["unit"], source["default_price"], source["notes"]]
         for c, val in enumerate(vals): self.table.set_value(row, c, val)
+        self.table.setCurrentCell(row, 3)
+        self.table.scrollToBottom()
+        self.filter_rows()
 
     def save(self):
-        # A row without an official section can never be used reliably in
-        # templates, bulk application or appendix 2. Reject it before writing.
+        # Navigation and timed backups should not rewrite an untouched
+        # directory or block users because of incomplete legacy records.
+        if self._form_signature() == getattr(self, "_form_snapshot", None):
+            return True
         for index in range(self.table.rowCount()):
+            existing = self.table.value(index, 0)
+            if existing and self._initial_work_rows.get(existing) == self._row_signature(index):
+                continue  # Preserve unchanged legacy work, including missing section.
             name = self.table.value(index, 3)
             section = self.table.value(index, 4)
             if not name or normalize_section(section, "") not in COMMON_SECTIONS:
@@ -1144,6 +1256,18 @@ class WorksTab(BaseTab):
                     "(Содержание, Текущий ремонт или Управление).",
                 )
                 return False
+            problem = numeric_error(self.table.value(index, 6), f"Цена работы, строка {index + 1}")
+            if problem:
+                QMessageBox.warning(self, "Проверьте цену", problem)
+                return False
+        visible_ids = {
+            int(self.table.value(row, 0))
+            for row in range(self.table.rowCount()) if self.table.value(row, 0)
+        }
+        active_ids_before = {int(row["id"]) for row in db.rows("SELECT id FROM work_items WHERE is_active=1")}
+        if active_ids_before - visible_ids:
+            if make_backup("before_work_deletion") is None:
+                raise RuntimeError("Не удалось создать резервную копию справочника перед удалением.")
         with connect() as conn:
             active_ids: list[int] = []
             for r in range(self.table.rowCount()):
@@ -1220,14 +1344,16 @@ class TemplatesTab(BaseTab):
         self.table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование", "Ед. изм.", "Цена", "Кол-во по перечню"])
         self.table.setColumnHidden(0, True); self.table.setColumnHidden(1, True)
         self.table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("work_items", "unit", COMMON_UNITS), self.table))
-        right_l.addWidget(table_card("4. Состав шаблона", self.table,
-                             subtitle="Проверьте цену и количество в каждой строке."), 1)
+        self.table.context_add_handler = self.add_work_to_template
+        composition = table_card("4. Состав шаблона", self.table,
+                                 subtitle="Проверьте цену и количество в каждой строке.")
+        right_l.addWidget(composition, 1)
         self.remove_item_button = QPushButton("Удалить выбранные строки")
         self.remove_item_button.clicked.connect(self.table.delete_selected_rows)
         self.save_button = QPushButton("Сохранить шаблон")
         self.save_button.clicked.connect(self.save)
-        right_l.addWidget(action_panel("Удаление строк", self.remove_item_button, purpose="danger"))
-        right_l.addWidget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
+        composition.add_widget(action_panel("Удаление строк", self.remove_item_button, purpose="danger"))
+        composition.add_widget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
         splitter.addWidget(right)
         splitter.setSizes([280, 800])
         self.reload_work_combo()
@@ -1305,8 +1431,8 @@ class TemplatesTab(BaseTab):
         self._remember_form_state()
 
     def add_template(self):
-        if self.current_id:
-            self.save()
+        if self.current_id and self.save() is False:
+            return
         tid = db.execute("INSERT INTO templates(name, category) VALUES(?,?)", ("Новый шаблон", "Содержание"))
         self.current_id = tid; self.refresh()
         for i in range(self.list.count()):
@@ -1352,6 +1478,13 @@ class TemplatesTab(BaseTab):
             QMessageBox.warning(self, "Раздел шаблона", "Выберите официальный раздел формы.")
             return False
         for index in range(self.table.rowCount()):
+            for column, label in ((4, "Цена"), (5, "Количество")):
+                problem = numeric_error(
+                    self.table.value(index, column), f"{label} шаблона, строка {index + 1}"
+                )
+                if problem:
+                    QMessageBox.warning(self, "Проверьте числа", problem)
+                    return False
             wid = int(self.table.value(index, 1) or 0)
             if not wid:
                 continue  # Retained legacy row with no active work ID.
@@ -1488,6 +1621,12 @@ class ReportsTab(BaseTab):
         right_l.addWidget(selectable_label(
             "3. Заполнение разделов → 4. Проверка отчета → 5. Выгрузка документов"
         ))
+        self.report_empty_hint = selectable_label(
+            "Чтобы начать, выберите конкретную управляющую организацию, дом и год. "
+            "Затем откройте существующий отчет или создайте новый."
+        )
+        self.report_empty_hint.setObjectName("CardSubtitle")
+        right_l.addWidget(self.report_empty_hint)
         self.report_tabs = QTabWidget()
         right_l.addWidget(self.report_tabs, 1)
         self._build_general_tab()
@@ -1498,7 +1637,7 @@ class ReportsTab(BaseTab):
         self._build_export_tab()
         self.report_tabs.setEnabled(False)
         self.save_button = QPushButton("Сохранить отчет")
-        self.save_button.clicked.connect(self.save)
+        self.save_button.clicked.connect(self.save_manually)
         right_l.addWidget(action_panel("Сохранение выбранного отчета", self.save_button,
                                        primary=self.save_button))
         splitter.addWidget(right)
@@ -1510,6 +1649,16 @@ class ReportsTab(BaseTab):
     def _update_report_actions(self):
         has_report = bool(self.current_id)
         self.report_tabs.setEnabled(has_report)
+        self.report_tabs.setVisible(has_report)
+        self.report_empty_hint.setVisible(not has_report)
+        if not has_report:
+            if self.company_filter.currentData() is None:
+                instruction = "Сначала выберите управляющую организацию."
+            elif self.house_filter.currentData() is None:
+                instruction = "Выберите дом выбранной организации."
+            else:
+                instruction = "Выберите существующий отчет или создайте его за указанный год."
+            self.report_empty_hint.setText(instruction)
         self.save_button.setEnabled(has_report)
         self.delete_report_btn.setEnabled(has_report)
         self.create_report_btn.setEnabled(
@@ -1664,6 +1813,8 @@ class ReportsTab(BaseTab):
         self.content_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_content_items", "unit", distinct_texts("work_items", "unit", COMMON_UNITS)), self.content_table))
         self._content_recalc_lock = False
         self.content_table.itemChanged.connect(self.on_content_item_changed)
+        self.content_table.context_add_handler = lambda: self.add_content_row({})
+        self.content_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.content_table)
         layout.addWidget(table_card("Строки содержания", self.content_table))
         delete = QPushButton("Удалить выбранные строки")
         delete.clicked.connect(lambda: self._delete_selected_report_rows(self.content_table))
@@ -1701,6 +1852,8 @@ class ReportsTab(BaseTab):
         self.repair_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование работы", "Основание", "Стоимость", "Объем", "Акт/ссылка"])
         self.repair_table.setColumnHidden(0, True); self.repair_table.setColumnHidden(1, True)
         self.repair_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_repair_items", "basis", COMMON_REPAIR_BASIS), self.repair_table))
+        self.repair_table.context_add_handler = lambda: self.add_repair_row({})
+        self.repair_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.repair_table)
         layout.addWidget(table_card("Работы текущего ремонта", self.repair_table))
         delete = QPushButton("Удалить выбранные строки")
         delete.clicked.connect(lambda: self._delete_selected_report_rows(self.repair_table))
@@ -1749,6 +1902,8 @@ class ReportsTab(BaseTab):
         self.management_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_management_items", "unit", distinct_texts("work_items", "unit", COMMON_UNITS)), self.management_table))
         self._management_recalc_lock = False
         self.management_table.itemChanged.connect(self.on_management_item_changed)
+        self.management_table.context_add_handler = lambda: self.add_management_row({})
+        self.management_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.management_table)
         layout.addWidget(table_card("Внутренний расчет услуг управления", self.management_table))
         delete = QPushButton("Удалить выбранные строки")
         delete.clicked.connect(lambda: self._delete_selected_report_rows(self.management_table))
@@ -1775,6 +1930,14 @@ class ReportsTab(BaseTab):
         self.finance_table.setItemDelegateForColumn(1, EditableComboDelegate(lambda: distinct_texts("report_financials", "payer_type", COMMON_PAYER_TYPES), self.finance_table))
         self.finance_table.set_value(0, 1, "Собственники")
         self.finance_table.set_value(1, 1, "Наниматели")
+        # The official finance section has fixed payers; arbitrary insertion
+        # from the generic context menu would violate the payer layout.
+        self.finance_table.context_add_handler = lambda: self.msg(
+            "В разделе 5 предусмотрены строки для собственников и нанимателей."
+        )
+        self.finance_table.context_delete_handler = lambda: self.msg(
+            "Строки плательщиков не удаляются: при необходимости оставьте значения пустыми."
+        )
         layout.addWidget(table_card("5. Начисления и поступления", self.finance_table))
         self._next_report_action(layout, "Проверить и выгрузить отчет", 5)
         self.report_tabs.addTab(w, "4–5. Финансы")
@@ -2259,11 +2422,55 @@ class ReportsTab(BaseTab):
             added += 1
         self.msg(f"Шаблон применен. Раздел: {target_section}. Добавлено: {added}. Пропущено: {skipped}")
 
+    def validate_numeric_fields(self) -> None:
+        inputs = [
+            (self.management_cost.text(), "Стоимость управления"),
+            (self.repair_start.text(), "Остаток на начало текущего ремонта"),
+            (self.repair_accrual.text(), "Начисления на текущий ремонт"),
+            (self.repair_work_cost.text(), "Стоимость текущего ремонта"),
+            (self.repair_end.text(), "Остаток на конец текущего ремонта"),
+            (self.claim_amount.text(), "Сумма поступивших средств по претензиям"),
+        ]
+        for widget, label in ((self.claim_pret, "Количество претензий"),
+                              (self.claim_lawsuits, "Количество исков")):
+            problem = numeric_error(widget.text(), label, whole=True)
+            if problem:
+                raise ValueError(problem)
+        for value, label in inputs:
+            problem = numeric_error(value, label)
+            if problem:
+                raise ValueError(problem)
+        sections = (
+            (self.content_table, "Содержание", (4, 5, 6, 7, 8)),
+            (self.repair_table, "Текущий ремонт", (4,)),
+            (self.management_table, "Управление", (4, 5, 6)),
+            (self.finance_table, "Финансы", (2, 3, 4, 5)),
+        )
+        for table, section, columns in sections:
+            for row in range(table.rowCount()):
+                for column in columns:
+                    problem = numeric_error(
+                        table.value(row, column),
+                        f"{section}, строка {row + 1}, графа «{table.horizontalHeaderItem(column).text()}»",
+                    )
+                    if problem:
+                        raise ValueError(problem)
+
+    def save_manually(self):
+        try:
+            self.save()
+        except (ValueError, OSError) as exc:
+            win = self.window()
+            if hasattr(win, "set_save_status"):
+                win.set_save_status("error")
+            QMessageBox.warning(self, "Проверьте отчет", str(exc))
+
     def save(self, silent: bool = False, refresh_after: bool = True):
         if not self.current_id:
             if not silent:
                 self.msg("Сначала выберите или создайте отчет, затем заполните поля и сохраните.")
             return
+        self.validate_numeric_fields()
         rid = self.current_id
         self._saving_report = True
         win = self.window()
@@ -2807,6 +3014,10 @@ class MassApplyTab(BaseTab):
         if QMessageBox.question(self, "Подтверждение массового заполнения", message) != QMessageBox.Yes:
             return
         try:
+            # A backup taken after mass application cannot restore the
+            # previous values. Require a verified pre-change snapshot.
+            if make_backup("before_mass_apply") is None:
+                raise RuntimeError("Не удалось создать резервную копию перед записью.")
             with connect() as conn:
                 result = apply_mass_plan(conn, plan)
         except MassOutdatedPreview as exc:
@@ -2824,13 +3035,9 @@ class MassApplyTab(BaseTab):
             f'Выполнено: добавлено {result["insert"]}, обновлено {result["update"]}, '
             f'пропущено {result["skip"]}. Для повторной операции обновите предпросмотр.'
         )
-        try:
-            make_backup("mass_apply")
-        except Exception as exc:
-            self.msg(f"Данные записаны, но резервную копию создать не удалось: {exc}")
-            return
         self.msg(f'Массовое заполнение выполнено: добавлено {result["insert"]}, '
-                 f'обновлено {result["update"]}, пропущено {result["skip"]}.')
+                 f'обновлено {result["update"]}, пропущено {result["skip"]}. '
+                 'Резервная копия создана до записи.')
 
 class BackupsTab(BaseTab):
     def __init__(self):
@@ -3009,11 +3216,14 @@ class MainWindow(QMainWindow):
         if isinstance(page, CompaniesTab) and page.current_id:
             action = ("Далее: дома →", 1)
         elif isinstance(page, HousesTab) and page.current_id:
-            action = ("Далее: категории работ →", 2)
+            # Categories and templates are helpful but optional once the
+            # directory is populated. Do not force users to visit them.
+            has_works = db.row("SELECT id FROM work_items WHERE is_active=1 LIMIT 1")
+            action = ("Далее: отчеты →", 6) if has_works else ("Далее: справочник работ →", 3)
         elif isinstance(page, CategoriesTab) and page.current_id:
             action = ("Далее: справочник работ →", 3)
         elif isinstance(page, WorksTab) and page.table.rowCount():
-            action = ("Далее: шаблоны →", 4)
+            action = ("Далее: отчеты →", 6)
         elif isinstance(page, TemplatesTab) and page.current_id:
             action = ("Далее: отчеты →", 6)
         self._next_page = action[1] if action else None
@@ -3080,6 +3290,13 @@ class MainWindow(QMainWindow):
             company = db.row("SELECT name FROM companies WHERE id=?", (display_cid,)) if display_cid else None
             self.sidebar.set_company_name(str(company["name"]) if company else "")
             self._update_next_action(current)
+            if isinstance(current, BaseTab) and not isinstance(current, ReportsTab):
+                if current.has_unsaved_changes():
+                    if self.page_header.save_status.property("state") not in ("pending", "error"):
+                        self.set_save_status("pending")
+                elif (self._can_autosave_tab(current)
+                      and self.page_header.save_status.property("state") == "pending"):
+                    self.set_save_status("saved")
         except (AttributeError, RuntimeError):
             self.page_header.set_context("Рабочий контекст")
 
