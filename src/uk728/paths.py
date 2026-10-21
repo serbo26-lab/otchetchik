@@ -4,6 +4,7 @@ import os
 import re
 import sqlite3
 import sys
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -53,9 +54,12 @@ def make_backup(reason: str = "auto") -> Path | None:
     out = data_dir() / "backups" / f"reporting_728_{reason}_{stamp}.db"
     temporary = out.with_suffix(".tmp")
     try:
-        with sqlite3.connect(str(src), timeout=30) as source:
-            with sqlite3.connect(str(temporary), timeout=30) as destination:
+        # Close actual handles before renaming: Windows locks open SQLite files.
+        with closing(sqlite3.connect(str(src), timeout=30)) as source:
+            with closing(sqlite3.connect(str(temporary), timeout=30)) as destination:
                 source.backup(destination)
+                if destination.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    raise RuntimeError("Резервная копия SQLite не прошла проверку целостности.")
         os.replace(temporary, out)
     except Exception:
         temporary.unlink(missing_ok=True)
