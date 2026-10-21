@@ -629,6 +629,10 @@ class HousesTab(BaseTab):
 
         formw = QWidget(); form_l = QVBoxLayout(formw)
         self.company = ClickComboBox()
+        self.company.setToolTip(
+            "УО определяется выбранным домом. Изменение принадлежности дома "
+            "не выполняется через карточку, чтобы не потерять связи отчетов."
+        )
         self.address = QTextEdit(); self.address.setFixedHeight(70)
         self.area = QLineEdit()
         self.start = QLineEdit(); self.start.setPlaceholderText("дд.мм.гггг или оставить пустым")
@@ -677,6 +681,7 @@ class HousesTab(BaseTab):
     def update_form_state(self):
         has_record = self.current_id is not None
         set_widgets_enabled(self.form_widgets + [self.save_button], has_record)
+        self.company.setEnabled(False)  # belong to the house; never reassign implicitly
         self.delete_button.setEnabled(has_record)
         if not has_record:
             self._clear_form()
@@ -1932,7 +1937,12 @@ class ReportsTab(BaseTab):
         sql += " ORDER BY h.address, r.period_start"
         select_row = -1
         for r in db.rows(sql, tuple(params)):
-            item = QListWidgetItem(f"{r['address'] or 'Дом'} · {r['year']} · {r['status']}")
+            start = r["period_start"] or "начало не указано"
+            end = r["period_end"] or "конец не указан"
+            item = QListWidgetItem(
+                f"{r['address'] or 'Дом'} · {r['year']} · {start} — {end} · {r['status']}"
+            )
+            item.setToolTip(item.text())
             item.setData(Qt.UserRole, r["id"])
             self.list.addItem(item)
             if target_id is not None and r["id"] == target_id:
