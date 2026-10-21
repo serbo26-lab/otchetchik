@@ -246,10 +246,18 @@ class CopyPasteTable(QTableWidget):
                     continue
                 self.setItem(row, col, QTableWidgetItem(value))
 
-    def delete_selected_rows(self):
+    def delete_selected_rows(self, confirmed: bool = False):
         rows = sorted({i.row() for i in self.selectedIndexes()}, reverse=True)
+        if not rows:
+            return False
+        if not confirmed and QMessageBox.question(
+            self, "Удаление строк",
+            f"Удалить выбранные строки ({len(rows)})? Изменения будут сохранены при следующем сохранении формы.",
+        ) != QMessageBox.Yes:
+            return False
         for row in rows:
             self.removeRow(row)
+        return True
 
     def set_value(self, row: int, col: int, value: Any):
         text = "" if value is None else str(value)
@@ -553,8 +561,25 @@ class CompaniesTab(BaseTab):
     def delete_company(self):
         if not self.current_id:
             return
-        if QMessageBox.question(self, "Удалить?", "Удалить выбранную организацию? Дома и отчеты останутся, но привязка может быть очищена.") == QMessageBox.Yes:
-            db.execute("DELETE FROM companies WHERE id=?", (self.current_id,))
+        linked = db.row(
+            "SELECT (SELECT COUNT(*) FROM houses WHERE company_id=?) + "
+            "(SELECT COUNT(*) FROM reports WHERE company_id=?) AS total",
+            (self.current_id, self.current_id),
+        )
+        if linked and linked["total"]:
+            QMessageBox.warning(
+                self, "Удаление невозможно",
+                "У организации есть дома или отчеты. Сначала перенесите связанные объекты "
+                "в другую УО или удалите их отдельно. Связи не будут потеряны.",
+            )
+            return
+        if QMessageBox.question(self, "Удалить?", "Удалить выбранную организацию без связанных домов и отчетов?") == QMessageBox.Yes:
+            try:
+                make_backup("before_delete_company")
+                db.execute("DELETE FROM companies WHERE id=?", (self.current_id,))
+            except Exception as exc:
+                QMessageBox.warning(self, "Удаление отменено", f"Не удалось сохранить резервную копию или удалить УО: {exc}")
+                return
             self.current_id = None
             self.refresh()
             self.update_form_state()
@@ -762,8 +787,21 @@ class HousesTab(BaseTab):
     def delete_house(self):
         if not self.current_id:
             return
-        if QMessageBox.question(self, "Удалить?", "Удалить выбранный дом? Отчеты по нему также могут быть удалены.") == QMessageBox.Yes:
-            db.execute("DELETE FROM houses WHERE id=?", (self.current_id,))
+        linked = db.row("SELECT COUNT(*) AS total FROM reports WHERE house_id=?", (self.current_id,))
+        if linked and linked["total"]:
+            QMessageBox.warning(
+                self, "Удаление невозможно",
+                "У дома есть отчеты. Чтобы сохранить их привязку к дому, удаление запрещено. "
+                "Если дом выбыл из управления, установите соответствующий статус.",
+            )
+            return
+        if QMessageBox.question(self, "Удалить?", "Удалить выбранный дом без отчетов?") == QMessageBox.Yes:
+            try:
+                make_backup("before_delete_house")
+                db.execute("DELETE FROM houses WHERE id=?", (self.current_id,))
+            except Exception as exc:
+                QMessageBox.warning(self, "Удаление отменено", f"Не удалось сохранить резервную копию или удалить дом: {exc}")
+                return
             self.current_id = None
             self.refresh()
             self.update_form_state()
@@ -1259,7 +1297,12 @@ class TemplatesTab(BaseTab):
 
     def delete_template(self):
         if self.current_id and QMessageBox.question(self, "Удалить?", "Удалить шаблон?") == QMessageBox.Yes:
-            db.execute("DELETE FROM templates WHERE id=?", (self.current_id,))
+            try:
+                make_backup("before_delete_template")
+                db.execute("DELETE FROM templates WHERE id=?", (self.current_id,))
+            except Exception as exc:
+                QMessageBox.warning(self, "Удаление отменено", f"Не удалось сохранить резервную копию или удалить шаблон: {exc}")
+                return
             self.current_id = None; self.refresh(); self.table.setRowCount(0); self.update_form_state()
 
     def add_work_to_template(self):
@@ -1483,7 +1526,7 @@ class ReportsTab(BaseTab):
             self, "Удаление строк", f"Удалить из отчета выбранные строки ({count})?"
         ) != QMessageBox.Yes:
             return
-        table.delete_selected_rows()
+        table.delete_selected_rows(confirmed=True)
         self.schedule_autosave()
 
     def _connect_autosave_signals(self) -> None:
@@ -1905,8 +1948,9 @@ class ReportsTab(BaseTab):
         ) != QMessageBox.Yes:
             return
         try:
+            if make_backup("before_delete_report") is None:
+                raise RuntimeError("Резервная копия базы не создана.")
             db.execute("DELETE FROM reports WHERE id=?", (int(self.current_id),))
-            make_backup("delete_report")
             self.current_id = None
             self.refresh()
             self.msg("Отчет удален")
