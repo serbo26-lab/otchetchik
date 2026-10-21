@@ -65,6 +65,7 @@ QFrame#ActionPanel[compact="true"] { background: transparent; border: none; }
 QLabel#ActionPanelTitle { font-size: 9pt; font-weight: 600; color: @muted; }
 QLabel#CardTitle { font-size: 10pt; font-weight: 600; color: @text; }
 QLabel#CardSubtitle { font-size: 9pt; color: @muted; }
+QLabel#SelectedWorkLabel { font-size: 9pt; font-weight: 600; color: @accent; padding: 3px 1px; }
 QPushButton#QuietAction { background: transparent; border-color: @border; }
 QLabel#AppBrand { font-size: 13pt; font-weight: 700; }
 QLabel#PageTitle { font-size: 16pt; font-weight: 600; }
