@@ -21,6 +21,7 @@ class ActionPanel(QFrame):
         self.setObjectName("ActionPanel")
         self.setProperty("purpose", purpose)
         layout = QVBoxLayout(self)
+        self.body = layout
         layout.setContentsMargins(9, 7, 9, 8)
         layout.setSpacing(5)
         heading = QLabel(title)
