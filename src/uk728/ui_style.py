@@ -61,6 +61,7 @@ QFrame#Sidebar { background: @sidebar; border-right: 1px solid @border; }
 QFrame#ContentCard { background: @surface; border: 1px solid @border; border-radius: 7px; }
 QFrame#ActionPanel { background: @surface; border: 1px solid @border; border-radius: 6px; }
 QFrame#ActionPanel[purpose="danger"] { border-left: 2px solid @danger; }
+QFrame#ActionPanel[compact="true"] { background: transparent; border: none; }
 QLabel#ActionPanelTitle { font-size: 9pt; font-weight: 600; color: @muted; }
 QLabel#CardTitle { font-size: 10pt; font-weight: 600; color: @text; }
 QLabel#CardSubtitle { font-size: 9pt; color: @muted; }
