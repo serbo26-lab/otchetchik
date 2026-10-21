@@ -202,6 +202,59 @@ class WorkflowV168Tests(unittest.TestCase):
         self.window._update_next_action(page)
         self.assertEqual(self.window.page_header.next_button.text(), "Далее: отчеты →")
 
+    def test_invalid_report_numbers_cannot_be_written_as_zero(self):
+        cid, hid, _wid, rid = self.seed()
+        page = self.open_report(cid, hid)
+        page.management_cost.setText("12x")
+        with self.assertRaisesRegex(ValueError, "Стоимость управления"):
+            page.save(silent=True, refresh_after=False)
+        self.assertEqual(db.row("SELECT management_cost FROM reports WHERE id=?", (rid,))["management_cost"], 0)
+        page.management_cost.setText("1 234,50")
+        page.save(silent=True, refresh_after=False)
+        self.assertAlmostEqual(
+            db.row("SELECT management_cost FROM reports WHERE id=?", (rid,))["management_cost"], 1234.5
+        )
+
+    def test_claims_must_be_whole_nonnegative_counts(self):
+        cid, hid, _wid, _rid = self.seed()
+        page = self.open_report(cid, hid)
+        page.claim_pret.setText("1,5")
+        with self.assertRaisesRegex(ValueError, "Количество претензий"):
+            page.save(silent=True, refresh_after=False)
+        page.claim_pret.setText("-3")
+        with self.assertRaises(ValueError):
+            page.save(silent=True, refresh_after=False)
+        page.claim_pret.setText("3")
+        page.save(silent=True, refresh_after=False)
+
+    def test_invalid_financial_table_number_cannot_be_lost(self):
+        cid, hid, _wid, rid = self.seed()
+        page = self.open_report(cid, hid)
+        page.finance_table.set_value(0, 3, "1O0")
+        with self.assertRaisesRegex(ValueError, "Финансы"):
+            page.save(silent=True, refresh_after=False)
+        page.finance_table.set_value(0, 3, "100,25")
+        page.save(silent=True, refresh_after=False)
+        self.assertAlmostEqual(db.row(
+            "SELECT accrued FROM report_financials WHERE report_id=? AND payer_type=?",
+            (rid, "Собственники")
+        )["accrued"], 100.25)
+
+    def test_house_area_must_be_numeric(self):
+        cid, hid, _wid, _rid = self.seed()
+        house = self.window.houses_tab
+        house.reload()
+        house.company_filter.setCurrentIndex(house.company_filter.findData(cid))
+        self.assertEqual(house.current_id, hid)
+        house.area.setText("две тысячи")
+        with patch("src.uk728.app.QMessageBox.warning") as warning:
+            self.assertIs(house.save(refresh_after=False), False)
+            self.assertTrue(warning.called)
+        self.assertEqual(db.row("SELECT total_area FROM houses WHERE id=?", (hid,))["total_area"], 1400)
+        house.area.setText("2 345,5")
+        house.save(refresh_after=False)
+        self.assertEqual(db.row("SELECT total_area FROM houses WHERE id=?", (hid,))["total_area"], 2345.5)
+
 
 if __name__ == "__main__":
     unittest.main()
