@@ -47,6 +47,39 @@ class ExistingDataSafety(unittest.TestCase):
         )
         self.assertGreater(db.create_report(first, house, 2026), 0)
 
+    def test_review_surfaces_missing_official_header_fields(self):
+        from src.uk728.report_review import inspect_report
+        cid = db.execute("INSERT INTO companies(name) VALUES(?)", ("УК для проверки",))
+        hid = db.execute(
+            "INSERT INTO houses(company_id,address,total_area) VALUES(?,?,?)",
+            (cid, "г. Примерск, д. 9", 1200),
+        )
+        rid = db.create_report(cid, hid, 2026)
+        result = inspect_report(db.load_report_bundle(rid))
+        self.assertFalse(result["errors"])
+        combined = " ".join(result["warnings"])
+        for fragment in ("ОГРН", "адрес приёма", "ФИО", "контактные данные", "дата размещения"):
+            self.assertIn(fragment, combined)
+
+    def test_unknown_payer_is_never_silently_called_a_tenant(self):
+        from src.uk728.report_review import inspect_report
+        from src.uk728.exporters import _financial_rows
+        cid = db.execute("INSERT INTO companies(name) VALUES(?)", ("УК финансы",))
+        hid = db.execute(
+            "INSERT INTO houses(company_id,address) VALUES(?,?)",
+            (cid, "г. Примерск, д. 2"),
+        )
+        rid = db.create_report(cid, hid, 2026)
+        db.execute(
+            "INSERT INTO report_financials(report_id,payer_type,accrued) VALUES(?,?,?)",
+            (rid, "Неизвестный вид платежа", 150),
+        )
+        bundle = db.load_report_bundle(rid)
+        review = inspect_report(bundle)
+        self.assertTrue(any("неизвестный вид" in err for err in review["errors"]))
+        with self.assertRaisesRegex(ValueError, "неизвестный вид"):
+            _financial_rows(bundle)
+
     def test_reinitialize_existing_database_does_not_seed_samples(self):
         with db.connect() as conn:
             conn.execute("DELETE FROM templates")
