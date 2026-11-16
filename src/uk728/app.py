@@ -825,6 +825,14 @@ class HousesTab(BaseTab):
         self.form_widgets = [self.company, self.address, self.area, self.start, self.end, self.status, self.notes]
 
         official = ContentCard("3. Сведения о доме", "Площадь — сумма площадей жилых и нежилых помещений без общего имущества.")
+        self.source_note = selectable_label(
+            "Дом связан с базой ГИС ЖКХ Ассистента. Адрес и период управления "
+            "редактируются только там; статус и примечание — локально. "
+            "Если в Ассистенте отсутствуют площади помещений, площадь "
+            "можно дополнить здесь, не изменяя исходную базу."
+        )
+        self.source_note.setObjectName("CardSubtitle")
+        official.add_widget(self.source_note)
         official_form = QFormLayout()
         for label, widget in [("Управляющая организация", self.company),
                               ("Адрес дома", self.address),
@@ -874,9 +882,28 @@ class HousesTab(BaseTab):
 
     def update_form_state(self):
         has_record = self.current_id is not None
+        record = db.row(
+            "SELECT assistant_source_id,assistant_area_missing FROM houses WHERE id=?",
+            (self.current_id,),
+        ) if has_record else None
+        source_linked = bool(record and record["assistant_source_id"])
         set_widgets_enabled(self.form_widgets + [self.save_button], has_record)
         self.company.setEnabled(False)  # belong to the house; never reassign implicitly
-        self.delete_button.setEnabled(has_record)
+        if source_linked:
+            self.address.setEnabled(False)
+            self.start.setEnabled(False)
+            self.end.setEnabled(False)
+            self.area.setEnabled(bool(record["assistant_area_missing"]))
+            self.area.setToolTip(
+                "Площади жилых и нежилых помещений отсутствуют в Ассистенте. "
+                "Локальное значение сохранится только в Отчётчике."
+                if record["assistant_area_missing"] else
+                "Площадь вычислена по сведениям Ассистента. Изменяется там."
+            )
+        else:
+            self.area.setToolTip("")
+        self.source_note.setVisible(source_linked)
+        self.delete_button.setEnabled(has_record and not source_linked)
         if hasattr(self, "editor_stack"):
             self.editor_stack.setCurrentIndex(1 if has_record else 0)
             self.editor_stack.empty_add_button.setEnabled(
@@ -938,7 +965,13 @@ class HousesTab(BaseTab):
             result = []
         select_row = -1
         for r in result:
-            item = QListWidgetItem(f"{r['address'] or 'Без адреса'} · {money(r['total_area'])} м²")
+            source_tag = "Ассистент · " if r["assistant_source_id"] else ""
+            item = QListWidgetItem(
+                f"{source_tag}{r['address'] or 'Без адреса'} · "
+                f"{money(r['total_area'])} м²"
+            )
+            item.setToolTip("Источник: ГИС ЖКХ Ассистент (только чтение)"
+                            if r["assistant_source_id"] else "Локальный дом")
             item.setData(Qt.UserRole, r["id"])
             self.list.addItem(item)
             if target_id is not None and r["id"] == target_id:
@@ -992,6 +1025,10 @@ class HousesTab(BaseTab):
     def delete_house(self):
         if not self.current_id:
             return
+        if db.row("SELECT id FROM houses WHERE id=? AND assistant_source_id IS NOT NULL",
+                  (self.current_id,)):
+            self.msg("Связанный дом нельзя удалить из Отчётчика. Данные ведутся в Ассистенте.")
+            return
         linked = db.row("SELECT COUNT(*) AS total FROM reports WHERE house_id=?", (self.current_id,))
         if linked and linked["total"]:
             QMessageBox.warning(
@@ -1020,10 +1057,30 @@ class HousesTab(BaseTab):
             QMessageBox.warning(self, "Проверьте площадь", problem)
             return False
         with connect() as conn:
-            conn.execute(
-                "UPDATE houses SET company_id=?, address=?, total_area=?, management_start=?, management_end=?, status=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                (self.company.currentData(), self.address.toPlainText(), to_float(self.area.text()), self.start.text(), self.end.text(), self.status.currentText(), self.notes.toPlainText(), self.current_id),
-            )
+            source = conn.execute(
+                "SELECT assistant_source_id,assistant_area_missing "
+                "FROM houses WHERE id=?", (self.current_id,)
+            ).fetchone()
+            if source and source["assistant_source_id"]:
+                if source["assistant_area_missing"]:
+                    conn.execute(
+                        "UPDATE houses SET total_area=?,status=?,notes=?,"
+                        "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (to_float(self.area.text()), self.status.currentText(),
+                         self.notes.toPlainText(), self.current_id),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE houses SET status=?,notes=?,updated_at=CURRENT_TIMESTAMP "
+                        "WHERE id=?",
+                        (self.status.currentText(), self.notes.toPlainText(),
+                         self.current_id),
+                    )
+            else:
+                conn.execute(
+                    "UPDATE houses SET company_id=?, address=?, total_area=?, management_start=?, management_end=?, status=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (self.company.currentData(), self.address.toPlainText(), to_float(self.area.text()), self.start.text(), self.end.text(), self.status.currentText(), self.notes.toPlainText(), self.current_id),
+                )
             conn.commit()
         self._remember_form_state()
         self.msg("Дом сохранен")
