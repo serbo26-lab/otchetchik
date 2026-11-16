@@ -2932,8 +2932,11 @@ class MassApplyTab(BaseTab):
 
         root = QVBoxLayout(self)
         root.setSpacing(8)
-        top = QHBoxLayout()
-        top.setSpacing(9)
+        top = QGridLayout()
+        top.setHorizontalSpacing(9)
+        top.setVerticalSpacing(9)
+        top.setContentsMargins(0, 0, 0, 0)
+        self.top_layout = top
         root.addLayout(top)
 
         # Step 1. The work and reporting period.
@@ -2951,7 +2954,8 @@ class MassApplyTab(BaseTab):
         source.addRow(selectable_label("Работа / услуга"), self.work)
         polish_form(source, label_width=155)
         context.add_layout(source)
-        top.addWidget(context, 1)
+        self.source_card = context
+        top.addWidget(context, 0, 0)
 
         # Step 2. Only input controls required by the selected formula are shown.
         calculation = ContentCard("2. Как рассчитываем")
@@ -2982,7 +2986,10 @@ class MassApplyTab(BaseTab):
         self.help = selectable_label("")
         self.help.setObjectName("CardSubtitle")
         calculation.add_widget(self.help)
-        top.addWidget(calculation, 1)
+        self.calculation_card = calculation
+        top.addWidget(calculation, 0, 1)
+        top.setColumnStretch(0, 1)
+        top.setColumnStretch(1, 1)
 
         # Step 3. Explicitly choose which houses are eligible for the calculation.
         targets = ContentCard("3. Какие дома заполняем",
@@ -2992,12 +2999,20 @@ class MassApplyTab(BaseTab):
         self.house_list.setMaximumHeight(170)
         self.house_list.itemChanged.connect(self.mark_dirty)
         targets.add_widget(self.house_list)
+        self.no_houses_hint = selectable_label(
+            "Дома не найдены. Выберите управляющую организацию "
+            "и добавьте для неё хотя бы один действующий дом в разделе «Дома»."
+        )
+        self.no_houses_hint.setObjectName("CardSubtitle")
+        targets.add_widget(self.no_houses_hint)
         self.selected_house_count = selectable_label("Выбрано домов: 0")
         targets.add_widget(self.selected_house_count)
         select_all = QPushButton("Выбрать все")
         select_all.clicked.connect(lambda: self._check_all(True))
         clear_all = QPushButton("Снять выделение")
         clear_all.clicked.connect(lambda: self._check_all(False))
+        self.select_all_houses = select_all
+        self.clear_all_houses = clear_all
         targets.add_widget(action_panel("Выбор домов", select_all, clear_all))
 
         options = ActionFlowLayout(spacing=10)
@@ -3038,16 +3053,22 @@ class MassApplyTab(BaseTab):
         root.addWidget(review, 1)
 
         # Step 5. Recording is impossible without a fresh, actionable preview.
-        finish = QHBoxLayout()
+        finish = QGridLayout()
+        finish.setContentsMargins(0, 0, 0, 0)
+        finish.setHorizontalSpacing(8)
+        finish.setVerticalSpacing(6)
+        self.finish_layout = finish
         final_text = selectable_label(
             "5. Применение: записи добавляются только после проверки и подтверждения."
         )
-        finish.addWidget(final_text, 1)
+        self.finish_caption = final_text
+        finish.addWidget(final_text, 0, 0)
+        finish.setColumnStretch(0, 1)
         self.apply_button = QPushButton("Подтвердить и применить")
         self.apply_button.clicked.connect(self.apply)
         self.apply_button.setObjectName("PrimaryAction")
         self.apply_button.setEnabled(False)
-        finish.addWidget(self.apply_button)
+        finish.addWidget(self.apply_button, 0, 1)
         root.addLayout(finish)
 
         self.mode.currentIndexChanged.connect(self.update_mode_help)
@@ -3060,6 +3081,36 @@ class MassApplyTab(BaseTab):
             option.stateChanged.connect(self.mark_dirty)
         self.reload()
         self.update_mode_help()
+
+    def set_compact_layout(self, compact: bool):
+        """Stack calculation below source and keep apply action reachable."""
+        top = self.top_layout
+        top.removeWidget(self.source_card)
+        top.removeWidget(self.calculation_card)
+        if compact:
+            top.addWidget(self.source_card, 0, 0)
+            top.addWidget(self.calculation_card, 1, 0)
+            top.setColumnStretch(0, 1)
+            top.setColumnStretch(1, 0)
+        else:
+            top.addWidget(self.source_card, 0, 0)
+            top.addWidget(self.calculation_card, 0, 1)
+            top.setColumnStretch(0, 1)
+            top.setColumnStretch(1, 1)
+        finish = self.finish_layout
+        finish.removeWidget(self.finish_caption)
+        finish.removeWidget(self.apply_button)
+        if compact:
+            finish.addWidget(self.finish_caption, 0, 0, 1, 2)
+            finish.addWidget(self.apply_button, 1, 0)
+            finish.setColumnStretch(0, 0)
+            finish.setColumnStretch(1, 1)
+        else:
+            finish.addWidget(self.finish_caption, 0, 0)
+            finish.addWidget(self.apply_button, 0, 1)
+            finish.setColumnStretch(0, 1)
+            finish.setColumnStretch(1, 0)
+        self.updateGeometry()
 
     def _company_changed(self):
         self._load_target_houses()
@@ -3089,6 +3140,11 @@ class MassApplyTab(BaseTab):
                 item.setCheckState(Qt.Checked if (same_company and hid in checked) else Qt.Unchecked)
                 self.house_list.addItem(item)
         self.house_list.blockSignals(False)
+        has_houses = self.house_list.count() > 0
+        self.house_list.setVisible(has_houses)
+        self.no_houses_hint.setVisible(not has_houses)
+        self.select_all_houses.setEnabled(has_houses)
+        self.clear_all_houses.setEnabled(has_houses)
         self._target_company_id = cid
         self.mark_dirty()
 
