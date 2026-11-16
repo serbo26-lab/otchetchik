@@ -117,16 +117,14 @@ class ResponsiveWindowTests(unittest.TestCase):
             for field in form_widgets:
                 if field.__class__.__name__ == "ClickComboBox":
                     self.assertGreaterEqual(field.minimumWidth(), 150)
-        form = w.categories_tab.section.parentWidget().layout()
-        # QFormLayout has explicit wrap rules so short screens do not clip labels.
-        candidates = [
-            obj for obj in (form, w.categories_tab.findChildren(QFormLayout))
-            if isinstance(obj, QFormLayout)
-        ] if form else w.categories_tab.findChildren(QFormLayout)
-        self.assertTrue(any(
-            item.rowWrapPolicy() == QFormLayout.RowWrapPolicy.WrapLongRows
-            for item in candidates
-        ))
+        for form in (
+            w.categories_tab.editor_form,
+            w.mass_tab.source_form,
+            w.mass_tab.calculation_form,
+        ):
+            self.assertEqual(
+                form.rowWrapPolicy(), QFormLayout.RowWrapPolicy.WrapLongRows
+            )
 
     def test_navigating_resized_windows_does_not_lose_edits(self):
         w = self.window
