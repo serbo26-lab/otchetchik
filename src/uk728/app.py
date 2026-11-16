@@ -1090,7 +1090,8 @@ class CategoriesTab(BaseTab):
             row = self.sub_table.rowCount(); self.sub_table.insertRow(row)
             vals = [sub["id"], sub["name"], sub["section"], sub["unit"], sub["default_price"], sub["notes"]]
             for c, val in enumerate(vals): self.sub_table.set_value(row, c, val)
-        self.sub_table.resizeColumnsToContents()
+        # Keep adaptive column modes; resizeColumnsToContents() would
+        # shrink the stretched text columns back to their shortest values.
         self._remember_form_state()
 
     def add_category(self):
@@ -1316,7 +1317,7 @@ class WorksTab(BaseTab):
             vals = [r["id"], r["group_name"], r["subgroup_name"], r["name"], r["category"], r["unit"], r["default_price"], r["notes"]]
             for col, val in enumerate(vals):
                 self.table.set_value(row, col, val)
-        self.table.resizeColumnsToContents()
+        # Preserve the flexible widths configured at table creation.
         self._initial_work_rows = {
             self.table.value(row, 0): self._row_signature(row)
             for row in range(self.table.rowCount())
@@ -1557,7 +1558,7 @@ class TemplatesTab(BaseTab):
             row = self.table.rowCount(); self.table.insertRow(row)
             vals = [it["id"], it["work_item_id"] or "", it["name"], it["unit"], it["unit_price"], it["plan_qty"]]
             for c, val in enumerate(vals): self.table.set_value(row, c, val)
-        self.table.resizeColumnsToContents()
+        # Preserve the flexible widths configured at table creation.
         self._remember_form_state()
 
     def add_template(self):
@@ -3177,7 +3178,7 @@ class MassApplyTab(BaseTab):
             ]
             for column, value in enumerate(values):
                 self.table.set_value(position, column, value)
-        self.table.resizeColumnsToContents()
+        # Preserve the flexible widths configured at table creation.
         data = plan["summary"]
         self.summary.setText(
             f'Домов проверено: {len(plan["rows"])} · добавить: {data["insert"]} · '
