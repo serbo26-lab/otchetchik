@@ -76,21 +76,31 @@ def selectable_label(text: str = "") -> QLabel:
 
 
 def polish_form(form: QFormLayout, *, label_width: int = 165) -> None:
-    """Readable aligned form labels instead of narrow four-line captions."""
+    """Keep combobox fields wide and let form rows wrap on narrow screens."""
     form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
     form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
-    form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+    form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+    form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+    form.setHorizontalSpacing(12)
+    form.setVerticalSpacing(9)
     for row in range(form.rowCount()):
         entry = form.itemAt(row, QFormLayout.ItemRole.LabelRole)
         label = entry.widget() if entry is not None else None
-        if not isinstance(label, QLabel):
-            continue
-        title = label.text().strip()
-        label.setMinimumWidth(label_width)
-        label.setMaximumWidth(max(label_width + 70, 245))
-        label.setWordWrap(len(title) > 43)
-        label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        label.setToolTip(title)
+        if isinstance(label, QLabel):
+            title = label.text().strip()
+            label.setMinimumWidth(min(label_width, 165))
+            label.setMaximumWidth(max(label_width + 65, 245))
+            label.setWordWrap(len(title) > 43)
+            label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            label.setToolTip(title)
+        field_item = form.itemAt(row, QFormLayout.ItemRole.FieldRole)
+        field = field_item.widget() if field_item is not None else None
+        if isinstance(field, QComboBox):
+            field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            field.setMinimumWidth(160)
+            field.setMaximumWidth(16777215)
+        elif isinstance(field, QLineEdit):
+            field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
 
 def empty_record_editor(
@@ -173,6 +183,14 @@ class ClickComboBox(QComboBox):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setMinimumHeight(28)
+        self.setMinimumWidth(150)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(13)
+        self.currentTextChanged.connect(self._update_selected_tooltip)
+
+    def _update_selected_tooltip(self, value: str):
+        self.setToolTip(value or "Нажмите, чтобы выбрать значение")
 
     def setEditable(self, editable: bool) -> None:
         super().setEditable(editable)
@@ -556,6 +574,7 @@ class CompaniesTab(BaseTab):
         self.current_id: int | None = None
         root = QHBoxLayout(self)
         splitter = QSplitter()
+        self.splitter = splitter
         root.addWidget(splitter)
         left = QWidget()
         left_l = QVBoxLayout(left)
@@ -730,6 +749,7 @@ class HousesTab(BaseTab):
         self.current_id: int | None = None
         root = QHBoxLayout(self)
         splitter = QSplitter()
+        self.splitter = splitter
         root.addWidget(splitter)
         left = QWidget(); left_l = QVBoxLayout(left)
         organization = ContentCard("1. Управляющая организация")
@@ -983,7 +1003,7 @@ class CategoriesTab(BaseTab):
         super().__init__()
         self.current_id: int | None = None
         root = QHBoxLayout(self)
-        splitter = QSplitter(); root.addWidget(splitter)
+        splitter = QSplitter(); self.splitter = splitter; root.addWidget(splitter)
 
         left = QWidget(); left_l = QVBoxLayout(left)
         selection = ContentCard("1. Выберите категорию")
@@ -1419,7 +1439,7 @@ class TemplatesTab(BaseTab):
         super().__init__()
         self.current_id: int | None = None
         root = QHBoxLayout(self)
-        splitter = QSplitter(); root.addWidget(splitter)
+        splitter = QSplitter(); self.splitter = splitter; root.addWidget(splitter)
         left = QWidget(); left_l = QVBoxLayout(left)
         selection = ContentCard("1. Выберите шаблон", "Шаблон относится к одному разделу отчета.")
         self.list = QListWidget()
@@ -1721,7 +1741,7 @@ class ReportsTab(BaseTab):
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.timeout.connect(self._autosave_current_report)
         root = QHBoxLayout(self)
-        splitter = QSplitter(); root.addWidget(splitter)
+        splitter = QSplitter(); self.splitter = splitter; root.addWidget(splitter)
         left = QWidget(); left_l = QVBoxLayout(left)
         self.company_filter = ClickComboBox(); self.company_filter.currentIndexChanged.connect(lambda _i: self.reload_houses_filter())
         self.house_filter = ClickComboBox(); self.house_filter.currentIndexChanged.connect(self.refresh)
@@ -3447,6 +3467,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(APP_TITLE)
         self.resize(1320, 850)
+        self.setMinimumSize(860, 520)
         self.settings = QSettings("OtchetnostUK", "728")
         self._theme = str(self.settings.value("ui/theme", "light"))
         if self._theme not in ("light", "dark"):
@@ -3476,8 +3497,17 @@ class MainWindow(QMainWindow):
         self.page_header = PageChrome()
         workspace_layout.addWidget(self.page_header)
         self.tabs = QStackedWidget()
+        self.tabs.setMinimumSize(0, 0)
         workspace_layout.addWidget(self.tabs, 1)
-        root.addWidget(workspace, 1)
+        self.workspace_scroll = QScrollArea(self)
+        self.workspace_scroll.setObjectName("WorkspaceScroll")
+        self.workspace_scroll.setWidgetResizable(True)
+        self.workspace_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.workspace_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.workspace_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.workspace_scroll.setMinimumSize(0, 0)
+        self.workspace_scroll.setWidget(workspace)
+        root.addWidget(self.workspace_scroll, 1)
 
         # Preserve the existing screens, data bindings and per-section logic.
         self.company_tab = CompaniesTab()
@@ -3514,7 +3544,36 @@ class MainWindow(QMainWindow):
         self.context_timer.timeout.connect(self.refresh_context)
         self.context_timer.start(1500)
         self.refresh_context()
+        self._layout_compact = None
+        QTimer.singleShot(0, self._update_responsive_layout)
         self.statusBar().showMessage("Готово")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "mass_tab") and hasattr(self, "workspace_scroll"):
+            self._update_responsive_layout()
+
+    def _update_responsive_layout(self):
+        """Reflow two-column editors without discarding selected records."""
+        if not hasattr(self, "mass_tab"):
+            return
+        available = max(0, self.width() - self.sidebar.width() - 24)
+        compact = available < 880
+        if compact == getattr(self, "_layout_compact", None):
+            return
+        self._layout_compact = compact
+        for tab in (
+            self.company_tab, self.houses_tab, self.categories_tab,
+            self.templates_tab, self.reports_tab,
+        ):
+            splitter = tab.splitter
+            target = Qt.Orientation.Vertical if compact else Qt.Orientation.Horizontal
+            if splitter.orientation() != target:
+                splitter.setOrientation(target)
+                splitter.setSizes([230, 720] if compact else [325, 1050])
+        self.mass_tab.set_compact_layout(compact)
+        self.page_header.set_compact_layout(compact)
+        self.tabs.updateGeometry()
 
     def _decorate_buttons(self):
         """Do not override roles assigned by the actual action groups."""
