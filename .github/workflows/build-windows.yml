@@ -70,10 +70,22 @@ jobs:
           # This also identifies the exact module responsible for a modal
           # dialog or layout deadlock instead of blocking all test output.
           $files = @(Get-ChildItem tests -Filter 'test_*.py' -File | Sort-Object Name)
+          $python = (Get-Command python -CommandType Application | Select-Object -First 1).Source
           foreach ($file in $files) {
             Write-Host "=== UI regression: $($file.Name) ==="
-            python -m scripts.run_ui_tests --pattern $file.Name --timeout 90
-            if ($LASTEXITCODE -ne 0) { throw "UI tests failed in $($file.Name)." }
+            $stdout = Join-Path $env:RUNNER_TEMP "$($file.BaseName).stdout.log"
+            $stderr = Join-Path $env:RUNNER_TEMP "$($file.BaseName).stderr.log"
+            $process = Start-Process -FilePath $python -NoNewWindow -PassThru -ArgumentList @('-m', 'scripts.run_ui_tests', '--pattern', $file.Name, '--timeout', '90') -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $finished = $process.WaitForExit(95000)
+            if (-not $finished) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+            if (Test-Path $stdout) { Get-Content $stdout }
+            if (Test-Path $stderr) { Get-Content $stderr }
+            if (-not $finished) { throw "UI test module timed out: $($file.Name)" }
+            if ($process.ExitCode -ne 0) {
+              throw "UI tests failed in $($file.Name); exit=$($process.ExitCode)"
+            }
           }
 
       - name: Capture acceptance UI screenshots
