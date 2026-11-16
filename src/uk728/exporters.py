@@ -34,6 +34,11 @@ def _financial_rows(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
     for fin in bundle["financials"]:
         payer = fin.get("payer_type") or ""
+        if payer not in ("Собственники", "Наниматели"):
+            raise ValueError(
+                "Невозможно сформировать форму 728/пр: "
+                f"неизвестный вид плательщика «{payer}»."
+            )
         values = [to_float(fin.get(k)) for k in ("debt_start", "accrued", "paid", "debt_end")]
         if payer == "Наниматели" and all(abs(v) < 0.0001 for v in values) and not (fin.get("notes") or "").strip():
             continue

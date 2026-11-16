@@ -49,7 +49,7 @@ class ShellTests(unittest.TestCase):
         self.assertEqual(self.window.sidebar.scale_combo.count(), 1)
         self.window.set_scale(125)
         self.assertEqual(self.window._scale, 100)
-        self.assertEqual(self.window.sidebar.width(), 245)
+        self.assertEqual(self.window.sidebar.width(), 278)
         self.window.switch_theme()
 
     def test_data_folder_is_external_and_survives_page_changes(self):

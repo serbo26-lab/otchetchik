@@ -211,13 +211,21 @@ def init_db() -> None:
             if "unit" in cols:
                 conn.execute(f"UPDATE {table} SET unit='м²' WHERE unit='м2'")
                 conn.execute(f"UPDATE {table} SET unit='м³' WHERE unit='м3'")
-        # В рабочем справочнике оставляем только разделы официальной формы.
-        # Нестандартные старые значения не удаляются как строки, но очищаются как раздел.
-        cols = _table_columns(conn, "work_items")
-        if "category" in cols:
-            conn.execute("UPDATE work_items SET category='' WHERE TRIM(COALESCE(category,''))<>'' AND category NOT IN ('Содержание','Текущий ремонт','Управление')")
+        # Reopening an existing database must never erase legacy category
+        # labels or regenerate sample templates deleted by the user.
+        # The UI requires official sections only when the corresponding work
+        # is edited or selected for inclusion in the 728/pr report.
+        installed = conn.execute(
+            "SELECT value FROM app_meta WHERE key='schema_version'"
+        ).fetchone()
+        existing_records = any(
+            conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() is not None
+            for table in ("companies", "houses", "work_categories",
+                          "work_items", "templates", "reports")
+        )
+        if installed is None and not existing_records:
+            seed_defaults(conn)
         conn.execute("INSERT OR REPLACE INTO app_meta(key, value) VALUES('schema_version', ?)", (str(SCHEMA_VERSION),))
-        seed_defaults(conn)
         conn.commit()
 
 
@@ -295,6 +303,11 @@ def create_report_in_conn(conn: sqlite3.Connection, company_id: int, house_id: i
     создавать отчет, пока первая транзакция уже выполняет пакетную запись.
     Иначе SQLite на Windows может вернуть `database is locked`.
     """
+    owner = conn.execute(
+        "SELECT company_id FROM houses WHERE id=?", (house_id,)
+    ).fetchone()
+    if owner is None or owner["company_id"] != company_id:
+        raise ValueError("Дом не принадлежит выбранной управляющей организации.")
     default_start, default_end = full_year_period(year)
     p_start = period_start or default_start
     p_end = period_end or default_end

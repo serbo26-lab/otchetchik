@@ -42,6 +42,18 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
         errors.append("Не указано наименование управляющей организации.")
     if not str(house.get("address") or "").strip():
         errors.append("Не указан адрес многоквартирного дома.")
+    if _number(house.get("total_area")) <= 0:
+        warnings.append("Не заполнена общая площадь жилых и нежилых помещений МКД.")
+    for field, description in (
+        ("ogrn_inn", "ОГРН / ИНН управляющей организации"),
+        ("reception_address", "адрес приёма населения по вопросам отчёта"),
+        ("report_person", "ФИО и должность лица, дающего разъяснения"),
+        ("report_contact", "контактные данные лица, дающего разъяснения"),
+    ):
+        if not str(company.get(field) or "").strip():
+            warnings.append(f"Не заполнены сведения: {description}.")
+    if not str(report.get("publish_date") or "").strip():
+        warnings.append("Не заполнена дата размещения отчёта.")
     year = int(report.get("year") or 0)
     if not 2000 <= year <= 2100:
         errors.append("Некорректный отчетный год.")
@@ -77,6 +89,10 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
         if key == "financials" and not entries:
             warnings.append("Не заполнены строки начислений и поступлений.")
         for index, item in enumerate(entries, 1):
+            if key == "financials" and item.get("payer_type") not in ("Собственники", "Наниматели"):
+                errors.append(
+                    f"Начисления: строка {index} имеет неизвестный вид плательщика."
+                )
             if key in ("content", "repair", "management") and not str(item.get("name") or "").strip():
                 errors.append(f"{section}: строка {index} не имеет наименования.")
 

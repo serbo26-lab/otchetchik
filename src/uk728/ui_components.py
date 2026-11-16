@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+    QFrame, QHBoxLayout, QHeaderView, QLabel, QPushButton, QScrollArea,
     QTableWidget, QVBoxLayout, QWidget,
 )
 
@@ -85,6 +85,33 @@ class ContentCard(QFrame):
     def add_layout(self, layout):
         self.body.addLayout(layout)
         return layout
+
+
+def fit_table_columns(
+    table: QTableWidget, *,
+    flex: tuple[int, ...],
+    widths: dict[int, int],
+) -> None:
+    """Use the available viewport rather than leaving a half-empty table.
+
+    Fixed numeric columns remain legible; one or two text columns consume the
+    remaining width. Hidden database identifiers are never exposed.
+    """
+    header = table.horizontalHeader()
+    header.setStretchLastSection(False)
+    header.setMinimumSectionSize(72)
+    for column, width in widths.items():
+        if not table.isColumnHidden(column):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+            table.setColumnWidth(column, width)
+    for column in flex:
+        if not table.isColumnHidden(column):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
+    table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    table.setToolTip(
+        "Ширину столбцов можно менять перетаскиванием границы заголовка. "
+        "Полный текст ячейки отображается при наведении."
+    )
 
 
 def table_card(title: str, table: QTableWidget, *, subtitle: str = "") -> ContentCard:

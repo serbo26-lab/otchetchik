@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFormLayout,
+    QSizePolicy,
     QGridLayout,
     QGroupBox,
     QFrame,
@@ -59,7 +60,7 @@ from .mass_apply_logic import (ACTION_TEXT as MASS_ACTION_TEXT, OutdatedPreview 
                                build_plan as build_mass_plan, apply_plan as apply_mass_plan)
 from .ui_components import (
     ActionPanel, ContentCard, action_panel, describe_context,
-    table_card, table_card_with_selection,
+    table_card, table_card_with_selection, fit_table_columns,
 )
 
 APP_TITLE = "Отчетность УК по приказу № 728/пр"
@@ -72,6 +73,49 @@ def selectable_label(text: str = "") -> QLabel:
     return label
 
 
+
+
+def polish_form(form: QFormLayout, *, label_width: int = 165) -> None:
+    """Readable aligned form labels instead of narrow four-line captions."""
+    form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+    form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+    for row in range(form.rowCount()):
+        entry = form.itemAt(row, QFormLayout.ItemRole.LabelRole)
+        label = entry.widget() if entry is not None else None
+        if not isinstance(label, QLabel):
+            continue
+        title = label.text().strip()
+        label.setMinimumWidth(label_width)
+        label.setMaximumWidth(max(label_width + 70, 245))
+        label.setWordWrap(len(title) > 43)
+        label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        label.setToolTip(title)
+
+
+def empty_record_editor(
+    form_widget: QWidget,
+    title: str,
+    description: str,
+    add_handler,
+    button_title: str = "Добавить запись",
+) -> QStackedWidget:
+    """Replace a wall of disabled controls by one explicit first action."""
+    stack = QStackedWidget()
+    empty = QWidget()
+    column = QVBoxLayout(empty)
+    card = ContentCard(title, description)
+    button = QPushButton(button_title)
+    button.setObjectName("PrimaryAction")
+    button.clicked.connect(add_handler)
+    card.add_widget(button)
+    column.addWidget(card)
+    column.addStretch(1)
+    stack.addWidget(empty)
+    stack.addWidget(form_scroll(form_widget))
+    stack.setCurrentIndex(0)
+    stack.empty_add_button = button
+    return stack
 
 
 COMMON_SECTIONS = ["Содержание", "Текущий ремонт", "Управление"]
@@ -155,6 +199,16 @@ class ClickComboBox(QComboBox):
         return super().eventFilter(obj, event)
 
 
+class SafeSpinBox(QSpinBox):
+    """Prevent accidental year changes while the user scrolls a form."""
+
+    def wheelEvent(self, event):
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
 class EditableComboDelegate(QStyledItemDelegate):
     """Редактор ячейки как выпадающий список, но без жесткого ограничения.
     Пользователь может выбрать старое значение или набрать любое новое.
@@ -201,6 +255,8 @@ class CopyPasteTable(QTableWidget):
         # Keep generic behavior for standalone directories and editing tables.
         self.context_add_handler = None
         self.context_delete_handler = None
+        self.allow_paste_append = False
+        self.protected_columns: set[int] = set()
 
     def _sync_cell_tooltip(self, item):
         if item and item.toolTip() != item.text():
@@ -269,17 +325,30 @@ class CopyPasteTable(QTableWidget):
         text = QGuiApplication.clipboard().text()
         if not text:
             return
+        lines = text.splitlines()
+        if len(lines) > 1000:
+            QMessageBox.warning(self, "Вставка таблицы",
+                                "За один раз можно вставить не более 1000 строк.")
+            return
         start_row = self.currentRow() if self.currentRow() >= 0 else 0
         start_col = self.currentColumn() if self.currentColumn() >= 0 else 0
-        for r, line in enumerate(text.splitlines()):
-            row = start_row + r
+        for offset, line in enumerate(lines):
+            row = start_row + offset
             if row >= self.rowCount():
-                self.insertRow(row)
-            for c, value in enumerate(line.split("\t")):
-                col = start_col + c
+                if not self.allow_paste_append:
+                    break  # Fixed legal tables cannot gain arbitrary payers.
+                before = self.rowCount()
+                if self.context_add_handler is not None:
+                    self.context_add_handler()  # Creates business metadata/defaults.
+                else:
+                    self.insertRow(self.rowCount())
+                if self.rowCount() <= before:
+                    break
+            for shift, value in enumerate(line.split("\t")):
+                col = start_col + shift
                 if col >= self.columnCount():
-                    continue
-                if self.isColumnHidden(col):
+                    break
+                if self.isColumnHidden(col) or col in self.protected_columns:
                     continue
                 self.setItem(row, col, QTableWidgetItem(value))
 
@@ -509,13 +578,16 @@ class CompaniesTab(BaseTab):
         self.ogrn = QLineEdit()
         self.addr = QTextEdit(); self.addr.setFixedHeight(70)
         self.person = QLineEdit()
+        self.person.setPlaceholderText("ФИО и должность уполномоченного лица")
         self.contact = QLineEdit()
+        self.contact.setPlaceholderText("Телефон и адрес электронной почты, при наличии")
         self.notes = QTextEdit(); self.notes.setFixedHeight(80)
         self.form_widgets = [self.name, self.ogrn, self.addr, self.person, self.contact, self.notes]
         basic = ContentCard("2. Основные сведения")
         basic_form = QFormLayout()
         basic_form.addRow(selectable_label("Полное наименование"), self.name)
         basic_form.addRow(selectable_label("ОГРН / ИНН"), self.ogrn)
+        polish_form(basic_form)
         basic.add_layout(basic_form)
         form_layout.addWidget(basic)
 
@@ -525,12 +597,14 @@ class CompaniesTab(BaseTab):
                               ("Кто дает разъяснения по отчету", self.person),
                               ("Телефон / email", self.contact)]:
             contact_form.addRow(selectable_label(title), widget)
+        polish_form(contact_form)
         report_contact.add_layout(contact_form)
         form_layout.addWidget(report_contact)
 
         extra = ContentCard("4. Примечания")
         extra_form = QFormLayout()
         extra_form.addRow(selectable_label("Примечание"), self.notes)
+        polish_form(extra_form)
         extra.add_layout(extra_form)
         form_layout.addWidget(extra)
 
@@ -538,8 +612,14 @@ class CompaniesTab(BaseTab):
         self.save_button.clicked.connect(self.save)
         form_layout.addWidget(action_panel("Сохранение сведений", self.save_button, primary=self.save_button))
         form_layout.addStretch()
-        splitter.addWidget(form_scroll(formw))
-        splitter.setSizes([260, 700])
+        self.editor_stack = empty_record_editor(
+            formw, "Управляющая организация не выбрана",
+            "Поля реквизитов откроются после создания или выбора УО слева.",
+            self.add_company, "Добавить организацию",
+        )
+        splitter.addWidget(self.editor_stack)
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([315, 1000])
         self.refresh()
         self.update_form_state()
 
@@ -550,6 +630,8 @@ class CompaniesTab(BaseTab):
         has_record = self.current_id is not None
         set_widgets_enabled(self.form_widgets + [self.save_button], has_record)
         self.delete_button.setEnabled(has_record)
+        if hasattr(self, "editor_stack"):
+            self.editor_stack.setCurrentIndex(1 if has_record else 0)
         if not has_record:
             self._clear_form()
 
@@ -688,6 +770,7 @@ class HousesTab(BaseTab):
                               ("Адрес дома", self.address),
                               ("Площадь помещений, м²", self.area)]:
             official_form.addRow(selectable_label(label), widget)
+        polish_form(official_form)
         official.add_layout(official_form)
         form_l.addWidget(official)
 
@@ -697,19 +780,29 @@ class HousesTab(BaseTab):
                               ("Дата прекращения управления", self.end),
                               ("Статус", self.status)]:
             management_form.addRow(selectable_label(label), widget)
+        polish_form(management_form)
         management.add_layout(management_form)
         form_l.addWidget(management)
 
         other = ContentCard("5. Дополнительно")
         extra_form = QFormLayout()
         extra_form.addRow(selectable_label("Примечание"), self.notes)
+        polish_form(extra_form)
         other.add_layout(extra_form)
         form_l.addWidget(other)
 
         self.save_button = QPushButton("Сохранить дом"); self.save_button.clicked.connect(self.save)
         form_l.addWidget(action_panel("Сохранение карточки", self.save_button, primary=self.save_button))
-        splitter.addWidget(form_scroll(formw))
-        splitter.setSizes([340, 700])
+        form_l.addStretch(1)
+        self.editor_stack = empty_record_editor(
+            formw, "Дом не выбран",
+            "Выберите управляющую организацию слева и добавьте дом. "
+            "После этого откроются адрес, площадь и период управления.",
+            self.add_house, "Добавить дом",
+        )
+        splitter.addWidget(self.editor_stack)
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([360, 1000])
         self.reload_companies()
         self.refresh()
         self.update_form_state()
@@ -724,6 +817,11 @@ class HousesTab(BaseTab):
         set_widgets_enabled(self.form_widgets + [self.save_button], has_record)
         self.company.setEnabled(False)  # belong to the house; never reassign implicitly
         self.delete_button.setEnabled(has_record)
+        if hasattr(self, "editor_stack"):
+            self.editor_stack.setCurrentIndex(1 if has_record else 0)
+            self.editor_stack.empty_add_button.setEnabled(
+                self.company_filter.currentData() is not None
+            )
         if not has_record:
             self._clear_form()
 
@@ -915,6 +1013,7 @@ class CategoriesTab(BaseTab):
         form.addRow(selectable_label("Единица измерения"), self.unit)
         form.addRow(selectable_label("Цена / ставка"), self.price)
         form.addRow(selectable_label("Примечание"), self.notes)
+        polish_form(form)
         details.add_layout(form)
         right_l.addWidget(details)
 
@@ -922,9 +1021,12 @@ class CategoriesTab(BaseTab):
         self.sub_table = CopyPasteTable(0, 6)
         self.sub_table.setHorizontalHeaderLabels(["ID", "Название подкатегории", "Раздел", "Ед. изм.", "Цена/ставка", "Примечание"])
         self.sub_table.setColumnHidden(0, True)
+        fit_table_columns(self.sub_table, flex=(1, 5),
+                          widths={2: 160, 3: 105, 4: 120})
         self.sub_table.setItemDelegateForColumn(2, EditableComboDelegate(lambda: distinct_texts("work_categories", "section", ["Не выбрано", *COMMON_SECTIONS]), self.sub_table))
         self.sub_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("work_categories", "unit", ["Не выбрано", *COMMON_UNITS]), self.sub_table))
         self.sub_table.context_add_handler = self.add_subcategory
+        self.sub_table.allow_paste_append = True
         subcategories = table_card("3. Подкатегории", self.sub_table,
                                    subtitle="Сначала добавьте строку, затем заполните ее поля.")
         self.add_sub_button = QPushButton("Добавить подкатегорию")
@@ -939,7 +1041,8 @@ class CategoriesTab(BaseTab):
         subcategories.add_widget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
         self.form_widgets = [self.name, self.section, self.unit, self.price, self.notes, self.sub_table]
         splitter.addWidget(right)
-        splitter.setSizes([300, 900])
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([330, 1100])
         self.refresh()
         self.update_form_state()
 
@@ -987,7 +1090,8 @@ class CategoriesTab(BaseTab):
             row = self.sub_table.rowCount(); self.sub_table.insertRow(row)
             vals = [sub["id"], sub["name"], sub["section"], sub["unit"], sub["default_price"], sub["notes"]]
             for c, val in enumerate(vals): self.sub_table.set_value(row, c, val)
-        self.sub_table.resizeColumnsToContents()
+        # Keep adaptive column modes; resizeColumnsToContents() would
+        # shrink the stretched text columns back to their shortest values.
         self._remember_form_state()
 
     def add_category(self):
@@ -1120,11 +1224,14 @@ class WorksTab(BaseTab):
         self.table = CopyPasteTable(0, 8)
         self.table.setHorizontalHeaderLabels(["ID", "Категория", "Подкатегория", "Наименование", "Раздел формы", "Ед. изм.", "Цена/ставка", "Примечание"])
         self.table.setColumnHidden(0, True)
+        fit_table_columns(self.table, flex=(1, 3, 7),
+                          widths={2: 180, 4: 145, 5: 100, 6: 125})
         self.table.setItemDelegateForColumn(1, EditableComboDelegate(lambda: self.category_names(), self.table))
         self.table.setItemDelegateForColumn(2, EditableComboDelegate(lambda: self.subcategory_names(), self.table))
         self.table.setItemDelegateForColumn(4, EditableComboDelegate(lambda: distinct_texts("work_items", "category", COMMON_SECTIONS), self.table))
         self.table.setItemDelegateForColumn(5, EditableComboDelegate(lambda: distinct_texts("work_items", "unit", COMMON_UNITS), self.table))
         self.table.context_add_handler = self.add_row
+        self.table.allow_paste_append = True
         self.form_widgets = [self.table]
         self._initial_work_rows = {}
         entries = table_card("2. Справочник работ и услуг", self.table,
@@ -1210,7 +1317,7 @@ class WorksTab(BaseTab):
             vals = [r["id"], r["group_name"], r["subgroup_name"], r["name"], r["category"], r["unit"], r["default_price"], r["notes"]]
             for col, val in enumerate(vals):
                 self.table.set_value(row, col, val)
-        self.table.resizeColumnsToContents()
+        # Preserve the flexible widths configured at table creation.
         self._initial_work_rows = {
             self.table.value(row, 0): self._row_signature(row)
             for row in range(self.table.rowCount())
@@ -1337,6 +1444,7 @@ class TemplatesTab(BaseTab):
         form.addRow(selectable_label("Раздел"), self.category)
         form.addRow(selectable_label("Примечание"), self.notes)
         self.form_widgets = [self.name, self.category, self.notes]
+        polish_form(form)
         details.add_layout(form)
         right_l.addWidget(details)
         source = ContentCard("3. Наполнение шаблона", "Список работ зависит от раздела шаблона.")
@@ -1353,6 +1461,8 @@ class TemplatesTab(BaseTab):
         self.table = CopyPasteTable(0, 6)
         self.table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование", "Ед. изм.", "Цена", "Кол-во по перечню"])
         self.table.setColumnHidden(0, True); self.table.setColumnHidden(1, True)
+        fit_table_columns(self.table, flex=(2,),
+                          widths={3: 110, 4: 120, 5: 145})
         self.table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("work_items", "unit", COMMON_UNITS), self.table))
         self.table.context_add_handler = self.add_work_to_template
         composition = table_card("4. Состав шаблона", self.table,
@@ -1364,8 +1474,15 @@ class TemplatesTab(BaseTab):
         self.save_button.clicked.connect(self.save)
         composition.add_widget(action_panel("Удаление строк", self.remove_item_button, purpose="danger"))
         composition.add_widget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
-        splitter.addWidget(right)
-        splitter.setSizes([280, 800])
+        self.editor_stack = empty_record_editor(
+            right, "Шаблон не выбран",
+            "Выберите шаблон слева или создайте новый. "
+            "Только после этого станут доступны его состав и сохранение.",
+            self.add_template, "Добавить шаблон",
+        )
+        splitter.addWidget(self.editor_stack)
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([315, 1010])
         self.reload_work_combo()
         self.refresh()
         self.update_form_state()
@@ -1375,6 +1492,8 @@ class TemplatesTab(BaseTab):
         set_widgets_enabled(self.form_widgets + [self.work_combo, self.table,
                             self.add_item_button, self.remove_item_button, self.save_button], has_record)
         self.delete_button.setEnabled(has_record)
+        if hasattr(self, "editor_stack"):
+            self.editor_stack.setCurrentIndex(1 if has_record else 0)
         self.add_item_button.setEnabled(bool(has_record and self.work_combo.currentData() is not None))
         if not has_record:
             self.name.clear(); self.notes.clear(); self.table.setRowCount(0)
@@ -1417,6 +1536,8 @@ class TemplatesTab(BaseTab):
         self.list.blockSignals(False)
         if select_row >= 0:
             self.list.setCurrentRow(select_row)
+        elif self.list.count() == 1 and target_id is None:
+            self.list.setCurrentRow(0)
 
     def _load_current(self):
         item = self.list.currentItem()
@@ -1437,7 +1558,7 @@ class TemplatesTab(BaseTab):
             row = self.table.rowCount(); self.table.insertRow(row)
             vals = [it["id"], it["work_item_id"] or "", it["name"], it["unit"], it["unit_price"], it["plan_qty"]]
             for c, val in enumerate(vals): self.table.set_value(row, c, val)
-        self.table.resizeColumnsToContents()
+        # Preserve the flexible widths configured at table creation.
         self._remember_form_state()
 
     def add_template(self):
@@ -1552,7 +1673,7 @@ class CreateReportDialog(QDialog):
         self.setWindowTitle("Создать отчет")
         layout = QVBoxLayout(self)
         form = QFormLayout()
-        self.year = QSpinBox(); self.year.setRange(2000, 2100); self.year.setValue(int(default_year or 2026))
+        self.year = SafeSpinBox(); self.year.setRange(2000, 2100); self.year.setValue(int(default_year or 2026))
         self.year.valueChanged.connect(self.fill_full_year)
         self.period_start = QLineEdit(); self.period_end = QLineEdit()
         self.period_start.setPlaceholderText("дд.мм.гггг или гггг-мм-дд")
@@ -1604,7 +1725,7 @@ class ReportsTab(BaseTab):
         left = QWidget(); left_l = QVBoxLayout(left)
         self.company_filter = ClickComboBox(); self.company_filter.currentIndexChanged.connect(lambda _i: self.reload_houses_filter())
         self.house_filter = ClickComboBox(); self.house_filter.currentIndexChanged.connect(self.refresh)
-        self.year_filter = QSpinBox(); self.year_filter.setRange(2000, 2100); self.year_filter.setValue(2026); self.year_filter.valueChanged.connect(self.refresh)
+        self.year_filter = SafeSpinBox(); self.year_filter.setRange(2000, 2100); self.year_filter.setValue(2026); self.year_filter.valueChanged.connect(self.refresh)
         context_card = ContentCard("1. Выберите УО, дом и отчетный год")
         choices = QFormLayout()
         choices.addRow(selectable_label("УО"), self.company_filter)
@@ -1628,15 +1749,19 @@ class ReportsTab(BaseTab):
         splitter.addWidget(left)
 
         right = QWidget(); right_l = QVBoxLayout(right)
-        right_l.addWidget(selectable_label(
+        self.report_workflow_caption = selectable_label(
             "3. Заполнение разделов → 4. Проверка отчета → 5. Выгрузка документов"
-        ))
-        self.report_empty_hint = selectable_label(
-            "Чтобы начать, выберите конкретную управляющую организацию, дом и год. "
-            "Затем откройте существующий отчет или создайте новый."
         )
-        self.report_empty_hint.setObjectName("CardSubtitle")
-        right_l.addWidget(self.report_empty_hint)
+        right_l.addWidget(self.report_workflow_caption)
+        self.report_empty_card = ContentCard(
+            "Отчёт пока не выбран",
+            "Чтобы открыть поля официальной формы, задайте рабочий контекст слева."
+        )
+        self.report_empty_hint = selectable_label(
+            "Выберите управляющую организацию, дом и отчётный год."
+        )
+        self.report_empty_card.add_widget(self.report_empty_hint)
+        right_l.addWidget(self.report_empty_card)
         self.report_tabs = QTabWidget()
         self.report_tabs.setUsesScrollButtons(True)
         right_l.addWidget(self.report_tabs, 1)
@@ -1649,8 +1774,9 @@ class ReportsTab(BaseTab):
         self.report_tabs.setEnabled(False)
         self.save_button = QPushButton("Сохранить отчет")
         self.save_button.clicked.connect(self.save_manually)
-        right_l.addWidget(action_panel("Сохранение выбранного отчета", self.save_button,
-                                       primary=self.save_button))
+        self.save_panel = action_panel("Сохранение выбранного отчета", self.save_button,
+                                       primary=self.save_button)
+        right_l.addWidget(self.save_panel)
         splitter.addWidget(right)
         splitter.setSizes([300, 1000])
         self._connect_autosave_signals()
@@ -1661,7 +1787,9 @@ class ReportsTab(BaseTab):
         has_report = bool(self.current_id)
         self.report_tabs.setEnabled(has_report)
         self.report_tabs.setVisible(has_report)
-        self.report_empty_hint.setVisible(not has_report)
+        self.report_workflow_caption.setVisible(has_report)
+        self.report_empty_card.setVisible(not has_report)
+        self.save_panel.setVisible(has_report)
         if not has_report:
             if self.company_filter.currentData() is None:
                 instruction = "Сначала выберите управляющую организацию."
@@ -1797,7 +1925,7 @@ class ReportsTab(BaseTab):
         layout = QVBoxLayout(w)
         card = ContentCard("Общие сведения", "Укажите отчетный год, фактический период управления и статус.")
         form = QFormLayout()
-        self.year = QSpinBox(); self.year.setRange(2000, 2100); self.year.setValue(2026)
+        self.year = SafeSpinBox(); self.year.setRange(2000, 2100); self.year.setValue(2026)
         self.period_start = QLineEdit(); self.period_start.setPlaceholderText("дд.мм.гггг или гггг-мм-дд")
         self.period_end = QLineEdit(); self.period_end.setPlaceholderText("дд.мм.гггг или гггг-мм-дд")
         fast = QPushButton("Заполнить полный год 01.01–31.12"); fast.clicked.connect(self.fill_full_year)
@@ -1839,10 +1967,13 @@ class ReportsTab(BaseTab):
         self.content_table = CopyPasteTable(0, 9)
         self.content_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование работы/услуги", "Ед. изм.", "Цена единицы", "Кол-во по перечню", "Стоимость по перечню", "Выполнено кол-во", "Стоимость выполнено"])
         self.content_table.setColumnHidden(0, True); self.content_table.setColumnHidden(1, True)
+        fit_table_columns(self.content_table, flex=(2,),
+                          widths={3: 95, 4: 125, 5: 120, 6: 130, 7: 120, 8: 135})
         self.content_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_content_items", "unit", distinct_texts("work_items", "unit", COMMON_UNITS)), self.content_table))
         self._content_recalc_lock = False
         self.content_table.itemChanged.connect(self.on_content_item_changed)
         self.content_table.context_add_handler = lambda: self.add_blank_report_row("Содержание")
+        self.content_table.allow_paste_append = True
         self.content_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.content_table)
         content_card = table_card_with_selection(
             "Строки содержания", self.content_table, name_column=2
@@ -1885,8 +2016,11 @@ class ReportsTab(BaseTab):
         self.repair_table = CopyPasteTable(0, 7)
         self.repair_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование работы", "Основание", "Стоимость", "Объем", "Акт/ссылка"])
         self.repair_table.setColumnHidden(0, True); self.repair_table.setColumnHidden(1, True)
+        fit_table_columns(self.repair_table, flex=(2, 3, 6),
+                          widths={4: 120, 5: 150})
         self.repair_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_repair_items", "basis", COMMON_REPAIR_BASIS), self.repair_table))
         self.repair_table.context_add_handler = lambda: self.add_blank_report_row("Текущий ремонт")
+        self.repair_table.allow_paste_append = True
         self.repair_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.repair_table)
         repair_card = table_card_with_selection(
             "Работы текущего ремонта", self.repair_table, name_column=2
@@ -1938,10 +2072,13 @@ class ReportsTab(BaseTab):
         self.management_table = CopyPasteTable(0, 7)
         self.management_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование услуги", "Ед. изм.", "Цена единицы", "Кол-во", "Стоимость"])
         self.management_table.setColumnHidden(0, True); self.management_table.setColumnHidden(1, True)
+        fit_table_columns(self.management_table, flex=(2,),
+                          widths={3: 110, 4: 135, 5: 115, 6: 145})
         self.management_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_management_items", "unit", distinct_texts("work_items", "unit", COMMON_UNITS)), self.management_table))
         self._management_recalc_lock = False
         self.management_table.itemChanged.connect(self.on_management_item_changed)
         self.management_table.context_add_handler = lambda: self.add_blank_report_row("Управление")
+        self.management_table.allow_paste_append = True
         self.management_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.management_table)
         management_card = table_card_with_selection(
             "Внутренний расчет услуг управления", self.management_table, name_column=2
@@ -1969,9 +2106,15 @@ class ReportsTab(BaseTab):
         self.finance_table = CopyPasteTable(2, 6)
         self.finance_table.setHorizontalHeaderLabels(["ID", "Плательщик", "Долг на начало", "Начислено", "Поступило", "Долг на 1 января следующего периода"])
         self.finance_table.setColumnHidden(0, True)
+        fit_table_columns(self.finance_table, flex=(1,),
+                          widths={2: 155, 3: 155, 4: 155, 5: 200})
         self.finance_table.setItemDelegateForColumn(1, EditableComboDelegate(lambda: distinct_texts("report_financials", "payer_type", COMMON_PAYER_TYPES), self.finance_table))
         self.finance_table.set_value(0, 1, "Собственники")
         self.finance_table.set_value(1, 1, "Наниматели")
+        self.finance_table.protected_columns = {1}
+        for payer_row in range(self.finance_table.rowCount()):
+            item = self.finance_table.item(payer_row, 1)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         # The official finance section has fixed payers; arbitrary insertion
         # from the generic context menu would violate the payer layout.
         self.finance_table.context_add_handler = lambda: self.msg(
@@ -2268,6 +2411,8 @@ class ReportsTab(BaseTab):
                 row = self.finance_table.rowCount(); self.finance_table.insertRow(row)
                 vals = [fin["id"], fin["payer_type"], fin["debt_start"], fin["accrued"], fin["paid"], fin["debt_end"]]
                 for c, val in enumerate(vals): self.finance_table.set_value(row, c, val)
+                payer_item = self.finance_table.item(row, 1)
+                payer_item.setFlags(payer_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             claims = bundle["claims"] or {}
             self.claim_pret.setText(str(claims.get("pretensions_count") or "")); self.claim_lawsuits.setText(str(claims.get("lawsuits_count") or "")); self.claim_amount.setText(str(claims.get("recovered_amount") or ""))
         finally:
@@ -2777,13 +2922,14 @@ class MassApplyTab(BaseTab):
         source = QFormLayout()
         self.company = ClickComboBox()
         self.company.currentIndexChanged.connect(self._company_changed)
-        self.year = QSpinBox()
+        self.year = SafeSpinBox()
         self.year.setRange(2000, 2100)
         self.year.setValue(2026)
         self.work = ClickComboBox()
         source.addRow(selectable_label("Управляющая организация"), self.company)
         source.addRow(selectable_label("Отчетный год"), self.year)
         source.addRow(selectable_label("Работа / услуга"), self.work)
+        polish_form(source, label_width=155)
         context.add_layout(source)
         top.addWidget(context, 1)
 
@@ -2811,6 +2957,7 @@ class MassApplyTab(BaseTab):
             (self.quantity_label, self.quantity), (self.total_label, self.total),
         ]:
             form.addRow(label, field)
+        polish_form(form, label_width=135)
         calculation.add_layout(form)
         self.help = selectable_label("")
         self.help.setObjectName("CardSubtitle")
@@ -2865,6 +3012,8 @@ class MassApplyTab(BaseTab):
         review.add_widget(self.summary)
         self.table = MassPreviewTable(0, len(self.PREVIEW_COLUMNS))
         self.table.setHorizontalHeaderLabels(self.PREVIEW_COLUMNS)
+        fit_table_columns(self.table, flex=(0, 2, 7),
+                          widths={1: 135, 3: 115, 4: 135, 5: 135, 6: 120})
         review.add_widget(self.table, 1)
         root.addWidget(review, 1)
 
@@ -3029,7 +3178,7 @@ class MassApplyTab(BaseTab):
             ]
             for column, value in enumerate(values):
                 self.table.set_value(position, column, value)
-        self.table.resizeColumnsToContents()
+        # Preserve the flexible widths configured at table creation.
         data = plan["summary"]
         self.summary.setText(
             f'Домов проверено: {len(plan["rows"])} · добавить: {data["insert"]} · '
@@ -3097,9 +3246,17 @@ class BackupsTab(BaseTab):
             "защитные снимки перед изменениями не удаляются автоматически."
         )
         self.archive_list = QListWidget()
+        self.archive_list.setMinimumHeight(165)
+        self.archive_list.setMaximumHeight(320)
         self.archive_list.currentItemChanged.connect(self.update_controls)
-        overview.add_widget(self.archive_list, 1)
-        layout.addWidget(overview, 1)
+        overview.add_widget(self.archive_list)
+        self.empty_archive_hint = selectable_label(
+            "Резервных копий пока нет. Нажмите «Создать копию», "
+            "чтобы сохранить текущую базу перед проверкой или изменениями."
+        )
+        self.empty_archive_hint.setObjectName("CardSubtitle")
+        overview.add_widget(self.empty_archive_hint)
+        layout.addWidget(overview)
 
         make = QPushButton("Создать копию")
         make.clicked.connect(self.backup_now)
@@ -3131,6 +3288,7 @@ class BackupsTab(BaseTab):
         self.info.setReadOnly(True)
         self.info.setMaximumHeight(125)
         layout.addWidget(self.info)
+        layout.addStretch(1)
         self.refresh()
 
     def _selected_path(self):
@@ -3179,6 +3337,8 @@ class BackupsTab(BaseTab):
             if selected == source:
                 self.archive_list.setCurrentItem(item)
         self.archive_list.blockSignals(False)
+        self.archive_list.setVisible(bool(backups))
+        self.empty_archive_hint.setVisible(not backups)
         self.update_controls()
         self.info.setPlainText(
             f"Папка данных: {data_dir()}\n"

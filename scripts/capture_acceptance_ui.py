@@ -22,6 +22,13 @@ from src.uk728.paths import make_backup
 from src.uk728.app import MainWindow
 
 
+EMPTY_SCREENS = [
+    ("uo_empty", 0),
+    ("houses_empty", 1),
+    ("reports_empty", 6),
+    ("backups_empty", 7),
+]
+
 SCREENS = [
     ("uo", 0, None),
     ("houses", 1, None),
@@ -55,6 +62,35 @@ def main():
     with tempfile.TemporaryDirectory(prefix="otchetchik-ui-", ignore_cleanup_errors=True) as workdir:
         with patch("src.uk728.paths.app_dir", return_value=Path(workdir)):
             db.init_db()
+            # Empty-state screenshots catch blocked controls and unusable blank
+            # panels that populated acceptance data would otherwise miss.
+            empty_window = MainWindow()
+            empty_window.resize(1366, 900)
+            empty_window.show()
+            try:
+                for theme in ("light", "dark"):
+                    if empty_window._theme != theme:
+                        empty_window.switch_theme()
+                    for title, section in EMPTY_SCREENS:
+                        empty_window.navigate(section)
+                        app.processEvents()
+                        image = empty_window.grab()
+                        if image.isNull():
+                            raise RuntimeError(f"Cannot capture empty state: {title}")
+                        destination = args.out_dir / f"{theme}_{title}.png"
+                        if not image.save(str(destination), "PNG"):
+                            raise RuntimeError(f"Cannot save empty state: {destination}")
+                        result["screens"].append({
+                            "theme": theme, "page": title,
+                            "width": image.width(), "height": image.height(),
+                            "filename": destination.name,
+                        })
+            finally:
+                empty_window.close()
+                app.processEvents()
+                empty_window.deleteLater()
+                del empty_window
+                gc.collect()
             org = db.execute("INSERT INTO companies(name) VALUES(?)", ("УК Приёмка",))
             house = db.execute("INSERT INTO houses(company_id,address,total_area) VALUES(?,?,?)",
                                (org, "ул. Центральная, д. 5", 1500))
