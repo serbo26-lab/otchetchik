@@ -6,18 +6,21 @@ suite exceeds the watchdog, rather than publishing an unverified executable.
 """
 from __future__ import annotations
 
+import argparse
 import faulthandler
 import sys
 import unittest
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pattern", default="test_*.py")
+    parser.add_argument("--timeout", type=int, default=180)
+    args = parser.parse_args()
     faulthandler.enable()
-    # GitHub Windows runners historically complete this suite in ~1 minute;
-    # generous watchdog permits slow machines while exposing a stuck UI.
-    faulthandler.dump_traceback_later(180, repeat=False, exit=True)
+    faulthandler.dump_traceback_later(args.timeout, repeat=False, exit=True)
     try:
-        suite = unittest.defaultTestLoader.discover("tests", pattern="test_*.py")
+        suite = unittest.defaultTestLoader.discover("tests", pattern=args.pattern)
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         return 0 if result.wasSuccessful() else 1
     finally:
