@@ -53,13 +53,40 @@ jobs:
           python -m pip install "pypdf>=5,<7"
           if ($LASTEXITCODE -ne 0) { throw 'PDF inspection dependency installation failed.' }
 
+      - name: Focused narrow-window regression tests
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m scripts.run_ui_tests --pattern test_v1612_responsive.py --timeout 75
+          if ($LASTEXITCODE -ne 0) { throw 'Responsive UI regressions failed.' }
+
       - name: UI and navigation tests
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          python -m unittest discover -s tests -p 'test_*.py' -v
-          if ($LASTEXITCODE -ne 0) { throw 'UI tests failed.' }
+          # Qt application state and global settings are isolated per test file.
+          # This also identifies the exact module responsible for a modal
+          # dialog or layout deadlock instead of blocking all test output.
+          $files = @(Get-ChildItem tests -Filter 'test_*.py' -File | Sort-Object Name)
+          $python = (Get-Command python -CommandType Application | Select-Object -First 1).Source
+          foreach ($file in $files) {
+            Write-Host "=== UI regression: $($file.Name) ==="
+            $stdout = Join-Path $env:RUNNER_TEMP "$($file.BaseName).stdout.log"
+            $stderr = Join-Path $env:RUNNER_TEMP "$($file.BaseName).stderr.log"
+            $process = Start-Process -FilePath $python -NoNewWindow -PassThru -ArgumentList @('-m', 'scripts.run_ui_tests', '--pattern', $file.Name, '--timeout', '90') -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $finished = $process.WaitForExit(95000)
+            if (-not $finished) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+            if (Test-Path $stdout) { Get-Content $stdout }
+            if (Test-Path $stderr) { Get-Content $stderr }
+            if (-not $finished) { throw "UI test module timed out: $($file.Name)" }
+            if ($process.ExitCode -ne 0) {
+              throw "UI tests failed in $($file.Name); exit=$($process.ExitCode)"
+            }
+          }
 
       - name: Capture acceptance UI screenshots
         shell: pwsh
@@ -83,6 +110,18 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "UI capture failed for DPI $factor." }
           }
           Remove-Item Env:QT_SCALE_FACTOR -ErrorAction SilentlyContinue
+
+      - name: Capture minimum and intermediate window widths
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          # These cases reproduce the reported 860x520 minimum viewport
+          # and the transition between stacked and side-by-side forms.
+          python -m scripts.capture_acceptance_ui --window-width 860 --window-height 520 --out-dir "$env:RUNNER_TEMP/otchetchik-acceptance-screens/compact_860x520"
+          if ($LASTEXITCODE -ne 0) { throw 'Minimum window capture failed.' }
+          python -m scripts.capture_acceptance_ui --window-width 1100 --window-height 700 --out-dir "$env:RUNNER_TEMP/otchetchik-acceptance-screens/medium_1100x700"
+          if ($LASTEXITCODE -ne 0) { throw 'Medium window capture failed.' }
 
       - name: Upload acceptance screenshots
         uses: actions/upload-artifact@v4

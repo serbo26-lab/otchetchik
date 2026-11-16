@@ -76,21 +76,31 @@ def selectable_label(text: str = "") -> QLabel:
 
 
 def polish_form(form: QFormLayout, *, label_width: int = 165) -> None:
-    """Readable aligned form labels instead of narrow four-line captions."""
+    """Keep combobox fields wide and let form rows wrap on narrow screens."""
     form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
     form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
-    form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+    form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+    form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+    form.setHorizontalSpacing(12)
+    form.setVerticalSpacing(9)
     for row in range(form.rowCount()):
         entry = form.itemAt(row, QFormLayout.ItemRole.LabelRole)
         label = entry.widget() if entry is not None else None
-        if not isinstance(label, QLabel):
-            continue
-        title = label.text().strip()
-        label.setMinimumWidth(label_width)
-        label.setMaximumWidth(max(label_width + 70, 245))
-        label.setWordWrap(len(title) > 43)
-        label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        label.setToolTip(title)
+        if isinstance(label, QLabel):
+            title = label.text().strip()
+            label.setMinimumWidth(min(label_width, 165))
+            label.setMaximumWidth(max(label_width + 65, 245))
+            label.setWordWrap(len(title) > 43)
+            label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            label.setToolTip(title)
+        field_item = form.itemAt(row, QFormLayout.ItemRole.FieldRole)
+        field = field_item.widget() if field_item is not None else None
+        if isinstance(field, QComboBox):
+            field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            field.setMinimumWidth(160)
+            field.setMaximumWidth(16777215)
+        elif isinstance(field, QLineEdit):
+            field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
 
 def empty_record_editor(
@@ -173,6 +183,14 @@ class ClickComboBox(QComboBox):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setMinimumHeight(28)
+        self.setMinimumWidth(150)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(13)
+        self.currentTextChanged.connect(self._update_selected_tooltip)
+
+    def _update_selected_tooltip(self, value: str):
+        self.setToolTip(value or "Нажмите, чтобы выбрать значение")
 
     def setEditable(self, editable: bool) -> None:
         super().setEditable(editable)
@@ -528,7 +546,8 @@ def fill_combo(combo: QComboBox, sql: str, params: tuple = (), empty: str | None
     if preserve:
         restore_combo_selection(combo, old_data, old_text)
     combo.blockSignals(False)
-
+    if isinstance(combo, ClickComboBox):
+        combo._update_selected_tooltip(combo.currentText())
 
 
 def set_widgets_enabled(widgets: list[QWidget], enabled: bool) -> None:
@@ -556,6 +575,7 @@ class CompaniesTab(BaseTab):
         self.current_id: int | None = None
         root = QHBoxLayout(self)
         splitter = QSplitter()
+        self.splitter = splitter
         root.addWidget(splitter)
         left = QWidget()
         left_l = QVBoxLayout(left)
@@ -730,6 +750,7 @@ class HousesTab(BaseTab):
         self.current_id: int | None = None
         root = QHBoxLayout(self)
         splitter = QSplitter()
+        self.splitter = splitter
         root.addWidget(splitter)
         left = QWidget(); left_l = QVBoxLayout(left)
         organization = ContentCard("1. Управляющая организация")
@@ -983,7 +1004,7 @@ class CategoriesTab(BaseTab):
         super().__init__()
         self.current_id: int | None = None
         root = QHBoxLayout(self)
-        splitter = QSplitter(); root.addWidget(splitter)
+        splitter = QSplitter(); self.splitter = splitter; root.addWidget(splitter)
 
         left = QWidget(); left_l = QVBoxLayout(left)
         selection = ContentCard("1. Выберите категорию")
@@ -1003,6 +1024,7 @@ class CategoriesTab(BaseTab):
         details = ContentCard("2. Параметры категории",
             "Раздел формы определяет место новых работ в отчете. Примечание не влияет на расчет.")
         form = QFormLayout()
+        self.editor_form = form
         self.name = QLineEdit()
         self.section = ClickComboBox(); self.section.setEditable(True); self.section.addItems(["Не выбрано", *COMMON_SECTIONS])
         self.unit = ClickComboBox(); self.unit.setEditable(True); self.unit.addItems(["Не выбрано", *COMMON_UNITS])
@@ -1419,7 +1441,7 @@ class TemplatesTab(BaseTab):
         super().__init__()
         self.current_id: int | None = None
         root = QHBoxLayout(self)
-        splitter = QSplitter(); root.addWidget(splitter)
+        splitter = QSplitter(); self.splitter = splitter; root.addWidget(splitter)
         left = QWidget(); left_l = QVBoxLayout(left)
         selection = ContentCard("1. Выберите шаблон", "Шаблон относится к одному разделу отчета.")
         self.list = QListWidget()
@@ -1721,7 +1743,7 @@ class ReportsTab(BaseTab):
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.timeout.connect(self._autosave_current_report)
         root = QHBoxLayout(self)
-        splitter = QSplitter(); root.addWidget(splitter)
+        splitter = QSplitter(); self.splitter = splitter; root.addWidget(splitter)
         left = QWidget(); left_l = QVBoxLayout(left)
         self.company_filter = ClickComboBox(); self.company_filter.currentIndexChanged.connect(lambda _i: self.reload_houses_filter())
         self.house_filter = ClickComboBox(); self.house_filter.currentIndexChanged.connect(self.refresh)
@@ -2912,14 +2934,18 @@ class MassApplyTab(BaseTab):
 
         root = QVBoxLayout(self)
         root.setSpacing(8)
-        top = QHBoxLayout()
-        top.setSpacing(9)
+        top = QGridLayout()
+        top.setHorizontalSpacing(9)
+        top.setVerticalSpacing(9)
+        top.setContentsMargins(0, 0, 0, 0)
+        self.top_layout = top
         root.addLayout(top)
 
         # Step 1. The work and reporting period.
         context = ContentCard("1. Что заполняем",
             "Выберите УО, отчетный год и конкретную работу из справочника.")
         source = QFormLayout()
+        self.source_form = source
         self.company = ClickComboBox()
         self.company.currentIndexChanged.connect(self._company_changed)
         self.year = SafeSpinBox()
@@ -2931,11 +2957,13 @@ class MassApplyTab(BaseTab):
         source.addRow(selectable_label("Работа / услуга"), self.work)
         polish_form(source, label_width=155)
         context.add_layout(source)
-        top.addWidget(context, 1)
+        self.source_card = context
+        top.addWidget(context, 0, 0)
 
         # Step 2. Only input controls required by the selected formula are shown.
         calculation = ContentCard("2. Как рассчитываем")
         form = QFormLayout()
+        self.calculation_form = form
         self.mode = ClickComboBox()
         for title, key in self.MODES:
             self.mode.addItem(title, key)
@@ -2962,7 +2990,10 @@ class MassApplyTab(BaseTab):
         self.help = selectable_label("")
         self.help.setObjectName("CardSubtitle")
         calculation.add_widget(self.help)
-        top.addWidget(calculation, 1)
+        self.calculation_card = calculation
+        top.addWidget(calculation, 0, 1)
+        top.setColumnStretch(0, 1)
+        top.setColumnStretch(1, 1)
 
         # Step 3. Explicitly choose which houses are eligible for the calculation.
         targets = ContentCard("3. Какие дома заполняем",
@@ -2972,12 +3003,20 @@ class MassApplyTab(BaseTab):
         self.house_list.setMaximumHeight(170)
         self.house_list.itemChanged.connect(self.mark_dirty)
         targets.add_widget(self.house_list)
+        self.no_houses_hint = selectable_label(
+            "Дома не найдены. Выберите управляющую организацию "
+            "и добавьте для неё хотя бы один действующий дом в разделе «Дома»."
+        )
+        self.no_houses_hint.setObjectName("CardSubtitle")
+        targets.add_widget(self.no_houses_hint)
         self.selected_house_count = selectable_label("Выбрано домов: 0")
         targets.add_widget(self.selected_house_count)
         select_all = QPushButton("Выбрать все")
         select_all.clicked.connect(lambda: self._check_all(True))
         clear_all = QPushButton("Снять выделение")
         clear_all.clicked.connect(lambda: self._check_all(False))
+        self.select_all_houses = select_all
+        self.clear_all_houses = clear_all
         targets.add_widget(action_panel("Выбор домов", select_all, clear_all))
 
         options = ActionFlowLayout(spacing=10)
@@ -3018,16 +3057,22 @@ class MassApplyTab(BaseTab):
         root.addWidget(review, 1)
 
         # Step 5. Recording is impossible without a fresh, actionable preview.
-        finish = QHBoxLayout()
+        finish = QGridLayout()
+        finish.setContentsMargins(0, 0, 0, 0)
+        finish.setHorizontalSpacing(8)
+        finish.setVerticalSpacing(6)
+        self.finish_layout = finish
         final_text = selectable_label(
             "5. Применение: записи добавляются только после проверки и подтверждения."
         )
-        finish.addWidget(final_text, 1)
+        self.finish_caption = final_text
+        finish.addWidget(final_text, 0, 0)
+        finish.setColumnStretch(0, 1)
         self.apply_button = QPushButton("Подтвердить и применить")
         self.apply_button.clicked.connect(self.apply)
         self.apply_button.setObjectName("PrimaryAction")
         self.apply_button.setEnabled(False)
-        finish.addWidget(self.apply_button)
+        finish.addWidget(self.apply_button, 0, 1)
         root.addLayout(finish)
 
         self.mode.currentIndexChanged.connect(self.update_mode_help)
@@ -3040,6 +3085,36 @@ class MassApplyTab(BaseTab):
             option.stateChanged.connect(self.mark_dirty)
         self.reload()
         self.update_mode_help()
+
+    def set_compact_layout(self, compact: bool):
+        """Stack calculation below source and keep apply action reachable."""
+        top = self.top_layout
+        top.removeWidget(self.source_card)
+        top.removeWidget(self.calculation_card)
+        if compact:
+            top.addWidget(self.source_card, 0, 0)
+            top.addWidget(self.calculation_card, 1, 0)
+            top.setColumnStretch(0, 1)
+            top.setColumnStretch(1, 0)
+        else:
+            top.addWidget(self.source_card, 0, 0)
+            top.addWidget(self.calculation_card, 0, 1)
+            top.setColumnStretch(0, 1)
+            top.setColumnStretch(1, 1)
+        finish = self.finish_layout
+        finish.removeWidget(self.finish_caption)
+        finish.removeWidget(self.apply_button)
+        if compact:
+            finish.addWidget(self.finish_caption, 0, 0, 1, 2)
+            finish.addWidget(self.apply_button, 1, 0)
+            finish.setColumnStretch(0, 0)
+            finish.setColumnStretch(1, 1)
+        else:
+            finish.addWidget(self.finish_caption, 0, 0)
+            finish.addWidget(self.apply_button, 0, 1)
+            finish.setColumnStretch(0, 1)
+            finish.setColumnStretch(1, 0)
+        self.updateGeometry()
 
     def _company_changed(self):
         self._load_target_houses()
@@ -3069,6 +3144,11 @@ class MassApplyTab(BaseTab):
                 item.setCheckState(Qt.Checked if (same_company and hid in checked) else Qt.Unchecked)
                 self.house_list.addItem(item)
         self.house_list.blockSignals(False)
+        has_houses = self.house_list.count() > 0
+        self.house_list.setVisible(has_houses)
+        self.no_houses_hint.setVisible(not has_houses)
+        self.select_all_houses.setEnabled(has_houses)
+        self.clear_all_houses.setEnabled(has_houses)
         self._target_company_id = cid
         self.mark_dirty()
 
@@ -3149,6 +3229,7 @@ class MassApplyTab(BaseTab):
         if old_work is not None and self.work.findData(old_work) >= 0:
             self.work.setCurrentIndex(self.work.findData(old_work))
         self.work.blockSignals(False)
+        self.work._update_selected_tooltip(self.work.currentText())
         self._load_target_houses()
 
     def preview(self):
@@ -3447,6 +3528,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(APP_TITLE)
         self.resize(1320, 850)
+        self.setMinimumSize(860, 520)
         self.settings = QSettings("OtchetnostUK", "728")
         self._theme = str(self.settings.value("ui/theme", "light"))
         if self._theme not in ("light", "dark"):
@@ -3476,8 +3558,17 @@ class MainWindow(QMainWindow):
         self.page_header = PageChrome()
         workspace_layout.addWidget(self.page_header)
         self.tabs = QStackedWidget()
+        self.tabs.setMinimumSize(0, 0)
         workspace_layout.addWidget(self.tabs, 1)
-        root.addWidget(workspace, 1)
+        self.workspace_scroll = QScrollArea(self)
+        self.workspace_scroll.setObjectName("WorkspaceScroll")
+        self.workspace_scroll.setWidgetResizable(True)
+        self.workspace_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.workspace_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.workspace_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.workspace_scroll.setMinimumSize(0, 0)
+        self.workspace_scroll.setWidget(workspace)
+        root.addWidget(self.workspace_scroll, 1)
 
         # Preserve the existing screens, data bindings and per-section logic.
         self.company_tab = CompaniesTab()
@@ -3514,7 +3605,36 @@ class MainWindow(QMainWindow):
         self.context_timer.timeout.connect(self.refresh_context)
         self.context_timer.start(1500)
         self.refresh_context()
+        self._layout_compact = None
+        QTimer.singleShot(0, self._update_responsive_layout)
         self.statusBar().showMessage("Готово")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "mass_tab") and hasattr(self, "workspace_scroll"):
+            self._update_responsive_layout()
+
+    def _update_responsive_layout(self):
+        """Reflow two-column editors without discarding selected records."""
+        if not hasattr(self, "mass_tab"):
+            return
+        available = max(0, self.width() - self.sidebar.width() - 24)
+        compact = available < 880
+        if compact == getattr(self, "_layout_compact", None):
+            return
+        self._layout_compact = compact
+        for tab in (
+            self.company_tab, self.houses_tab, self.categories_tab,
+            self.templates_tab, self.reports_tab,
+        ):
+            splitter = tab.splitter
+            target = Qt.Orientation.Vertical if compact else Qt.Orientation.Horizontal
+            if splitter.orientation() != target:
+                splitter.setOrientation(target)
+                splitter.setSizes([230, 720] if compact else [325, 1050])
+        self.mass_tab.set_compact_layout(compact)
+        self.page_header.set_compact_layout(compact)
+        self.tabs.updateGeometry()
 
     def _decorate_buttons(self):
         """Do not override roles assigned by the actual action groups."""

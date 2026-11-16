@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QRect, QSize, Qt, Signal
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QLayout, QListWidget,
+    QApplication, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QListWidget,
     QListWidgetItem, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
@@ -196,20 +196,26 @@ class PageChrome(QFrame):
         header.addWidget(self.save_status)
         container.addLayout(header)
 
-        context_row = QHBoxLayout()
+        context_row = QGridLayout()
+        context_row.setContentsMargins(0, 0, 0, 0)
+        context_row.setHorizontalSpacing(8)
+        context_row.setVerticalSpacing(6)
+        self._context_grid = context_row
         self.context = QLabel()
         self.context.setObjectName("ContextCaption")
         self.context.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.context.setWordWrap(True)
-        context_row.addWidget(self.context, 1)
+        self.context.setMinimumWidth(0)
+        context_row.setColumnStretch(0, 1)
+        context_row.addWidget(self.context, 0, 0)
         self.guide_button = QPushButton("Как продолжить")
         self.guide_button.setCheckable(True)
         self.guide_button.toggled.connect(self._toggle_guide)
         self.next_button = QPushButton()
         self.next_button.setObjectName("PrimaryAction")
         self.next_button.hide()
-        context_row.addWidget(self.next_button)
-        context_row.addWidget(self.guide_button)
+        context_row.addWidget(self.next_button, 0, 1)
+        context_row.addWidget(self.guide_button, 0, 2)
         container.addLayout(context_row)
 
         self.guide = QLabel()
@@ -217,6 +223,27 @@ class PageChrome(QFrame):
         self.guide.setWordWrap(True)
         self.guide.hide()
         container.addWidget(self.guide)
+
+    def set_compact_layout(self, compact: bool):
+        """Put context above actions instead of squeezing it between buttons."""
+        grid = self._context_grid
+        for widget in (self.context, self.next_button, self.guide_button):
+            grid.removeWidget(widget)
+        if compact:
+            grid.addWidget(self.context, 0, 0, 1, 3)
+            grid.addWidget(self.next_button, 1, 0)
+            grid.addWidget(self.guide_button, 1, 1)
+            grid.setColumnStretch(0, 0)
+            grid.setColumnStretch(1, 0)
+            grid.setColumnStretch(2, 1)
+        else:
+            grid.addWidget(self.context, 0, 0)
+            grid.addWidget(self.next_button, 0, 1)
+            grid.addWidget(self.guide_button, 0, 2)
+            grid.setColumnStretch(0, 1)
+            grid.setColumnStretch(1, 0)
+            grid.setColumnStretch(2, 0)
+        self.updateGeometry()
 
     def _toggle_guide(self, checked):
         self.guide.setVisible(checked)
