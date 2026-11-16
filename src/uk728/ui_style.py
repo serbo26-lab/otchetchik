@@ -141,11 +141,16 @@ def apply_theme(app, theme: str, scale: int = 100) -> None:
         (QPalette.ColorRole.ToolTipText, "text"),
     ]:
         q_palette.setColor(role, QColor(palette[key]))
-    app.setPalette(q_palette)
     percent = 100
     base = QSS
     for key, value in sorted(palette.items(), key=lambda pair: len(pair[0]), reverse=True):
         base = base.replace("@" + key, value)
-    # Text and controls scale together, without changing business or report amounts.
     base = base.replace("font-size: 10pt;", f"font-size: {10 * percent / 100:g}pt;")
+    # Applying the same application-wide stylesheet again repolishes every
+    # Qt widget, including inactive pages and retained test windows. Repeated
+    # MainWindow creation became progressively slower; only re-theme when
+    # the selected palette has actually changed.
+    if app.styleSheet() == base:
+        return
+    app.setPalette(q_palette)
     app.setStyleSheet(base)
