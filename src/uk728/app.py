@@ -989,6 +989,8 @@ class CategoriesTab(BaseTab):
         self.sub_table = CopyPasteTable(0, 6)
         self.sub_table.setHorizontalHeaderLabels(["ID", "Название подкатегории", "Раздел", "Ед. изм.", "Цена/ставка", "Примечание"])
         self.sub_table.setColumnHidden(0, True)
+        fit_table_columns(self.sub_table, flex=(1, 5),
+                          widths={2: 160, 3: 105, 4: 120})
         self.sub_table.setItemDelegateForColumn(2, EditableComboDelegate(lambda: distinct_texts("work_categories", "section", ["Не выбрано", *COMMON_SECTIONS]), self.sub_table))
         self.sub_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("work_categories", "unit", ["Не выбрано", *COMMON_UNITS]), self.sub_table))
         self.sub_table.context_add_handler = self.add_subcategory
@@ -1188,6 +1190,8 @@ class WorksTab(BaseTab):
         self.table = CopyPasteTable(0, 8)
         self.table.setHorizontalHeaderLabels(["ID", "Категория", "Подкатегория", "Наименование", "Раздел формы", "Ед. изм.", "Цена/ставка", "Примечание"])
         self.table.setColumnHidden(0, True)
+        fit_table_columns(self.table, flex=(1, 3, 7),
+                          widths={2: 180, 4: 145, 5: 100, 6: 125})
         self.table.setItemDelegateForColumn(1, EditableComboDelegate(lambda: self.category_names(), self.table))
         self.table.setItemDelegateForColumn(2, EditableComboDelegate(lambda: self.subcategory_names(), self.table))
         self.table.setItemDelegateForColumn(4, EditableComboDelegate(lambda: distinct_texts("work_items", "category", COMMON_SECTIONS), self.table))
@@ -1422,6 +1426,8 @@ class TemplatesTab(BaseTab):
         self.table = CopyPasteTable(0, 6)
         self.table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование", "Ед. изм.", "Цена", "Кол-во по перечню"])
         self.table.setColumnHidden(0, True); self.table.setColumnHidden(1, True)
+        fit_table_columns(self.table, flex=(2,),
+                          widths={3: 110, 4: 120, 5: 145})
         self.table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("work_items", "unit", COMMON_UNITS), self.table))
         self.table.context_add_handler = self.add_work_to_template
         composition = table_card("4. Состав шаблона", self.table,
@@ -1908,6 +1914,8 @@ class ReportsTab(BaseTab):
         self.content_table = CopyPasteTable(0, 9)
         self.content_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование работы/услуги", "Ед. изм.", "Цена единицы", "Кол-во по перечню", "Стоимость по перечню", "Выполнено кол-во", "Стоимость выполнено"])
         self.content_table.setColumnHidden(0, True); self.content_table.setColumnHidden(1, True)
+        fit_table_columns(self.content_table, flex=(2,),
+                          widths={3: 95, 4: 125, 5: 120, 6: 130, 7: 120, 8: 135})
         self.content_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_content_items", "unit", distinct_texts("work_items", "unit", COMMON_UNITS)), self.content_table))
         self._content_recalc_lock = False
         self.content_table.itemChanged.connect(self.on_content_item_changed)
@@ -1954,6 +1962,8 @@ class ReportsTab(BaseTab):
         self.repair_table = CopyPasteTable(0, 7)
         self.repair_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование работы", "Основание", "Стоимость", "Объем", "Акт/ссылка"])
         self.repair_table.setColumnHidden(0, True); self.repair_table.setColumnHidden(1, True)
+        fit_table_columns(self.repair_table, flex=(2, 3, 6),
+                          widths={4: 120, 5: 150})
         self.repair_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_repair_items", "basis", COMMON_REPAIR_BASIS), self.repair_table))
         self.repair_table.context_add_handler = lambda: self.add_blank_report_row("Текущий ремонт")
         self.repair_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.repair_table)
@@ -2007,6 +2017,8 @@ class ReportsTab(BaseTab):
         self.management_table = CopyPasteTable(0, 7)
         self.management_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование услуги", "Ед. изм.", "Цена единицы", "Кол-во", "Стоимость"])
         self.management_table.setColumnHidden(0, True); self.management_table.setColumnHidden(1, True)
+        fit_table_columns(self.management_table, flex=(2,),
+                          widths={3: 110, 4: 135, 5: 115, 6: 145})
         self.management_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_management_items", "unit", distinct_texts("work_items", "unit", COMMON_UNITS)), self.management_table))
         self._management_recalc_lock = False
         self.management_table.itemChanged.connect(self.on_management_item_changed)
@@ -2038,6 +2050,8 @@ class ReportsTab(BaseTab):
         self.finance_table = CopyPasteTable(2, 6)
         self.finance_table.setHorizontalHeaderLabels(["ID", "Плательщик", "Долг на начало", "Начислено", "Поступило", "Долг на 1 января следующего периода"])
         self.finance_table.setColumnHidden(0, True)
+        fit_table_columns(self.finance_table, flex=(1,),
+                          widths={2: 155, 3: 155, 4: 155, 5: 200})
         self.finance_table.setItemDelegateForColumn(1, EditableComboDelegate(lambda: distinct_texts("report_financials", "payer_type", COMMON_PAYER_TYPES), self.finance_table))
         self.finance_table.set_value(0, 1, "Собственники")
         self.finance_table.set_value(1, 1, "Наниматели")
@@ -2934,6 +2948,8 @@ class MassApplyTab(BaseTab):
         review.add_widget(self.summary)
         self.table = MassPreviewTable(0, len(self.PREVIEW_COLUMNS))
         self.table.setHorizontalHeaderLabels(self.PREVIEW_COLUMNS)
+        fit_table_columns(self.table, flex=(0, 2, 7),
+                          widths={1: 135, 3: 115, 4: 135, 5: 135, 6: 120})
         review.add_widget(self.table, 1)
         root.addWidget(review, 1)
 
