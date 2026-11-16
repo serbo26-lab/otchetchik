@@ -546,7 +546,8 @@ def fill_combo(combo: QComboBox, sql: str, params: tuple = (), empty: str | None
     if preserve:
         restore_combo_selection(combo, old_data, old_text)
     combo.blockSignals(False)
-
+    if isinstance(combo, ClickComboBox):
+        combo._update_selected_tooltip(combo.currentText())
 
 
 def set_widgets_enabled(widgets: list[QWidget], enabled: bool) -> None:
@@ -1023,6 +1024,7 @@ class CategoriesTab(BaseTab):
         details = ContentCard("2. Параметры категории",
             "Раздел формы определяет место новых работ в отчете. Примечание не влияет на расчет.")
         form = QFormLayout()
+        self.editor_form = form
         self.name = QLineEdit()
         self.section = ClickComboBox(); self.section.setEditable(True); self.section.addItems(["Не выбрано", *COMMON_SECTIONS])
         self.unit = ClickComboBox(); self.unit.setEditable(True); self.unit.addItems(["Не выбрано", *COMMON_UNITS])
@@ -2943,6 +2945,7 @@ class MassApplyTab(BaseTab):
         context = ContentCard("1. Что заполняем",
             "Выберите УО, отчетный год и конкретную работу из справочника.")
         source = QFormLayout()
+        self.source_form = source
         self.company = ClickComboBox()
         self.company.currentIndexChanged.connect(self._company_changed)
         self.year = SafeSpinBox()
@@ -2960,6 +2963,7 @@ class MassApplyTab(BaseTab):
         # Step 2. Only input controls required by the selected formula are shown.
         calculation = ContentCard("2. Как рассчитываем")
         form = QFormLayout()
+        self.calculation_form = form
         self.mode = ClickComboBox()
         for title, key in self.MODES:
             self.mode.addItem(title, key)
@@ -3225,6 +3229,7 @@ class MassApplyTab(BaseTab):
         if old_work is not None and self.work.findData(old_work) >= 0:
             self.work.setCurrentIndex(self.work.findData(old_work))
         self.work.blockSignals(False)
+        self.work._update_selected_tooltip(self.work.currentText())
         self._load_target_houses()
 
     def preview(self):
