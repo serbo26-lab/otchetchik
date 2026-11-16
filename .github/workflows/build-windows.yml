@@ -66,8 +66,15 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          python -m scripts.run_ui_tests
-          if ($LASTEXITCODE -ne 0) { throw 'UI tests failed.' }
+          # Qt application state and global settings are isolated per test file.
+          # This also identifies the exact module responsible for a modal
+          # dialog or layout deadlock instead of blocking all test output.
+          $files = @(Get-ChildItem tests -Filter 'test_*.py' -File | Sort-Object Name)
+          foreach ($file in $files) {
+            Write-Host "=== UI regression: $($file.Name) ==="
+            python -m scripts.run_ui_tests --pattern $file.Name --timeout 90
+            if ($LASTEXITCODE -ne 0) { throw "UI tests failed in $($file.Name)." }
+          }
 
       - name: Capture acceptance UI screenshots
         shell: pwsh
