@@ -98,13 +98,14 @@ def empty_record_editor(
     title: str,
     description: str,
     add_handler,
+    button_title: str = "Добавить запись",
 ) -> QStackedWidget:
     """Replace a wall of disabled controls by one explicit first action."""
     stack = QStackedWidget()
     empty = QWidget()
     column = QVBoxLayout(empty)
     card = ContentCard(title, description)
-    button = QPushButton("Добавить запись")
+    button = QPushButton(button_title)
     button.setObjectName("PrimaryAction")
     button.clicked.connect(add_handler)
     card.add_widget(button)
@@ -113,6 +114,7 @@ def empty_record_editor(
     stack.addWidget(empty)
     stack.addWidget(form_scroll(form_widget))
     stack.setCurrentIndex(0)
+    stack.empty_add_button = button
     return stack
 
 
@@ -586,7 +588,7 @@ class CompaniesTab(BaseTab):
         self.editor_stack = empty_record_editor(
             formw, "Управляющая организация не выбрана",
             "Поля реквизитов откроются после создания или выбора УО слева.",
-            self.add_company,
+            self.add_company, "Добавить организацию",
         )
         splitter.addWidget(self.editor_stack)
         splitter.setChildrenCollapsible(False)
@@ -769,7 +771,7 @@ class HousesTab(BaseTab):
             formw, "Дом не выбран",
             "Выберите управляющую организацию слева и добавьте дом. "
             "После этого откроются адрес, площадь и период управления.",
-            self.add_house,
+            self.add_house, "Добавить дом",
         )
         splitter.addWidget(self.editor_stack)
         splitter.setChildrenCollapsible(False)
@@ -790,6 +792,9 @@ class HousesTab(BaseTab):
         self.delete_button.setEnabled(has_record)
         if hasattr(self, "editor_stack"):
             self.editor_stack.setCurrentIndex(1 if has_record else 0)
+            self.editor_stack.empty_add_button.setEnabled(
+                self.company_filter.currentData() is not None
+            )
         if not has_record:
             self._clear_form()
 
@@ -1439,8 +1444,15 @@ class TemplatesTab(BaseTab):
         self.save_button.clicked.connect(self.save)
         composition.add_widget(action_panel("Удаление строк", self.remove_item_button, purpose="danger"))
         composition.add_widget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
-        splitter.addWidget(right)
-        splitter.setSizes([280, 800])
+        self.editor_stack = empty_record_editor(
+            right, "Шаблон не выбран",
+            "Выберите шаблон слева или создайте новый. "
+            "Только после этого станут доступны его состав и сохранение.",
+            self.add_template, "Добавить шаблон",
+        )
+        splitter.addWidget(self.editor_stack)
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([315, 1010])
         self.reload_work_combo()
         self.refresh()
         self.update_form_state()
@@ -1450,6 +1462,8 @@ class TemplatesTab(BaseTab):
         set_widgets_enabled(self.form_widgets + [self.work_combo, self.table,
                             self.add_item_button, self.remove_item_button, self.save_button], has_record)
         self.delete_button.setEnabled(has_record)
+        if hasattr(self, "editor_stack"):
+            self.editor_stack.setCurrentIndex(1 if has_record else 0)
         self.add_item_button.setEnabled(bool(has_record and self.work_combo.currentData() is not None))
         if not has_record:
             self.name.clear(); self.notes.clear(); self.table.setRowCount(0)
@@ -1492,6 +1506,8 @@ class TemplatesTab(BaseTab):
         self.list.blockSignals(False)
         if select_row >= 0:
             self.list.setCurrentRow(select_row)
+        elif self.list.count() == 1 and target_id is None:
+            self.list.setCurrentRow(0)
 
     def _load_current(self):
         item = self.list.currentItem()
@@ -1703,15 +1719,19 @@ class ReportsTab(BaseTab):
         splitter.addWidget(left)
 
         right = QWidget(); right_l = QVBoxLayout(right)
-        right_l.addWidget(selectable_label(
+        self.report_workflow_caption = selectable_label(
             "3. Заполнение разделов → 4. Проверка отчета → 5. Выгрузка документов"
-        ))
-        self.report_empty_hint = selectable_label(
-            "Чтобы начать, выберите конкретную управляющую организацию, дом и год. "
-            "Затем откройте существующий отчет или создайте новый."
         )
-        self.report_empty_hint.setObjectName("CardSubtitle")
-        right_l.addWidget(self.report_empty_hint)
+        right_l.addWidget(self.report_workflow_caption)
+        self.report_empty_card = ContentCard(
+            "Отчёт пока не выбран",
+            "Чтобы открыть поля официальной формы, задайте рабочий контекст слева."
+        )
+        self.report_empty_hint = selectable_label(
+            "Выберите управляющую организацию, дом и отчётный год."
+        )
+        self.report_empty_card.add_widget(self.report_empty_hint)
+        right_l.addWidget(self.report_empty_card)
         self.report_tabs = QTabWidget()
         self.report_tabs.setUsesScrollButtons(True)
         right_l.addWidget(self.report_tabs, 1)
@@ -1724,8 +1744,9 @@ class ReportsTab(BaseTab):
         self.report_tabs.setEnabled(False)
         self.save_button = QPushButton("Сохранить отчет")
         self.save_button.clicked.connect(self.save_manually)
-        right_l.addWidget(action_panel("Сохранение выбранного отчета", self.save_button,
-                                       primary=self.save_button))
+        self.save_panel = action_panel("Сохранение выбранного отчета", self.save_button,
+                                       primary=self.save_button)
+        right_l.addWidget(self.save_panel)
         splitter.addWidget(right)
         splitter.setSizes([300, 1000])
         self._connect_autosave_signals()
@@ -1736,7 +1757,9 @@ class ReportsTab(BaseTab):
         has_report = bool(self.current_id)
         self.report_tabs.setEnabled(has_report)
         self.report_tabs.setVisible(has_report)
-        self.report_empty_hint.setVisible(not has_report)
+        self.report_workflow_caption.setVisible(has_report)
+        self.report_empty_card.setVisible(not has_report)
+        self.save_panel.setVisible(has_report)
         if not has_report:
             if self.company_filter.currentData() is None:
                 instruction = "Сначала выберите управляющую организацию."
@@ -2867,6 +2890,7 @@ class MassApplyTab(BaseTab):
         source.addRow(selectable_label("Управляющая организация"), self.company)
         source.addRow(selectable_label("Отчетный год"), self.year)
         source.addRow(selectable_label("Работа / услуга"), self.work)
+        polish_form(source, label_width=155)
         context.add_layout(source)
         top.addWidget(context, 1)
 
@@ -2894,6 +2918,7 @@ class MassApplyTab(BaseTab):
             (self.quantity_label, self.quantity), (self.total_label, self.total),
         ]:
             form.addRow(label, field)
+        polish_form(form, label_width=135)
         calculation.add_layout(form)
         self.help = selectable_label("")
         self.help.setObjectName("CardSubtitle")
