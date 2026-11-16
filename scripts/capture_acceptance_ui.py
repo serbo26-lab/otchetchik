@@ -48,7 +48,11 @@ SCREENS = [
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--window-width", type=int, default=1366)
+    parser.add_argument("--window-height", type=int, default=900)
     args = parser.parse_args()
+    if args.window_width < 860 or args.window_height < 520:
+        parser.error("Minimum supported logical window size is 860 × 520.")
     args.out_dir.mkdir(parents=True, exist_ok=True)
     app = QApplication.instance() or QApplication([])
     app.setQuitOnLastWindowClosed(False)
@@ -56,7 +60,7 @@ def main():
     result = {
         "internal_scale": 100,
         "qt_scale_factor": os.environ.get("QT_SCALE_FACTOR", "1.0"),
-        "windows_size": [1366, 900],
+        "windows_size": [args.window_width, args.window_height],
         "screens": [],
     }
     with tempfile.TemporaryDirectory(prefix="otchetchik-ui-", ignore_cleanup_errors=True) as workdir:
@@ -65,7 +69,7 @@ def main():
             # Empty-state screenshots catch blocked controls and unusable blank
             # panels that populated acceptance data would otherwise miss.
             empty_window = MainWindow()
-            empty_window.resize(1366, 900)
+            empty_window.resize(args.window_width, args.window_height)
             empty_window.show()
             try:
                 for theme in ("light", "dark"):
@@ -97,7 +101,7 @@ def main():
             db.create_report(org, house, 2026)
             make_backup("manual")
             window = MainWindow()
-            window.resize(1366, 900)
+            window.resize(args.window_width, args.window_height)
             window.show()
             try:
                 window.houses_tab.reload()
@@ -120,7 +124,9 @@ def main():
                             window.reports_tab.report_tabs.setCurrentIndex(tab)
                             app.processEvents()
                         image = window.grab()
-                        if image.isNull() or image.width() < 1150 or image.height() < 750:
+                        if (image.isNull()
+                                or image.width() < args.window_width * 0.95
+                                or image.height() < args.window_height * 0.95):
                             raise RuntimeError(
                                 f"Qt screenshot failed or layout too small: {theme}/{name}"
                             )
