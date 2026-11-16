@@ -105,7 +105,9 @@ class NavigationSidebar(QFrame):
     def __init__(self, theme: str, scale: int, parent=None):
         super().__init__(parent)
         self.setObjectName("Sidebar")
-        self.setFixedWidth(245)
+        # The previous 245px width truncated "Управляющие организации"
+        # and "Данные и резервные копии" even at normal 100% UI scale.
+        self.setFixedWidth(278)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 16, 10, 12)
         layout.setSpacing(9)
@@ -131,7 +133,7 @@ class NavigationSidebar(QFrame):
         self.navigation.setSpacing(3)
         for title, _glyph, subtitle, _help in PAGES:
             item = QListWidgetItem(title)
-            item.setToolTip(subtitle)
+            item.setToolTip(title + "\n" + subtitle)
             item.setSizeHint(QSize(0, 44))
             self.navigation.addItem(item)
         self.navigation.currentRowChanged.connect(self.navigateRequested.emit)
@@ -203,16 +205,12 @@ class PageChrome(QFrame):
         self.guide_button = QPushButton("Как продолжить")
         self.guide_button.setCheckable(True)
         self.guide_button.toggled.connect(self._toggle_guide)
-        context_row.addWidget(self.guide_button)
-        container.addLayout(context_row)
-
-        next_row = QHBoxLayout()
-        next_row.addStretch(1)
         self.next_button = QPushButton()
         self.next_button.setObjectName("PrimaryAction")
         self.next_button.hide()
-        next_row.addWidget(self.next_button)
-        container.addLayout(next_row)
+        context_row.addWidget(self.next_button)
+        context_row.addWidget(self.guide_button)
+        container.addLayout(context_row)
 
         self.guide = QLabel()
         self.guide.setObjectName("Guide")
