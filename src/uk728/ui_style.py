@@ -100,6 +100,8 @@ QPushButton:pressed, QToolButton:pressed { background: @readonly; }
 QPushButton:disabled, QToolButton:disabled { background: @readonly; color: @muted; border-color: @border; }
 QPushButton#PrimaryAction { background: @accent; color: @on_accent; border-color: @accent; font-weight: 600; }
 QPushButton#PrimaryAction:hover { background: @accent_hover; }
+QPushButton#PrimaryAction:disabled { background: @readonly; color: @muted; border-color: @border; font-weight: 400; }
+QPushButton#DangerAction:disabled { background: @readonly; color: @muted; border-color: @border; }
 QPushButton#DangerAction { color: @danger; border-color: @danger; }
 QPushButton#DangerAction:hover { background: @selected; }
 QPushButton#SideUtility { text-align: left; padding: 7px 9px; }
