@@ -3994,6 +3994,37 @@ class MainWindow(QMainWindow):
         self._scale = 100
         self.settings.setValue("ui/scale", 100)
 
+    def save_before_assistant_sync(self) -> bool:
+        """Do not replace form values while there are unsaved local edits."""
+        active = self.tabs.currentWidget()
+        try:
+            if isinstance(active, ReportsTab):
+                active.flush_autosave()
+            elif self._can_autosave_tab(active):
+                if active.save(refresh_after=False) is False:
+                    raise ValueError("Сначала исправьте ошибки в текущей форме.")
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Обновление данных отменено",
+                f"Не удалось сохранить текущую форму: {exc}"
+            )
+            return False
+        return True
+
+    def reload_after_assistant_sync(self):
+        """Update all selectors after committing only local mirrored records."""
+        self.company_tab.refresh()
+        if self.company_tab.current_id:
+            self.company_tab._load_current()
+        self.houses_tab.reload_companies()
+        self.houses_tab.refresh()
+        if self.houses_tab.current_id:
+            self.houses_tab._load_current()
+        self.reports_tab.reload_filters()
+        self.mass_tab.reload()
+        self._apply_company_context(self.tabs.currentWidget())
+        self.refresh_context()
+
     def auto_backup(self):
         try:
             tab = self.tabs.currentWidget()
@@ -4047,8 +4078,24 @@ def main():
             "Проверьте подготовленную копию и файлы в папке data/backups."
         )
         return 1
+    # Auto-refresh shared source links on startup. An unavailable or damaged
+    # Assistant DB never blocks independent reporting work and is NEVER
+    # recreated by the Reporter.
+    assistant_warning = None
+    try:
+        source = assistant_source.configured_source_path()
+        if source.is_file():
+            make_backup("before_assistant_sync")
+            assistant_source.synchronize()
+        else:
+            assistant_warning = f"База Ассистента не найдена: {source}"
+    except Exception as exc:
+        assistant_warning = f"Не удалось обновить сведения Ассистента: {exc}"
     window = MainWindow()
     window.show()
+    if assistant_warning:
+        window.backups_tab.update_assistant_status(assistant_warning)
+        window.statusBar().showMessage(assistant_warning, 15000)
     if protected is not None:
         QTimer.singleShot(
             0, lambda: QMessageBox.information(
