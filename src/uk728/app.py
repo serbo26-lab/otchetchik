@@ -2408,6 +2408,8 @@ class ReportsTab(BaseTab):
                 row = self.finance_table.rowCount(); self.finance_table.insertRow(row)
                 vals = [fin["id"], fin["payer_type"], fin["debt_start"], fin["accrued"], fin["paid"], fin["debt_end"]]
                 for c, val in enumerate(vals): self.finance_table.set_value(row, c, val)
+                payer_item = self.finance_table.item(row, 1)
+                payer_item.setFlags(payer_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             claims = bundle["claims"] or {}
             self.claim_pret.setText(str(claims.get("pretensions_count") or "")); self.claim_lawsuits.setText(str(claims.get("lawsuits_count") or "")); self.claim_amount.setText(str(claims.get("recovered_amount") or ""))
         finally:
@@ -3241,9 +3243,17 @@ class BackupsTab(BaseTab):
             "защитные снимки перед изменениями не удаляются автоматически."
         )
         self.archive_list = QListWidget()
+        self.archive_list.setMinimumHeight(165)
+        self.archive_list.setMaximumHeight(320)
         self.archive_list.currentItemChanged.connect(self.update_controls)
-        overview.add_widget(self.archive_list, 1)
-        layout.addWidget(overview, 1)
+        overview.add_widget(self.archive_list)
+        self.empty_archive_hint = selectable_label(
+            "Резервных копий пока нет. Нажмите «Создать копию», "
+            "чтобы сохранить текущую базу перед проверкой или изменениями."
+        )
+        self.empty_archive_hint.setObjectName("CardSubtitle")
+        overview.add_widget(self.empty_archive_hint)
+        layout.addWidget(overview)
 
         make = QPushButton("Создать копию")
         make.clicked.connect(self.backup_now)
@@ -3275,6 +3285,7 @@ class BackupsTab(BaseTab):
         self.info.setReadOnly(True)
         self.info.setMaximumHeight(125)
         layout.addWidget(self.info)
+        layout.addStretch(1)
         self.refresh()
 
     def _selected_path(self):
@@ -3323,6 +3334,8 @@ class BackupsTab(BaseTab):
             if selected == source:
                 self.archive_list.setCurrentItem(item)
         self.archive_list.blockSignals(False)
+        self.archive_list.setVisible(bool(backups))
+        self.empty_archive_hint.setVisible(not backups)
         self.update_controls()
         self.info.setPlainText(
             f"Папка данных: {data_dir()}\n"
