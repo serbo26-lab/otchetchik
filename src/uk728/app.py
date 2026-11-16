@@ -1777,13 +1777,24 @@ class ReportsTab(BaseTab):
         right_l.addWidget(self.report_workflow_caption)
         self.report_empty_card = ContentCard(
             "Отчёт пока не выбран",
-            "Чтобы открыть поля официальной формы, задайте рабочий контекст слева."
+            "Укажите данные слева, чтобы открыть редактор официальной формы."
+        )
+        self.report_empty_card.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
         )
         self.report_empty_hint = selectable_label(
-            "Выберите управляющую организацию, дом и отчётный год."
+            "Сначала выберите управляющую организацию."
         )
         self.report_empty_card.add_widget(self.report_empty_hint)
         right_l.addWidget(self.report_empty_card)
+        # Hidden report_tabs do not contribute to layout sizing. Without
+        # an explicit expandable filler the remaining ContentCard was being
+        # stretched to the entire height and its labels spread far apart.
+        self.report_empty_fill = QWidget()
+        self.report_empty_fill.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        right_l.addWidget(self.report_empty_fill, 1)
         self.report_tabs = QTabWidget()
         self.report_tabs.setUsesScrollButtons(True)
         right_l.addWidget(self.report_tabs, 1)
@@ -1811,6 +1822,7 @@ class ReportsTab(BaseTab):
         self.report_tabs.setVisible(has_report)
         self.report_workflow_caption.setVisible(has_report)
         self.report_empty_card.setVisible(not has_report)
+        self.report_empty_fill.setVisible(not has_report)
         self.save_panel.setVisible(has_report)
         if not has_report:
             if self.company_filter.currentData() is None:
