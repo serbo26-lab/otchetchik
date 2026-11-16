@@ -74,6 +74,10 @@ class DirectoryFlowTests(unittest.TestCase):
         self.assertFalse(category.delete_sub_button.isEnabled())
         self.assertFalse(category.save_button.isEnabled())
         self.assertFalse(category.delete_button.isEnabled())
+        # A sole default template is now selected for immediate editing.
+        # Clear it explicitly to verify genuinely empty form behavior.
+        template.list.setCurrentRow(-1)
+        self.assertIsNone(template.current_id)
         self.assertFalse(template.add_item_button.isEnabled())
         self.assertFalse(template.remove_item_button.isEnabled())
         self.assertFalse(template.delete_button.isEnabled())
