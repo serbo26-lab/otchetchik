@@ -43,7 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import db
+from . import db, assistant_source
 from .db import connect
 from .exporters import export_docx, export_pdf, export_xlsx
 from .paths import data_dir, make_backup
@@ -604,6 +604,13 @@ class CompaniesTab(BaseTab):
         self.notes = QTextEdit(); self.notes.setFixedHeight(80)
         self.form_widgets = [self.name, self.ogrn, self.addr, self.person, self.contact, self.notes]
         basic = ContentCard("2. Основные сведения")
+        self.source_note = selectable_label(
+            "Эта УО получена из ГИС ЖКХ Ассистента. Название и ОГРН "
+            "изменяются только в Ассистенте; дополнительные сведения "
+            "для отчёта сохраняются в Отчётчике."
+        )
+        self.source_note.setObjectName("CardSubtitle")
+        basic.add_widget(self.source_note)
         basic_form = QFormLayout()
         basic_form.addRow(selectable_label("Полное наименование"), self.name)
         basic_form.addRow(selectable_label("ОГРН / ИНН"), self.ogrn)
@@ -648,8 +655,17 @@ class CompaniesTab(BaseTab):
 
     def update_form_state(self):
         has_record = self.current_id is not None
+        link = db.row(
+            "SELECT assistant_source_id FROM companies WHERE id=?", (self.current_id,)
+        ) if has_record else None
+        source_linked = bool(link and link["assistant_source_id"])
         set_widgets_enabled(self.form_widgets + [self.save_button], has_record)
-        self.delete_button.setEnabled(has_record)
+        self.name.setEnabled(has_record and not source_linked)
+        self.ogrn.setEnabled(has_record and not source_linked)
+        self.name.setToolTip("Название УО изменяется в ГИС ЖКХ Ассистенте." if source_linked else "")
+        self.ogrn.setToolTip("ОГРН изменяется в ГИС ЖКХ Ассистенте." if source_linked else "")
+        self.source_note.setVisible(source_linked)
+        self.delete_button.setEnabled(has_record and not source_linked)
         if hasattr(self, "editor_stack"):
             self.editor_stack.setCurrentIndex(1 if has_record else 0)
         if not has_record:
@@ -661,7 +677,14 @@ class CompaniesTab(BaseTab):
         self.list.clear()
         select_row = -1
         for r in db.rows("SELECT * FROM companies ORDER BY name, id"):
-            item = QListWidgetItem(r["name"] or "Без названия")
+            linked = bool(r["assistant_source_id"])
+            item = QListWidgetItem(
+                ("Ассистент · " if linked else "") + (r["name"] or "Без названия")
+            )
+            item.setToolTip(
+                "Данные УО из общей базы (только чтение)" if linked
+                else "Локальная организация Отчётчика"
+            )
             item.setData(Qt.UserRole, r["id"])
             self.list.addItem(item)
             if target_id is not None and r["id"] == target_id:
@@ -705,6 +728,10 @@ class CompaniesTab(BaseTab):
     def delete_company(self):
         if not self.current_id:
             return
+        if db.row("SELECT id FROM companies WHERE id=? AND assistant_source_id IS NOT NULL",
+                  (self.current_id,)):
+            self.msg("Связанную УО нельзя удалить здесь. Изменения выполняются в Ассистенте.")
+            return
         linked = db.row(
             "SELECT (SELECT COUNT(*) FROM houses WHERE company_id=?) + "
             "(SELECT COUNT(*) FROM reports WHERE company_id=?) AS total",
@@ -733,10 +760,22 @@ class CompaniesTab(BaseTab):
             self.msg("Нажмите «Добавить организацию», затем заполните поля и сохраните.")
             return
         with connect() as conn:
-            conn.execute(
-                "UPDATE companies SET name=?, ogrn_inn=?, reception_address=?, report_person=?, report_contact=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                (self.name.text(), self.ogrn.text(), self.addr.toPlainText(), self.person.text(), self.contact.text(), self.notes.toPlainText(), self.current_id),
-            )
+            source = conn.execute(
+                "SELECT assistant_source_id FROM companies WHERE id=?", (self.current_id,)
+            ).fetchone()
+            if source and source["assistant_source_id"]:
+                # Never override linked source identity through the local form.
+                conn.execute(
+                    "UPDATE companies SET reception_address=?,report_person=?,"
+                    "report_contact=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (self.addr.toPlainText(), self.person.text(), self.contact.text(),
+                     self.notes.toPlainText(), self.current_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE companies SET name=?, ogrn_inn=?, reception_address=?, report_person=?, report_contact=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (self.name.text(), self.ogrn.text(), self.addr.toPlainText(), self.person.text(), self.contact.text(), self.notes.toPlainText(), self.current_id),
+                )
             conn.commit()
         self._remember_form_state()
         self.msg("Организация сохранена")
