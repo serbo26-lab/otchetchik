@@ -210,6 +210,7 @@ def init_db() -> None:
         # remains entirely separate and is never attached as a writable DB.
         _ensure_column(conn, "companies", "assistant_source_id", "TEXT")
         _ensure_column(conn, "houses", "assistant_source_id", "TEXT")
+        _ensure_column(conn, "houses", "assistant_area_missing", "INTEGER NOT NULL DEFAULT 0")
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_assistant_source "
             "ON companies(assistant_source_id) "
