@@ -115,6 +115,9 @@ def read_source(source: Path | str) -> AssistantSnapshot:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA query_only = ON")
             conn.execute("PRAGMA busy_timeout = 8000")
+            # A single read transaction gives organizations/houses one
+            # consistent WAL snapshot while Assistant is editing records.
+            conn.execute("BEGIN")
             _required_columns(conn, "management_organizations",
                               {"id", "name", "ogrn"})
             cols = _required_columns(conn, "houses",
