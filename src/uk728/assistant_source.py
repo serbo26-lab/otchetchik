@@ -219,10 +219,12 @@ def synchronize(source: Path | str | None = None, *, save_path: bool = False) ->
                 fields = (
                     owner, src_id, house["address"], house["total_area"] or 0,
                     house["management_start"], house["management_end"],
+                    int(house["total_area"] is None),
                 )
                 conn.execute(
                     "INSERT INTO houses(company_id,assistant_source_id,address,total_area,"
-                    "management_start,management_end) VALUES(?,?,?,?,?,?)",
+                    "management_start,management_end,assistant_area_missing) "
+                    "VALUES(?,?,?,?,?,?,?)",
                     fields,
                 )
                 new_houses += 1
@@ -241,7 +243,8 @@ def synchronize(source: Path | str | None = None, *, save_path: bool = False) ->
                 if house["total_area"] is None:
                     conn.execute(
                         "UPDATE houses SET company_id=?,address=?,management_start=?,"
-                        "management_end=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        "management_end=?,assistant_area_missing=1,"
+                        "updated_at=CURRENT_TIMESTAMP WHERE id=?",
                         (owner, house["address"], house["management_start"],
                          house["management_end"], hid),
                     )
@@ -249,7 +252,7 @@ def synchronize(source: Path | str | None = None, *, save_path: bool = False) ->
                     conn.execute(
                         "UPDATE houses SET company_id=?,address=?,total_area=?,"
                         "management_start=?,management_end=?,"
-                        "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        "assistant_area_missing=0,updated_at=CURRENT_TIMESTAMP WHERE id=?",
                         (owner, house["address"], house["total_area"],
                          house["management_start"], house["management_end"], hid),
                     )
