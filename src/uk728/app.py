@@ -578,7 +578,9 @@ class CompaniesTab(BaseTab):
         self.ogrn = QLineEdit()
         self.addr = QTextEdit(); self.addr.setFixedHeight(70)
         self.person = QLineEdit()
+        self.person.setPlaceholderText("ФИО и должность уполномоченного лица")
         self.contact = QLineEdit()
+        self.contact.setPlaceholderText("Телефон и адрес электронной почты, при наличии")
         self.notes = QTextEdit(); self.notes.setFixedHeight(80)
         self.form_widgets = [self.name, self.ogrn, self.addr, self.person, self.contact, self.notes]
         basic = ContentCard("2. Основные сведения")
