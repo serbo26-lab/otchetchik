@@ -199,6 +199,16 @@ class ClickComboBox(QComboBox):
         return super().eventFilter(obj, event)
 
 
+class SafeSpinBox(QSpinBox):
+    """Prevent accidental year changes while the user scrolls a form."""
+
+    def wheelEvent(self, event):
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
 class EditableComboDelegate(QStyledItemDelegate):
     """Редактор ячейки как выпадающий список, но без жесткого ограничения.
     Пользователь может выбрать старое значение или набрать любое новое.
@@ -245,6 +255,8 @@ class CopyPasteTable(QTableWidget):
         # Keep generic behavior for standalone directories and editing tables.
         self.context_add_handler = None
         self.context_delete_handler = None
+        self.allow_paste_append = False
+        self.protected_columns: set[int] = set()
 
     def _sync_cell_tooltip(self, item):
         if item and item.toolTip() != item.text():
@@ -313,17 +325,30 @@ class CopyPasteTable(QTableWidget):
         text = QGuiApplication.clipboard().text()
         if not text:
             return
+        lines = text.splitlines()
+        if len(lines) > 1000:
+            QMessageBox.warning(self, "Вставка таблицы",
+                                "За один раз можно вставить не более 1000 строк.")
+            return
         start_row = self.currentRow() if self.currentRow() >= 0 else 0
         start_col = self.currentColumn() if self.currentColumn() >= 0 else 0
-        for r, line in enumerate(text.splitlines()):
-            row = start_row + r
+        for offset, line in enumerate(lines):
+            row = start_row + offset
             if row >= self.rowCount():
-                self.insertRow(row)
-            for c, value in enumerate(line.split("\t")):
-                col = start_col + c
+                if not self.allow_paste_append:
+                    break  # Fixed legal tables cannot gain arbitrary payers.
+                before = self.rowCount()
+                if self.context_add_handler is not None:
+                    self.context_add_handler()  # Creates business metadata/defaults.
+                else:
+                    self.insertRow(self.rowCount())
+                if self.rowCount() <= before:
+                    break
+            for shift, value in enumerate(line.split("\t")):
+                col = start_col + shift
                 if col >= self.columnCount():
-                    continue
-                if self.isColumnHidden(col):
+                    break
+                if self.isColumnHidden(col) or col in self.protected_columns:
                     continue
                 self.setItem(row, col, QTableWidgetItem(value))
 
@@ -999,6 +1024,7 @@ class CategoriesTab(BaseTab):
         self.sub_table.setItemDelegateForColumn(2, EditableComboDelegate(lambda: distinct_texts("work_categories", "section", ["Не выбрано", *COMMON_SECTIONS]), self.sub_table))
         self.sub_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("work_categories", "unit", ["Не выбрано", *COMMON_UNITS]), self.sub_table))
         self.sub_table.context_add_handler = self.add_subcategory
+        self.sub_table.allow_paste_append = True
         subcategories = table_card("3. Подкатегории", self.sub_table,
                                    subtitle="Сначала добавьте строку, затем заполните ее поля.")
         self.add_sub_button = QPushButton("Добавить подкатегорию")
@@ -1202,6 +1228,7 @@ class WorksTab(BaseTab):
         self.table.setItemDelegateForColumn(4, EditableComboDelegate(lambda: distinct_texts("work_items", "category", COMMON_SECTIONS), self.table))
         self.table.setItemDelegateForColumn(5, EditableComboDelegate(lambda: distinct_texts("work_items", "unit", COMMON_UNITS), self.table))
         self.table.context_add_handler = self.add_row
+        self.table.allow_paste_append = True
         self.form_widgets = [self.table]
         self._initial_work_rows = {}
         entries = table_card("2. Справочник работ и услуг", self.table,
@@ -1643,7 +1670,7 @@ class CreateReportDialog(QDialog):
         self.setWindowTitle("Создать отчет")
         layout = QVBoxLayout(self)
         form = QFormLayout()
-        self.year = QSpinBox(); self.year.setRange(2000, 2100); self.year.setValue(int(default_year or 2026))
+        self.year = SafeSpinBox(); self.year.setRange(2000, 2100); self.year.setValue(int(default_year or 2026))
         self.year.valueChanged.connect(self.fill_full_year)
         self.period_start = QLineEdit(); self.period_end = QLineEdit()
         self.period_start.setPlaceholderText("дд.мм.гггг или гггг-мм-дд")
@@ -1695,7 +1722,7 @@ class ReportsTab(BaseTab):
         left = QWidget(); left_l = QVBoxLayout(left)
         self.company_filter = ClickComboBox(); self.company_filter.currentIndexChanged.connect(lambda _i: self.reload_houses_filter())
         self.house_filter = ClickComboBox(); self.house_filter.currentIndexChanged.connect(self.refresh)
-        self.year_filter = QSpinBox(); self.year_filter.setRange(2000, 2100); self.year_filter.setValue(2026); self.year_filter.valueChanged.connect(self.refresh)
+        self.year_filter = SafeSpinBox(); self.year_filter.setRange(2000, 2100); self.year_filter.setValue(2026); self.year_filter.valueChanged.connect(self.refresh)
         context_card = ContentCard("1. Выберите УО, дом и отчетный год")
         choices = QFormLayout()
         choices.addRow(selectable_label("УО"), self.company_filter)
@@ -1895,7 +1922,7 @@ class ReportsTab(BaseTab):
         layout = QVBoxLayout(w)
         card = ContentCard("Общие сведения", "Укажите отчетный год, фактический период управления и статус.")
         form = QFormLayout()
-        self.year = QSpinBox(); self.year.setRange(2000, 2100); self.year.setValue(2026)
+        self.year = SafeSpinBox(); self.year.setRange(2000, 2100); self.year.setValue(2026)
         self.period_start = QLineEdit(); self.period_start.setPlaceholderText("дд.мм.гггг или гггг-мм-дд")
         self.period_end = QLineEdit(); self.period_end.setPlaceholderText("дд.мм.гггг или гггг-мм-дд")
         fast = QPushButton("Заполнить полный год 01.01–31.12"); fast.clicked.connect(self.fill_full_year)
@@ -1943,6 +1970,7 @@ class ReportsTab(BaseTab):
         self._content_recalc_lock = False
         self.content_table.itemChanged.connect(self.on_content_item_changed)
         self.content_table.context_add_handler = lambda: self.add_blank_report_row("Содержание")
+        self.content_table.allow_paste_append = True
         self.content_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.content_table)
         content_card = table_card_with_selection(
             "Строки содержания", self.content_table, name_column=2
@@ -1989,6 +2017,7 @@ class ReportsTab(BaseTab):
                           widths={4: 120, 5: 150})
         self.repair_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_repair_items", "basis", COMMON_REPAIR_BASIS), self.repair_table))
         self.repair_table.context_add_handler = lambda: self.add_blank_report_row("Текущий ремонт")
+        self.repair_table.allow_paste_append = True
         self.repair_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.repair_table)
         repair_card = table_card_with_selection(
             "Работы текущего ремонта", self.repair_table, name_column=2
@@ -2046,6 +2075,7 @@ class ReportsTab(BaseTab):
         self._management_recalc_lock = False
         self.management_table.itemChanged.connect(self.on_management_item_changed)
         self.management_table.context_add_handler = lambda: self.add_blank_report_row("Управление")
+        self.management_table.allow_paste_append = True
         self.management_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.management_table)
         management_card = table_card_with_selection(
             "Внутренний расчет услуг управления", self.management_table, name_column=2
@@ -2078,6 +2108,10 @@ class ReportsTab(BaseTab):
         self.finance_table.setItemDelegateForColumn(1, EditableComboDelegate(lambda: distinct_texts("report_financials", "payer_type", COMMON_PAYER_TYPES), self.finance_table))
         self.finance_table.set_value(0, 1, "Собственники")
         self.finance_table.set_value(1, 1, "Наниматели")
+        self.finance_table.protected_columns = {1}
+        for payer_row in range(self.finance_table.rowCount()):
+            item = self.finance_table.item(payer_row, 1)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         # The official finance section has fixed payers; arbitrary insertion
         # from the generic context menu would violate the payer layout.
         self.finance_table.context_add_handler = lambda: self.msg(
@@ -2883,7 +2917,7 @@ class MassApplyTab(BaseTab):
         source = QFormLayout()
         self.company = ClickComboBox()
         self.company.currentIndexChanged.connect(self._company_changed)
-        self.year = QSpinBox()
+        self.year = SafeSpinBox()
         self.year.setRange(2000, 2100)
         self.year.setValue(2026)
         self.work = ClickComboBox()
