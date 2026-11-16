@@ -53,6 +53,14 @@ jobs:
           python -m pip install "pypdf>=5,<7"
           if ($LASTEXITCODE -ne 0) { throw 'PDF inspection dependency installation failed.' }
 
+      - name: Focused narrow-window regression tests
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m scripts.run_ui_tests --pattern test_v1612_responsive.py --timeout 75
+          if ($LASTEXITCODE -ne 0) { throw 'Responsive UI regressions failed.' }
+
       - name: UI and navigation tests
         shell: pwsh
         env:
