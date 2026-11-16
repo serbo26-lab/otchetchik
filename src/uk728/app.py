@@ -4000,7 +4000,8 @@ class MainWindow(QMainWindow):
         try:
             if isinstance(active, ReportsTab):
                 active.flush_autosave()
-            elif self._can_autosave_tab(active):
+            elif isinstance(active, (CompaniesTab, HousesTab, CategoriesTab,
+                                      WorksTab, TemplatesTab)):
                 if active.save(refresh_after=False) is False:
                     raise ValueError("Сначала исправьте ошибки в текущей форме.")
         except Exception as exc:
