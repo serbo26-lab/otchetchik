@@ -7,7 +7,7 @@ from typing import Any
 from .paths import db_path
 from .utils import full_year_period
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
@@ -206,6 +206,20 @@ def init_db() -> None:
         # но оставляются в базе, чтобы не рисковать пользовательскими данными.
         _ensure_column(conn, "work_items", "group_name", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "work_items", "subgroup_name", "TEXT NOT NULL DEFAULT ''")
+        # Stable source UUIDs from GIS JKH Assistant. The original SQLite
+        # remains entirely separate and is never attached as a writable DB.
+        _ensure_column(conn, "companies", "assistant_source_id", "TEXT")
+        _ensure_column(conn, "houses", "assistant_source_id", "TEXT")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_assistant_source "
+            "ON companies(assistant_source_id) "
+            "WHERE assistant_source_id IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_houses_assistant_source "
+            "ON houses(assistant_source_id) "
+            "WHERE assistant_source_id IS NOT NULL"
+        )
         for table in ("work_categories", "work_items", "template_items", "report_content_items", "report_management_items"):
             cols = _table_columns(conn, table)
             if "unit" in cols:
