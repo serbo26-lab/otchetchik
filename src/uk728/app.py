@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFormLayout,
+    QSizePolicy,
     QGridLayout,
     QGroupBox,
     QFrame,
@@ -59,7 +60,7 @@ from .mass_apply_logic import (ACTION_TEXT as MASS_ACTION_TEXT, OutdatedPreview 
                                build_plan as build_mass_plan, apply_plan as apply_mass_plan)
 from .ui_components import (
     ActionPanel, ContentCard, action_panel, describe_context,
-    table_card, table_card_with_selection,
+    table_card, table_card_with_selection, fit_table_columns,
 )
 
 APP_TITLE = "Отчетность УК по приказу № 728/пр"
@@ -72,6 +73,47 @@ def selectable_label(text: str = "") -> QLabel:
     return label
 
 
+
+
+def polish_form(form: QFormLayout, *, label_width: int = 165) -> None:
+    """Readable aligned form labels instead of narrow four-line captions."""
+    form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+    form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+    for row in range(form.rowCount()):
+        entry = form.itemAt(row, QFormLayout.ItemRole.LabelRole)
+        label = entry.widget() if entry is not None else None
+        if not isinstance(label, QLabel):
+            continue
+        title = label.text().strip()
+        label.setMinimumWidth(label_width)
+        label.setMaximumWidth(max(label_width + 70, 245))
+        label.setWordWrap(len(title) > 43)
+        label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        label.setToolTip(title)
+
+
+def empty_record_editor(
+    form_widget: QWidget,
+    title: str,
+    description: str,
+    add_handler,
+) -> QStackedWidget:
+    """Replace a wall of disabled controls by one explicit first action."""
+    stack = QStackedWidget()
+    empty = QWidget()
+    column = QVBoxLayout(empty)
+    card = ContentCard(title, description)
+    button = QPushButton("Добавить запись")
+    button.setObjectName("PrimaryAction")
+    button.clicked.connect(add_handler)
+    card.add_widget(button)
+    column.addWidget(card)
+    column.addStretch(1)
+    stack.addWidget(empty)
+    stack.addWidget(form_scroll(form_widget))
+    stack.setCurrentIndex(0)
+    return stack
 
 
 COMMON_SECTIONS = ["Содержание", "Текущий ремонт", "Управление"]
@@ -516,6 +558,7 @@ class CompaniesTab(BaseTab):
         basic_form = QFormLayout()
         basic_form.addRow(selectable_label("Полное наименование"), self.name)
         basic_form.addRow(selectable_label("ОГРН / ИНН"), self.ogrn)
+        polish_form(basic_form)
         basic.add_layout(basic_form)
         form_layout.addWidget(basic)
 
@@ -525,12 +568,14 @@ class CompaniesTab(BaseTab):
                               ("Кто дает разъяснения по отчету", self.person),
                               ("Телефон / email", self.contact)]:
             contact_form.addRow(selectable_label(title), widget)
+        polish_form(contact_form)
         report_contact.add_layout(contact_form)
         form_layout.addWidget(report_contact)
 
         extra = ContentCard("4. Примечания")
         extra_form = QFormLayout()
         extra_form.addRow(selectable_label("Примечание"), self.notes)
+        polish_form(extra_form)
         extra.add_layout(extra_form)
         form_layout.addWidget(extra)
 
@@ -538,8 +583,14 @@ class CompaniesTab(BaseTab):
         self.save_button.clicked.connect(self.save)
         form_layout.addWidget(action_panel("Сохранение сведений", self.save_button, primary=self.save_button))
         form_layout.addStretch()
-        splitter.addWidget(form_scroll(formw))
-        splitter.setSizes([260, 700])
+        self.editor_stack = empty_record_editor(
+            formw, "Управляющая организация не выбрана",
+            "Поля реквизитов откроются после создания или выбора УО слева.",
+            self.add_company,
+        )
+        splitter.addWidget(self.editor_stack)
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([315, 1000])
         self.refresh()
         self.update_form_state()
 
@@ -550,6 +601,8 @@ class CompaniesTab(BaseTab):
         has_record = self.current_id is not None
         set_widgets_enabled(self.form_widgets + [self.save_button], has_record)
         self.delete_button.setEnabled(has_record)
+        if hasattr(self, "editor_stack"):
+            self.editor_stack.setCurrentIndex(1 if has_record else 0)
         if not has_record:
             self._clear_form()
 
@@ -688,6 +741,7 @@ class HousesTab(BaseTab):
                               ("Адрес дома", self.address),
                               ("Площадь помещений, м²", self.area)]:
             official_form.addRow(selectable_label(label), widget)
+        polish_form(official_form)
         official.add_layout(official_form)
         form_l.addWidget(official)
 
@@ -697,19 +751,29 @@ class HousesTab(BaseTab):
                               ("Дата прекращения управления", self.end),
                               ("Статус", self.status)]:
             management_form.addRow(selectable_label(label), widget)
+        polish_form(management_form)
         management.add_layout(management_form)
         form_l.addWidget(management)
 
         other = ContentCard("5. Дополнительно")
         extra_form = QFormLayout()
         extra_form.addRow(selectable_label("Примечание"), self.notes)
+        polish_form(extra_form)
         other.add_layout(extra_form)
         form_l.addWidget(other)
 
         self.save_button = QPushButton("Сохранить дом"); self.save_button.clicked.connect(self.save)
         form_l.addWidget(action_panel("Сохранение карточки", self.save_button, primary=self.save_button))
-        splitter.addWidget(form_scroll(formw))
-        splitter.setSizes([340, 700])
+        form_l.addStretch(1)
+        self.editor_stack = empty_record_editor(
+            formw, "Дом не выбран",
+            "Выберите управляющую организацию слева и добавьте дом. "
+            "После этого откроются адрес, площадь и период управления.",
+            self.add_house,
+        )
+        splitter.addWidget(self.editor_stack)
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([360, 1000])
         self.reload_companies()
         self.refresh()
         self.update_form_state()
@@ -724,6 +788,8 @@ class HousesTab(BaseTab):
         set_widgets_enabled(self.form_widgets + [self.save_button], has_record)
         self.company.setEnabled(False)  # belong to the house; never reassign implicitly
         self.delete_button.setEnabled(has_record)
+        if hasattr(self, "editor_stack"):
+            self.editor_stack.setCurrentIndex(1 if has_record else 0)
         if not has_record:
             self._clear_form()
 
@@ -915,6 +981,7 @@ class CategoriesTab(BaseTab):
         form.addRow(selectable_label("Единица измерения"), self.unit)
         form.addRow(selectable_label("Цена / ставка"), self.price)
         form.addRow(selectable_label("Примечание"), self.notes)
+        polish_form(form)
         details.add_layout(form)
         right_l.addWidget(details)
 
@@ -939,7 +1006,8 @@ class CategoriesTab(BaseTab):
         subcategories.add_widget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
         self.form_widgets = [self.name, self.section, self.unit, self.price, self.notes, self.sub_table]
         splitter.addWidget(right)
-        splitter.setSizes([300, 900])
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([330, 1100])
         self.refresh()
         self.update_form_state()
 
@@ -1337,6 +1405,7 @@ class TemplatesTab(BaseTab):
         form.addRow(selectable_label("Раздел"), self.category)
         form.addRow(selectable_label("Примечание"), self.notes)
         self.form_widgets = [self.name, self.category, self.notes]
+        polish_form(form)
         details.add_layout(form)
         right_l.addWidget(details)
         source = ContentCard("3. Наполнение шаблона", "Список работ зависит от раздела шаблона.")
