@@ -3429,6 +3429,27 @@ class BackupsTab(BaseTab):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
+        assistant_card = ContentCard(
+            "Общая база ГИС ЖКХ Ассистента",
+            "Только чтение: УО и дома поступают из базы Ассистента. "
+            "Отчёты, контакты для разъяснений и другие локальные поля "
+            "сохраняются отдельно, только в базе Отчётчика."
+        )
+        self.assistant_path_label = selectable_label("")
+        self.assistant_path_label.setObjectName("CardSubtitle")
+        assistant_card.add_widget(self.assistant_path_label)
+        self.assistant_summary = selectable_label("")
+        assistant_card.add_widget(self.assistant_summary)
+        self.assistant_choose_button = QPushButton("Выбрать базу Ассистента…")
+        self.assistant_choose_button.clicked.connect(self.choose_assistant_source)
+        self.assistant_sync_button = QPushButton("Обновить сведения из Ассистента")
+        self.assistant_sync_button.clicked.connect(self.refresh_assistant_source)
+        assistant_card.add_widget(action_panel(
+            "Подключение только для чтения",
+            self.assistant_choose_button, self.assistant_sync_button,
+            primary=self.assistant_sync_button,
+        ))
+        layout.addWidget(assistant_card)
         overview = ContentCard(
             "Резервные копии базы",
             "Автоматическая копия создаётся каждые 5 минут. Ручные копии и "
@@ -3480,6 +3501,68 @@ class BackupsTab(BaseTab):
         layout.addStretch(1)
         self.refresh()
 
+    def update_assistant_status(self, message: str = ""):
+        path = assistant_source.configured_source_path()
+        ready = path.is_file()
+        self.assistant_path_label.setText(
+            f"Источник: {path}\n"
+            + ("Файл доступен. Режим подключения — только чтение." if ready
+               else "Файл не найден. Укажите путь к data.db Ассистента.")
+        )
+        linked = db.row(
+            "SELECT (SELECT COUNT(*) FROM companies WHERE assistant_source_id IS NOT NULL) AS orgs, "
+            "(SELECT COUNT(*) FROM houses WHERE assistant_source_id IS NOT NULL) AS homes"
+        )
+        summary = (f"Связанных локальных записей: УО — {linked['orgs']}, "
+                   f"домов — {linked['homes']}.")
+        if message:
+            summary += "\n" + message
+        self.assistant_summary.setText(summary)
+        self.assistant_sync_button.setEnabled(ready)
+
+    def _apply_assistant_sync(self, path: Path | None = None, *, remember: bool = False):
+        win = self.window()
+        if isinstance(win, MainWindow):
+            if not win.save_before_assistant_sync():
+                return
+        try:
+            # Preserve the complete reporting database, NOT the Assistant DB.
+            make_backup("before_assistant_sync")
+            result = assistant_source.synchronize(path, save_path=remember)
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Сведения Ассистента не обновлены",
+                f"{exc}\n\nБаза Ассистента не изменялась."
+            )
+            self.update_assistant_status(f"Последняя попытка: ошибка чтения ({exc}).")
+            return
+        if isinstance(win, MainWindow):
+            win.reload_after_assistant_sync()
+        message = (
+            f"Загружено: УО — {result.organizations}, домов — {result.houses}. "
+            f"Новых: УО — {result.new_organizations}, домов — {result.new_houses}."
+        )
+        if result.missing_area:
+            message += (
+                f" У {result.missing_area} домов отсутствуют обе составляющие "
+                "площади. В Отчётчике их можно заполнить локально."
+            )
+        self.update_assistant_status(message)
+        self.msg("Данные Ассистента прочитаны. Изменена только локальная база Отчётчика.")
+
+    def choose_assistant_source(self):
+        default = assistant_source.configured_source_path()
+        filename, _filter = QFileDialog.getOpenFileName(
+            self, "Выберите data.db программы «ГИС ЖКХ Ассистент»",
+            str(default.parent if default.parent.is_dir() else data_dir()),
+            "SQLite (*.db);;Все файлы (*)"
+        )
+        if filename:
+            self._apply_assistant_sync(Path(filename), remember=True)
+
+    def refresh_assistant_source(self):
+        self._apply_assistant_sync()
+
     def _selected_path(self):
         item = self.archive_list.currentItem()
         return Path(item.data(Qt.UserRole)) if item else None
@@ -3508,6 +3591,7 @@ class BackupsTab(BaseTab):
             )
 
     def refresh(self):
+        self.update_assistant_status()
         selected = self._selected_path()
         folder = data_dir() / "backups"
         backups = sorted(
