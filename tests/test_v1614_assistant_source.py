@@ -210,6 +210,31 @@ class AssistantReadOnlySourceTests(unittest.TestCase):
         self.assertTrue(home.status.isEnabled())
         self.assertTrue(home.notes.isEnabled())
 
+    def test_data_page_connect_updates_all_related_selectors(self):
+        window = MainWindow()
+        window.resize(1350, 900)
+        window.show()
+        self.addCleanup(window.close)
+        self.app.processEvents()
+        window.navigate(7)
+        self.app.processEvents()
+        window.backups_tab._apply_assistant_sync(self.source, remember=True)
+        self.app.processEvents()
+        self.assertEqual(assistant_source.configured_source_path(), self.source)
+        self.assertEqual(window.company_tab.list.count(), 1)
+        cid = db.row("SELECT id FROM companies WHERE assistant_source_id='org-001'")["id"]
+        hid = db.row("SELECT id FROM houses WHERE assistant_source_id='house-001'")["id"]
+        self.assertEqual(window.houses_tab.company_filter.findData(cid), 0)
+        self.assertGreaterEqual(window.reports_tab.company_filter.findData(cid), 0)
+        self.assertGreaterEqual(window.mass_tab.company.findData(cid), 0)
+        self.assertIn("Связанных локальных записей",
+                      window.backups_tab.assistant_summary.text())
+        window.navigate(6)
+        self.app.processEvents()
+        reports = window.reports_tab
+        reports.company_filter.setCurrentIndex(reports.company_filter.findData(cid))
+        self.assertGreaterEqual(reports.house_filter.findData(hid), 0)
+
     def test_read_source_with_live_wal_commits(self):
         writer = sqlite3.connect(self.source)
         self.addCleanup(writer.close)
