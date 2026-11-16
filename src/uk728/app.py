@@ -43,7 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import db
+from . import db, assistant_source
 from .db import connect
 from .exporters import export_docx, export_pdf, export_xlsx
 from .paths import data_dir, make_backup
@@ -604,6 +604,13 @@ class CompaniesTab(BaseTab):
         self.notes = QTextEdit(); self.notes.setFixedHeight(80)
         self.form_widgets = [self.name, self.ogrn, self.addr, self.person, self.contact, self.notes]
         basic = ContentCard("2. Основные сведения")
+        self.source_note = selectable_label(
+            "Эта УО получена из ГИС ЖКХ Ассистента. Название и ОГРН "
+            "изменяются только в Ассистенте; дополнительные сведения "
+            "для отчёта сохраняются в Отчётчике."
+        )
+        self.source_note.setObjectName("CardSubtitle")
+        basic.add_widget(self.source_note)
         basic_form = QFormLayout()
         basic_form.addRow(selectable_label("Полное наименование"), self.name)
         basic_form.addRow(selectable_label("ОГРН / ИНН"), self.ogrn)
@@ -648,8 +655,17 @@ class CompaniesTab(BaseTab):
 
     def update_form_state(self):
         has_record = self.current_id is not None
+        link = db.row(
+            "SELECT assistant_source_id FROM companies WHERE id=?", (self.current_id,)
+        ) if has_record else None
+        source_linked = bool(link and link["assistant_source_id"])
         set_widgets_enabled(self.form_widgets + [self.save_button], has_record)
-        self.delete_button.setEnabled(has_record)
+        self.name.setEnabled(has_record and not source_linked)
+        self.ogrn.setEnabled(has_record and not source_linked)
+        self.name.setToolTip("Название УО изменяется в ГИС ЖКХ Ассистенте." if source_linked else "")
+        self.ogrn.setToolTip("ОГРН изменяется в ГИС ЖКХ Ассистенте." if source_linked else "")
+        self.source_note.setVisible(source_linked)
+        self.delete_button.setEnabled(has_record and not source_linked)
         if hasattr(self, "editor_stack"):
             self.editor_stack.setCurrentIndex(1 if has_record else 0)
         if not has_record:
@@ -661,7 +677,14 @@ class CompaniesTab(BaseTab):
         self.list.clear()
         select_row = -1
         for r in db.rows("SELECT * FROM companies ORDER BY name, id"):
-            item = QListWidgetItem(r["name"] or "Без названия")
+            linked = bool(r["assistant_source_id"])
+            item = QListWidgetItem(
+                ("Ассистент · " if linked else "") + (r["name"] or "Без названия")
+            )
+            item.setToolTip(
+                "Данные УО из общей базы (только чтение)" if linked
+                else "Локальная организация Отчётчика"
+            )
             item.setData(Qt.UserRole, r["id"])
             self.list.addItem(item)
             if target_id is not None and r["id"] == target_id:
@@ -705,6 +728,10 @@ class CompaniesTab(BaseTab):
     def delete_company(self):
         if not self.current_id:
             return
+        if db.row("SELECT id FROM companies WHERE id=? AND assistant_source_id IS NOT NULL",
+                  (self.current_id,)):
+            self.msg("Связанную УО нельзя удалить здесь. Изменения выполняются в Ассистенте.")
+            return
         linked = db.row(
             "SELECT (SELECT COUNT(*) FROM houses WHERE company_id=?) + "
             "(SELECT COUNT(*) FROM reports WHERE company_id=?) AS total",
@@ -733,10 +760,22 @@ class CompaniesTab(BaseTab):
             self.msg("Нажмите «Добавить организацию», затем заполните поля и сохраните.")
             return
         with connect() as conn:
-            conn.execute(
-                "UPDATE companies SET name=?, ogrn_inn=?, reception_address=?, report_person=?, report_contact=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                (self.name.text(), self.ogrn.text(), self.addr.toPlainText(), self.person.text(), self.contact.text(), self.notes.toPlainText(), self.current_id),
-            )
+            source = conn.execute(
+                "SELECT assistant_source_id FROM companies WHERE id=?", (self.current_id,)
+            ).fetchone()
+            if source and source["assistant_source_id"]:
+                # Never override linked source identity through the local form.
+                conn.execute(
+                    "UPDATE companies SET reception_address=?,report_person=?,"
+                    "report_contact=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (self.addr.toPlainText(), self.person.text(), self.contact.text(),
+                     self.notes.toPlainText(), self.current_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE companies SET name=?, ogrn_inn=?, reception_address=?, report_person=?, report_contact=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (self.name.text(), self.ogrn.text(), self.addr.toPlainText(), self.person.text(), self.contact.text(), self.notes.toPlainText(), self.current_id),
+                )
             conn.commit()
         self._remember_form_state()
         self.msg("Организация сохранена")
@@ -786,6 +825,14 @@ class HousesTab(BaseTab):
         self.form_widgets = [self.company, self.address, self.area, self.start, self.end, self.status, self.notes]
 
         official = ContentCard("3. Сведения о доме", "Площадь — сумма площадей жилых и нежилых помещений без общего имущества.")
+        self.source_note = selectable_label(
+            "Дом связан с базой ГИС ЖКХ Ассистента. Адрес и период управления "
+            "редактируются только там; статус и примечание — локально. "
+            "Если в Ассистенте отсутствуют площади помещений, площадь "
+            "можно дополнить здесь, не изменяя исходную базу."
+        )
+        self.source_note.setObjectName("CardSubtitle")
+        official.add_widget(self.source_note)
         official_form = QFormLayout()
         for label, widget in [("Управляющая организация", self.company),
                               ("Адрес дома", self.address),
@@ -835,9 +882,28 @@ class HousesTab(BaseTab):
 
     def update_form_state(self):
         has_record = self.current_id is not None
+        record = db.row(
+            "SELECT assistant_source_id,assistant_area_missing FROM houses WHERE id=?",
+            (self.current_id,),
+        ) if has_record else None
+        source_linked = bool(record and record["assistant_source_id"])
         set_widgets_enabled(self.form_widgets + [self.save_button], has_record)
         self.company.setEnabled(False)  # belong to the house; never reassign implicitly
-        self.delete_button.setEnabled(has_record)
+        if source_linked:
+            self.address.setEnabled(False)
+            self.start.setEnabled(False)
+            self.end.setEnabled(False)
+            self.area.setEnabled(bool(record["assistant_area_missing"]))
+            self.area.setToolTip(
+                "Площади жилых и нежилых помещений отсутствуют в Ассистенте. "
+                "Локальное значение сохранится только в Отчётчике."
+                if record["assistant_area_missing"] else
+                "Площадь вычислена по сведениям Ассистента. Изменяется там."
+            )
+        else:
+            self.area.setToolTip("")
+        self.source_note.setVisible(source_linked)
+        self.delete_button.setEnabled(has_record and not source_linked)
         if hasattr(self, "editor_stack"):
             self.editor_stack.setCurrentIndex(1 if has_record else 0)
             self.editor_stack.empty_add_button.setEnabled(
@@ -899,7 +965,13 @@ class HousesTab(BaseTab):
             result = []
         select_row = -1
         for r in result:
-            item = QListWidgetItem(f"{r['address'] or 'Без адреса'} · {money(r['total_area'])} м²")
+            source_tag = "Ассистент · " if r["assistant_source_id"] else ""
+            item = QListWidgetItem(
+                f"{source_tag}{r['address'] or 'Без адреса'} · "
+                f"{money(r['total_area'])} м²"
+            )
+            item.setToolTip("Источник: ГИС ЖКХ Ассистент (только чтение)"
+                            if r["assistant_source_id"] else "Локальный дом")
             item.setData(Qt.UserRole, r["id"])
             self.list.addItem(item)
             if target_id is not None and r["id"] == target_id:
@@ -953,6 +1025,10 @@ class HousesTab(BaseTab):
     def delete_house(self):
         if not self.current_id:
             return
+        if db.row("SELECT id FROM houses WHERE id=? AND assistant_source_id IS NOT NULL",
+                  (self.current_id,)):
+            self.msg("Связанный дом нельзя удалить из Отчётчика. Данные ведутся в Ассистенте.")
+            return
         linked = db.row("SELECT COUNT(*) AS total FROM reports WHERE house_id=?", (self.current_id,))
         if linked and linked["total"]:
             QMessageBox.warning(
@@ -981,10 +1057,30 @@ class HousesTab(BaseTab):
             QMessageBox.warning(self, "Проверьте площадь", problem)
             return False
         with connect() as conn:
-            conn.execute(
-                "UPDATE houses SET company_id=?, address=?, total_area=?, management_start=?, management_end=?, status=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                (self.company.currentData(), self.address.toPlainText(), to_float(self.area.text()), self.start.text(), self.end.text(), self.status.currentText(), self.notes.toPlainText(), self.current_id),
-            )
+            source = conn.execute(
+                "SELECT assistant_source_id,assistant_area_missing "
+                "FROM houses WHERE id=?", (self.current_id,)
+            ).fetchone()
+            if source and source["assistant_source_id"]:
+                if source["assistant_area_missing"]:
+                    conn.execute(
+                        "UPDATE houses SET total_area=?,status=?,notes=?,"
+                        "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (to_float(self.area.text()), self.status.currentText(),
+                         self.notes.toPlainText(), self.current_id),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE houses SET status=?,notes=?,updated_at=CURRENT_TIMESTAMP "
+                        "WHERE id=?",
+                        (self.status.currentText(), self.notes.toPlainText(),
+                         self.current_id),
+                    )
+            else:
+                conn.execute(
+                    "UPDATE houses SET company_id=?, address=?, total_area=?, management_start=?, management_end=?, status=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (self.company.currentData(), self.address.toPlainText(), to_float(self.area.text()), self.start.text(), self.end.text(), self.status.currentText(), self.notes.toPlainText(), self.current_id),
+                )
             conn.commit()
         self._remember_form_state()
         self.msg("Дом сохранен")
@@ -3333,6 +3429,27 @@ class BackupsTab(BaseTab):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
+        assistant_card = ContentCard(
+            "Общая база ГИС ЖКХ Ассистента",
+            "Только чтение: УО и дома поступают из базы Ассистента. "
+            "Отчёты, контакты для разъяснений и другие локальные поля "
+            "сохраняются отдельно, только в базе Отчётчика."
+        )
+        self.assistant_path_label = selectable_label("")
+        self.assistant_path_label.setObjectName("CardSubtitle")
+        assistant_card.add_widget(self.assistant_path_label)
+        self.assistant_summary = selectable_label("")
+        assistant_card.add_widget(self.assistant_summary)
+        self.assistant_choose_button = QPushButton("Выбрать базу Ассистента…")
+        self.assistant_choose_button.clicked.connect(self.choose_assistant_source)
+        self.assistant_sync_button = QPushButton("Обновить сведения из Ассистента")
+        self.assistant_sync_button.clicked.connect(self.refresh_assistant_source)
+        assistant_card.add_widget(action_panel(
+            "Подключение только для чтения",
+            self.assistant_choose_button, self.assistant_sync_button,
+            primary=self.assistant_sync_button,
+        ))
+        layout.addWidget(assistant_card)
         overview = ContentCard(
             "Резервные копии базы",
             "Автоматическая копия создаётся каждые 5 минут. Ручные копии и "
@@ -3384,6 +3501,68 @@ class BackupsTab(BaseTab):
         layout.addStretch(1)
         self.refresh()
 
+    def update_assistant_status(self, message: str = ""):
+        path = assistant_source.configured_source_path()
+        ready = path.is_file()
+        self.assistant_path_label.setText(
+            f"Источник: {path}\n"
+            + ("Файл доступен. Режим подключения — только чтение." if ready
+               else "Файл не найден. Укажите путь к data.db Ассистента.")
+        )
+        linked = db.row(
+            "SELECT (SELECT COUNT(*) FROM companies WHERE assistant_source_id IS NOT NULL) AS orgs, "
+            "(SELECT COUNT(*) FROM houses WHERE assistant_source_id IS NOT NULL) AS homes"
+        )
+        summary = (f"Связанных локальных записей: УО — {linked['orgs']}, "
+                   f"домов — {linked['homes']}.")
+        if message:
+            summary += "\n" + message
+        self.assistant_summary.setText(summary)
+        self.assistant_sync_button.setEnabled(ready)
+
+    def _apply_assistant_sync(self, path: Path | None = None, *, remember: bool = False):
+        win = self.window()
+        if isinstance(win, MainWindow):
+            if not win.save_before_assistant_sync():
+                return
+        try:
+            # Preserve the complete reporting database, NOT the Assistant DB.
+            make_backup("before_assistant_sync")
+            result = assistant_source.synchronize(path, save_path=remember)
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Сведения Ассистента не обновлены",
+                f"{exc}\n\nБаза Ассистента не изменялась."
+            )
+            self.update_assistant_status(f"Последняя попытка: ошибка чтения ({exc}).")
+            return
+        if isinstance(win, MainWindow):
+            win.reload_after_assistant_sync()
+        message = (
+            f"Загружено: УО — {result.organizations}, домов — {result.houses}. "
+            f"Новых: УО — {result.new_organizations}, домов — {result.new_houses}."
+        )
+        if result.missing_area:
+            message += (
+                f" У {result.missing_area} домов отсутствуют обе составляющие "
+                "площади. В Отчётчике их можно заполнить локально."
+            )
+        self.update_assistant_status(message)
+        self.msg("Данные Ассистента прочитаны. Изменена только локальная база Отчётчика.")
+
+    def choose_assistant_source(self):
+        default = assistant_source.configured_source_path()
+        filename, _filter = QFileDialog.getOpenFileName(
+            self, "Выберите data.db программы «ГИС ЖКХ Ассистент»",
+            str(default.parent if default.parent.is_dir() else data_dir()),
+            "SQLite (*.db);;Все файлы (*)"
+        )
+        if filename:
+            self._apply_assistant_sync(Path(filename), remember=True)
+
+    def refresh_assistant_source(self):
+        self._apply_assistant_sync()
+
     def _selected_path(self):
         item = self.archive_list.currentItem()
         return Path(item.data(Qt.UserRole)) if item else None
@@ -3412,6 +3591,7 @@ class BackupsTab(BaseTab):
             )
 
     def refresh(self):
+        self.update_assistant_status()
         selected = self._selected_path()
         folder = data_dir() / "backups"
         backups = sorted(
@@ -3814,6 +3994,38 @@ class MainWindow(QMainWindow):
         self._scale = 100
         self.settings.setValue("ui/scale", 100)
 
+    def save_before_assistant_sync(self) -> bool:
+        """Do not replace form values while there are unsaved local edits."""
+        active = self.tabs.currentWidget()
+        try:
+            if isinstance(active, ReportsTab):
+                active.flush_autosave()
+            elif isinstance(active, (CompaniesTab, HousesTab, CategoriesTab,
+                                      WorksTab, TemplatesTab)):
+                if active.save(refresh_after=False) is False:
+                    raise ValueError("Сначала исправьте ошибки в текущей форме.")
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Обновление данных отменено",
+                f"Не удалось сохранить текущую форму: {exc}"
+            )
+            return False
+        return True
+
+    def reload_after_assistant_sync(self):
+        """Update all selectors after committing only local mirrored records."""
+        self.company_tab.refresh()
+        if self.company_tab.current_id:
+            self.company_tab._load_current()
+        self.houses_tab.reload_companies()
+        self.houses_tab.refresh()
+        if self.houses_tab.current_id:
+            self.houses_tab._load_current()
+        self.reports_tab.reload_filters()
+        self.mass_tab.reload()
+        self._apply_company_context(self.tabs.currentWidget())
+        self.refresh_context()
+
     def auto_backup(self):
         try:
             tab = self.tabs.currentWidget()
@@ -3867,8 +4079,24 @@ def main():
             "Проверьте подготовленную копию и файлы в папке data/backups."
         )
         return 1
+    # Auto-refresh shared source links on startup. An unavailable or damaged
+    # Assistant DB never blocks independent reporting work and is NEVER
+    # recreated by the Reporter.
+    assistant_warning = None
+    try:
+        source = assistant_source.configured_source_path()
+        if source.is_file():
+            make_backup("before_assistant_sync")
+            assistant_source.synchronize()
+        else:
+            assistant_warning = f"База Ассистента не найдена: {source}"
+    except Exception as exc:
+        assistant_warning = f"Не удалось обновить сведения Ассистента: {exc}"
     window = MainWindow()
     window.show()
+    if assistant_warning:
+        window.backups_tab.update_assistant_status(assistant_warning)
+        window.statusBar().showMessage(assistant_warning, 15000)
     if protected is not None:
         QTimer.singleShot(
             0, lambda: QMessageBox.information(
