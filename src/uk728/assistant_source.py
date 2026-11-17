@@ -13,15 +13,17 @@ from __future__ import annotations
 from contextlib import closing
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+import hashlib
 import json
 import os
 from pathlib import Path
 import sqlite3
 
 from . import db
-from .paths import db_path
+from .paths import db_path, make_backup
 
 _CONFIG_KEY = "assistant_database_path"
+_DIGEST_KEY = "assistant_snapshot_digest_v1"
 PERSON_FIELDS = (
     "full_name", "name_genitive", "position", "position_genitive", "role",
     "premises", "gender", "basis_kind", "basis_number", "basis_date",
@@ -46,6 +48,8 @@ class SyncSummary:
     missing_area: int
     path: Path
     signatories: int = 0
+    unchanged: bool = False
+    missing_management_start: int = 0
 
 
 class AssistantSourceError(ValueError):
@@ -221,6 +225,27 @@ def read_source(source: Path | str) -> AssistantSnapshot:
     return AssistantSnapshot(organizations, tuple(houses), missing_area, tuple(people))
 
 
+def _snapshot_digest(snapshot: AssistantSnapshot) -> str:
+    """Hash imported fields, not unrelated Assistant data or SQLite file bytes.
+
+    SQLite WAL and ordinary Assistant writes can change file timestamps without
+    changing any field used by the Reporter. A versioned digest allows future
+    importer changes to invalidate the no-op fast path.
+    """
+    payload = {
+        "schema": 1,
+        "organizations": [
+            (str(org["id"]), str(org["name"]), str(org["ogrn"] or ""))
+            for org in snapshot.organizations
+        ],
+        "houses": snapshot.houses,
+        "people": snapshot.people,
+    }
+    data = json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
 def synchronize(source: Path | str | None = None, *, save_path: bool = False) -> SyncSummary:
     """Read source; atomically upsert only into reporting_728.db.
 
@@ -230,6 +255,21 @@ def synchronize(source: Path | str | None = None, *, save_path: bool = False) ->
     path = Path(source) if source is not None else configured_source_path()
     snapshot = read_source(path)
     path = path.expanduser().absolute()
+    digest = _snapshot_digest(snapshot)
+    old = db.row("SELECT value FROM app_meta WHERE key=?", (_DIGEST_KEY,))
+    same_source = not save_path or configured_source_path().resolve() == path.resolve()
+    missing_start = sum(not h["management_start"].strip() for h in snapshot.houses)
+    if old is not None and old["value"] == digest and same_source:
+        return SyncSummary(
+            len(snapshot.organizations), len(snapshot.houses), 0, 0,
+            snapshot.missing_area, path, len(snapshot.people),
+            unchanged=True, missing_management_start=missing_start,
+        )
+
+    # Only a changed import needs a pre-change safety snapshot. It protects the
+    # Reporter DB, never copies the Assistant DB, and reuses an identical
+    # already existing snapshot instead of producing duplicates.
+    make_backup("before_assistant_sync")
     new_companies = 0
     new_houses = 0
     with db.connect() as conn:
@@ -366,9 +406,14 @@ def synchronize(source: Path | str | None = None, *, save_path: bool = False) ->
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (_CONFIG_KEY, str(path)),
             )
+        conn.execute(
+            "INSERT INTO app_meta(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (_DIGEST_KEY, digest),
+        )
         conn.commit()
     return SyncSummary(
         len(snapshot.organizations), len(snapshot.houses),
         new_companies, new_houses, snapshot.missing_area, path,
-        len(snapshot.people),
+        len(snapshot.people), missing_management_start=missing_start,
     )
