@@ -264,6 +264,17 @@ class HouseFieldsAndSignatoriesV1615Tests(unittest.TestCase):
         self.assertEqual(updated["residential_area"], 1000)
         self.assertEqual(updated["non_residential_area"], 500)
         self.assertEqual(updated["agreement_valid_from"], "2024-01-15")
+        with sqlite3.connect(self.source) as conn:
+            conn.execute(
+                "UPDATE houses SET non_residential_area='550' WHERE id='house-test'"
+            )
+            conn.commit()
+        assistant_source.synchronize(self.source)
+        refreshed = db.row("SELECT * FROM houses WHERE id=?", (house["id"],))
+        self.assertEqual(refreshed["residential_area"], 1000)
+        self.assertEqual(refreshed["non_residential_area"], 550)
+        self.assertEqual(refreshed["total_area"], 1550)
+        self.assertEqual(refreshed["agreement_valid_from"], "2024-01-15")
 
     def test_migrate_existing_total_without_inventing_components(self):
         company = db.execute("INSERT INTO companies(name) VALUES(?)", ("УК Старая",))
