@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from .paths import db_path
+from .paths import db_path, make_backup
 from .utils import full_year_period
 
 SCHEMA_VERSION = 12
@@ -34,6 +35,19 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
 def init_db() -> None:
     path = db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Back up the existing Reporter database BEFORE any version-12 ALTER/DDL.
+    # The Assistant source is never involved. This also works with Reporter WAL.
+    if path.is_file() and path.stat().st_size > 0:
+        with closing(sqlite3.connect(str(path), timeout=15.0)) as old_conn:
+            try:
+                previous = old_conn.execute(
+                    "SELECT value FROM app_meta WHERE key='schema_version'"
+                ).fetchone()
+                previous_version = str(previous[0]) if previous else None
+            except sqlite3.DatabaseError:
+                previous_version = None
+        if previous_version != str(SCHEMA_VERSION):
+            make_backup("before_schema_v12")
     with connect(path) as conn:
         conn.executescript(
             """
