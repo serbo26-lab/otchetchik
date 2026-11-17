@@ -52,7 +52,7 @@ from .backup_restore import (
     verify_backup, pending_restore, stage_restore,
     cancel_restore, apply_pending_restore,
 )
-from .utils import full_year_period, iso_date, money, to_float
+from .utils import full_year_period, iso_date, money, to_float, parse_date
 from .ui_style import apply_theme
 from .ui_shell import ActionFlowLayout, NavigationSidebar, PageChrome, PAGES
 from .report_storage import sync_report_rows
@@ -851,11 +851,28 @@ class HousesTab(BaseTab):
         )
         self.address = QTextEdit(); self.address.setFixedHeight(70)
         self.area = QLineEdit()
+        self.residential_area = QLineEdit()
+        self.non_residential_area = QLineEdit()
+        self._loading_area = False
+        self.residential_area.textChanged.connect(self._recalculate_area)
+        self.non_residential_area.textChanged.connect(self._recalculate_area)
         self.start = QLineEdit(); self.start.setPlaceholderText("дд.мм.гггг или оставить пустым")
         self.end = QLineEdit(); self.end.setPlaceholderText("дд.мм.гггг или оставить пустым")
+        self.agreement_number = QLineEdit()
+        self.agreement_date = QLineEdit(); self.agreement_date.setPlaceholderText("ДД.ММ.ГГГГ")
+        self.agreement_valid_from = QLineEdit()
+        self.agreement_valid_from.setPlaceholderText("ДД.ММ.ГГГГ")
+        self.agreement_valid_to = QLineEdit()
+        self.agreement_valid_to.setPlaceholderText("ДД.ММ.ГГГГ или оставить пустым")
         self.status = ClickComboBox(); self.status.addItems(["В управлении", "Выбыл", "Архив"])
         self.notes = QTextEdit(); self.notes.setFixedHeight(90)
-        self.form_widgets = [self.company, self.address, self.area, self.start, self.end, self.status, self.notes]
+        self.form_widgets = [
+            self.company, self.address, self.area,
+            self.residential_area, self.non_residential_area,
+            self.start, self.end, self.agreement_number, self.agreement_date,
+            self.agreement_valid_from, self.agreement_valid_to,
+            self.status, self.notes,
+        ]
 
         official = ContentCard("3. Сведения о доме", "Площадь — сумма площадей жилых и нежилых помещений без общего имущества.")
         self.source_note = selectable_label(
@@ -867,9 +884,13 @@ class HousesTab(BaseTab):
         self.source_note.setObjectName("CardSubtitle")
         official.add_widget(self.source_note)
         official_form = QFormLayout()
-        for label, widget in [("Управляющая организация", self.company),
-                              ("Адрес дома", self.address),
-                              ("Площадь помещений, м²", self.area)]:
+        for label, widget in [
+            ("Управляющая организация", self.company),
+            ("Адрес дома", self.address),
+            ("Жилая площадь, м²", self.residential_area),
+            ("Нежилая площадь, м²", self.non_residential_area),
+            ("Общая площадь помещений, м²", self.area),
+        ]:
             official_form.addRow(selectable_label(label), widget)
         polish_form(official_form)
         official.add_layout(official_form)
@@ -885,7 +906,41 @@ class HousesTab(BaseTab):
         management.add_layout(management_form)
         form_l.addWidget(management)
 
-        other = ContentCard("5. Дополнительно")
+        agreement = ContentCard(
+            "5. Договор управления",
+            "Дата заключения договора отличается от даты начала управления "
+            "домом. Период действия договора хранится отдельно."
+        )
+        agreement_form = QFormLayout()
+        for label, widget in [
+            ("Номер договора", self.agreement_number),
+            ("Дата заключения договора", self.agreement_date),
+            ("Начало действия договора", self.agreement_valid_from),
+            ("Окончание действия договора", self.agreement_valid_to),
+        ]:
+            agreement_form.addRow(selectable_label(label), widget)
+        polish_form(agreement_form)
+        agreement.add_layout(agreement_form)
+        form_l.addWidget(agreement)
+
+        signers = ContentCard(
+            "6. Подписывающие лица",
+            "УО и собственники представлены раздельно. "
+            "Можно хранить несколько лиц и периоды их полномочий."
+        )
+        self.org_sign_summary = selectable_label("")
+        signers.add_widget(self.org_sign_summary)
+        self.org_sign_button = QPushButton("Подписанты со стороны УО…")
+        self.org_sign_button.clicked.connect(self.open_org_signatories)
+        signers.add_widget(self.org_sign_button)
+        self.house_sign_summary = selectable_label("")
+        signers.add_widget(self.house_sign_summary)
+        self.house_sign_button = QPushButton("Представители со стороны дома…")
+        self.house_sign_button.clicked.connect(self.open_house_signatories)
+        signers.add_widget(self.house_sign_button)
+        form_l.addWidget(signers)
+
+        other = ContentCard("7. Дополнительно")
         extra_form = QFormLayout()
         extra_form.addRow(selectable_label("Примечание"), self.notes)
         polish_form(extra_form)
