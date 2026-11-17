@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import db, assistant_source
+from .signatories import SignatoryListDialog, count_signatories
 from .db import connect
 from .exporters import export_docx, export_pdf, export_xlsx
 from .paths import data_dir, make_backup
@@ -628,7 +629,20 @@ class CompaniesTab(BaseTab):
         report_contact.add_layout(contact_form)
         form_layout.addWidget(report_contact)
 
-        extra = ContentCard("4. Примечания")
+        signers = ContentCard(
+            "4. Подписанты управляющей организации",
+            "ФИО, должности, основания и периоды полномочий. "
+            "История сохраняется отдельно для выбора на дату документа."
+        )
+        self.sign_summary = selectable_label("")
+        self.sign_summary.setObjectName("CardSubtitle")
+        signers.add_widget(self.sign_summary)
+        self.sign_button = QPushButton("Подписанты УО и история полномочий…")
+        self.sign_button.clicked.connect(self.open_signatories)
+        signers.add_widget(self.sign_button)
+        form_layout.addWidget(signers)
+
+        extra = ContentCard("5. Примечания")
         extra_form = QFormLayout()
         extra_form.addRow(selectable_label("Примечание"), self.notes)
         polish_form(extra_form)
@@ -666,6 +680,8 @@ class CompaniesTab(BaseTab):
         self.ogrn.setToolTip("ОГРН изменяется в ГИС ЖКХ Ассистенте." if source_linked else "")
         self.source_note.setVisible(source_linked)
         self.delete_button.setEnabled(has_record and not source_linked)
+        self.sign_button.setEnabled(has_record)
+        self.refresh_sign_summary()
         if hasattr(self, "editor_stack"):
             self.editor_stack.setCurrentIndex(1 if has_record else 0)
         if not has_record:
@@ -714,6 +730,23 @@ class CompaniesTab(BaseTab):
         self.contact.setText(r["report_contact"])
         self.notes.setPlainText(r["notes"])
         self._remember_form_state()
+
+    def refresh_sign_summary(self):
+        amount = count_signatories(company_id=self.current_id)
+        self.sign_summary.setText(
+            f"Записей о подписантах УО: {amount}. "
+            "Запись лица не означает подписания отчёта."
+            if self.current_id else "Сначала выберите управляющую организацию."
+        )
+
+    def open_signatories(self):
+        if not self.current_id:
+            return
+        if self.save(refresh_after=False) is False:
+            return
+        dialog = SignatoryListDialog(company_id=self.current_id, parent=self)
+        dialog.exec()
+        self.refresh_sign_summary()
 
     def add_company(self):
         if self.current_id and self.save() is False:
