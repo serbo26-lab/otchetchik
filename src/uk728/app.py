@@ -968,30 +968,94 @@ class HousesTab(BaseTab):
         self.address.setPlainText("")
         self.notes.setPlainText("")
 
+    def _recalculate_area(self, *_args):
+        """Sum known component areas; otherwise keep a legacy/manual total."""
+        if self._loading_area:
+            return
+        values = [self.residential_area.text().strip(),
+                  self.non_residential_area.text().strip()]
+        complete = all(values) and all(
+            numeric_error(v, "Площадь") is None and to_float(v) >= 0
+            for v in values
+        )
+        row = db.row(
+            "SELECT assistant_source_id,assistant_area_missing "
+            "FROM houses WHERE id=?", (self.current_id,),
+        ) if self.current_id else None
+        if complete:
+            from decimal import Decimal
+            amounts = [Decimal(v.replace(" ", "").replace(",", ".")) for v in values]
+            self.area.setText(format(sum(amounts), "f"))
+            self.area.setEnabled(False)
+            self.area.setToolTip(
+                "Автоматически вычисляется как сумма площадей жилых "
+                "и нежилых помещений."
+            )
+        else:
+            can_edit = bool(self.current_id and (
+                not row or not row["assistant_source_id"]
+                or row["assistant_area_missing"]
+            ))
+            self.area.setEnabled(can_edit)
+            self.area.setToolTip(
+                "Если составляющие площади неизвестны, общую площадь "
+                "можно указать отдельно. Уже сохранённые значения не стираются."
+            )
+
+    def refresh_sign_summary(self):
+        if not self.current_id:
+            self.org_sign_summary.setText("Сначала выберите дом.")
+            self.house_sign_summary.setText("Сначала выберите дом.")
+            return
+        house = db.row("SELECT company_id FROM houses WHERE id=?", (self.current_id,))
+        cid = house["company_id"] if house else None
+        org_count = count_signatories(company_id=cid)
+        home_count = count_signatories(house_id=self.current_id)
+        self.org_sign_summary.setText(f"Подписантов УО: {org_count}")
+        self.house_sign_summary.setText(f"Представителей дома: {home_count}")
+        self.org_sign_button.setEnabled(cid is not None)
+
+    def open_org_signatories(self):
+        if not self.current_id or self.save(refresh_after=False) is False:
+            return
+        house = db.row("SELECT company_id FROM houses WHERE id=?", (self.current_id,))
+        if not house or house["company_id"] is None:
+            return
+        SignatoryListDialog(company_id=house["company_id"], parent=self).exec()
+        self.refresh_sign_summary()
+
+    def open_house_signatories(self):
+        if not self.current_id or self.save(refresh_after=False) is False:
+            return
+        SignatoryListDialog(house_id=self.current_id, parent=self).exec()
+        self.refresh_sign_summary()
+
     def update_form_state(self):
         has_record = self.current_id is not None
         record = db.row(
-            "SELECT assistant_source_id,assistant_area_missing FROM houses WHERE id=?",
-            (self.current_id,),
+            "SELECT assistant_source_id,assistant_area_missing,"
+            "assistant_residential_missing,assistant_non_residential_missing "
+            "FROM houses WHERE id=?", (self.current_id,),
         ) if has_record else None
         source_linked = bool(record and record["assistant_source_id"])
         set_widgets_enabled(self.form_widgets + [self.save_button], has_record)
-        self.company.setEnabled(False)  # belong to the house; never reassign implicitly
+        self.company.setEnabled(False)
         if source_linked:
             self.address.setEnabled(False)
             self.start.setEnabled(False)
             self.end.setEnabled(False)
-            self.area.setEnabled(bool(record["assistant_area_missing"]))
-            self.area.setToolTip(
-                "Площади жилых и нежилых помещений отсутствуют в Ассистенте. "
-                "Локальное значение сохранится только в Отчётчике."
-                if record["assistant_area_missing"] else
-                "Площадь вычислена по сведениям Ассистента. Изменяется там."
+            self.residential_area.setEnabled(bool(record["assistant_residential_missing"]))
+            self.non_residential_area.setEnabled(
+                bool(record["assistant_non_residential_missing"])
             )
-        else:
-            self.area.setToolTip("")
+            self.agreement_number.setEnabled(False)
+            self.agreement_date.setEnabled(False)
         self.source_note.setVisible(source_linked)
         self.delete_button.setEnabled(has_record and not source_linked)
+        self.org_sign_button.setEnabled(has_record)
+        self.house_sign_button.setEnabled(has_record)
+        self.refresh_sign_summary()
+        self._recalculate_area()
         if hasattr(self, "editor_stack"):
             self.editor_stack.setCurrentIndex(1 if has_record else 0)
             self.editor_stack.empty_add_button.setEnabled(
