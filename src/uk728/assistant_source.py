@@ -317,6 +317,16 @@ def synchronize(source: Path | str | None = None, *, save_path: bool = False) ->
                         house["management_agreement_date"], hid,
                     ),
                 )
+                # If one source component is absent and was completed locally,
+                # recalculate after updating the other source component. Never
+                # leave the previous aggregate in reports when the input changes.
+                if house["total_area"] is None:
+                    conn.execute(
+                        "UPDATE houses SET total_area=residential_area+non_residential_area "
+                        "WHERE id=? AND residential_area IS NOT NULL "
+                        "AND non_residential_area IS NOT NULL",
+                        (hid,),
+                    )
         # People are stored by the source UUID, never by matching their names.
         for person in snapshot.people:
             src_id = person["id"]
