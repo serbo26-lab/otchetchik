@@ -13,6 +13,7 @@ from __future__ import annotations
 from contextlib import closing
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -21,6 +22,11 @@ from . import db
 from .paths import db_path
 
 _CONFIG_KEY = "assistant_database_path"
+PERSON_FIELDS = (
+    "full_name", "name_genitive", "position", "position_genitive", "role",
+    "premises", "gender", "basis_kind", "basis_number", "basis_date",
+    "basis_text", "valid_from", "valid_to",
+)
 
 
 @dataclass(frozen=True)
@@ -28,6 +34,7 @@ class AssistantSnapshot:
     organizations: tuple[dict, ...]
     houses: tuple[dict, ...]
     missing_area: int
+    people: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -38,6 +45,7 @@ class SyncSummary:
     new_houses: int
     missing_area: int
     path: Path
+    signatories: int = 0
 
 
 class AssistantSourceError(ValueError):
@@ -132,6 +140,20 @@ def read_source(source: Path | str) -> AssistantSnapshot:
                     "SELECT * FROM houses ORDER BY address COLLATE NOCASE"
                 )
             )
+            has_people = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='act_people'"
+            ).fetchone()
+            if has_people:
+                _required_columns(conn, "act_people", {
+                    "id", "organization_id", "house_id", "data_json"
+                })
+                # Explicit projection excludes signature image BLOBs.
+                people_rows = tuple(dict(row) for row in conn.execute(
+                    "SELECT id,organization_id,house_id,data_json "
+                    "FROM act_people ORDER BY rowid"
+                ))
+            else:
+                people_rows = ()
     except sqlite3.DatabaseError as exc:
         raise AssistantSourceError(
             f"Не удалось прочитать SQLite Ассистента: {exc}"
@@ -168,10 +190,35 @@ def read_source(source: Path | str) -> AssistantSnapshot:
             "organization_id": owner,
             "address": str(house["address"] or "").strip(),
             "total_area": area,
+            "residential_area": a,
+            "non_residential_area": b,
             "management_start": str(house.get("management_start_date") or ""),
             "management_end": str(house.get("management_end_date") or ""),
+            "management_agreement_number": str(house.get("management_agreement_number") or ""),
+            "management_agreement_date": str(house.get("management_agreement_date") or ""),
         })
-    return AssistantSnapshot(organizations, tuple(houses), missing_area)
+    people: list[dict] = []
+    seen: set[str] = set()
+    for person in people_rows:
+        key = str(person["id"] or "").strip()
+        owner_org = str(person["organization_id"] or "").strip()
+        owner_house = str(person["house_id"] or "").strip()
+        if not key or key in seen or (bool(owner_org) == bool(owner_house)):
+            raise AssistantSourceError("Подписант с повторным ID или без корректного владельца.")
+        if (owner_org and owner_org not in org_ids) or (owner_house and owner_house not in house_ids):
+            raise AssistantSourceError("Подписант ссылается на отсутствующую УО или дом.")
+        seen.add(key)
+        try:
+            value = json.loads(person["data_json"])
+        except (TypeError, ValueError) as exc:
+            raise AssistantSourceError(f"Ошибочные реквизиты подписанта {key}: {exc}") from exc
+        if not isinstance(value, dict) or not str(value.get("full_name") or "").strip():
+            raise AssistantSourceError(f"Подписант {key} не содержит ФИО.")
+        people.append({
+            "id": key, "organization_id": owner_org, "house_id": owner_house,
+            "data": {field: str(value.get(field) or "").strip() for field in PERSON_FIELDS},
+        })
+    return AssistantSnapshot(organizations, tuple(houses), missing_area, tuple(people))
 
 
 def synchronize(source: Path | str | None = None, *, save_path: bool = False) -> SyncSummary:
