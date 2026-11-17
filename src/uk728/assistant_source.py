@@ -270,12 +270,19 @@ def synchronize(source: Path | str | None = None, *, save_path: bool = False) ->
                     owner, src_id, house["address"], house["total_area"] or 0,
                     house["management_start"], house["management_end"],
                     int(house["total_area"] is None),
+                    house["residential_area"], house["non_residential_area"],
+                    int(house["residential_area"] is None),
+                    int(house["non_residential_area"] is None),
+                    house["management_agreement_number"],
+                    house["management_agreement_date"],
                 )
                 conn.execute(
                     "INSERT INTO houses(company_id,assistant_source_id,address,total_area,"
-                    "management_start,management_end,assistant_area_missing) "
-                    "VALUES(?,?,?,?,?,?,?)",
-                    fields,
+                    "management_start,management_end,assistant_area_missing,"
+                    "residential_area,non_residential_area,"
+                    "assistant_residential_missing,assistant_non_residential_missing,"
+                    "management_agreement_number,management_agreement_date) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", fields,
                 )
                 new_houses += 1
             else:
@@ -290,22 +297,59 @@ def synchronize(source: Path | str | None = None, *, save_path: bool = False) ->
                             "В Отчётчике уже есть отчёты по прежней УО; автоматическая "
                             "перепривязка запрещена. Данные не изменены."
                         )
-                if house["total_area"] is None:
-                    conn.execute(
-                        "UPDATE houses SET company_id=?,address=?,management_start=?,"
-                        "management_end=?,assistant_area_missing=1,"
-                        "updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                        (owner, house["address"], house["management_start"],
-                         house["management_end"], hid),
-                    )
-                else:
-                    conn.execute(
-                        "UPDATE houses SET company_id=?,address=?,total_area=?,"
-                        "management_start=?,management_end=?,"
-                        "assistant_area_missing=0,updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                        (owner, house["address"], house["total_area"],
-                         house["management_start"], house["management_end"], hid),
-                    )
+                conn.execute(
+                    "UPDATE houses SET company_id=?,address=?,"
+                    "residential_area=COALESCE(?,residential_area),"
+                    "non_residential_area=COALESCE(?,non_residential_area),"
+                    "assistant_residential_missing=?,assistant_non_residential_missing=?,"
+                    "total_area=COALESCE(?,total_area),assistant_area_missing=?,"
+                    "management_start=?,management_end=?,"
+                    "management_agreement_number=?,management_agreement_date=?,"
+                    "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (
+                        owner, house["address"], house["residential_area"],
+                        house["non_residential_area"],
+                        int(house["residential_area"] is None),
+                        int(house["non_residential_area"] is None),
+                        house["total_area"], int(house["total_area"] is None),
+                        house["management_start"], house["management_end"],
+                        house["management_agreement_number"],
+                        house["management_agreement_date"], hid,
+                    ),
+                )
+        # People are stored by the source UUID, never by matching their names.
+        for person in snapshot.people:
+            src_id = person["id"]
+            cid = mapping.get(person["organization_id"])
+            owner = conn.execute(
+                "SELECT id FROM houses WHERE assistant_source_id=?",
+                (person["house_id"],),
+            ).fetchone() if person["house_id"] else None
+            hid = int(owner["id"]) if owner else None
+            if (cid is None) == (hid is None):
+                raise AssistantSourceError("Не удалось сопоставить подписанта с владельцем.")
+            old = conn.execute(
+                "SELECT id,company_id,house_id FROM signatories "
+                "WHERE assistant_source_id=?", (src_id,),
+            ).fetchone()
+            if old and (old["company_id"] != cid or old["house_id"] != hid):
+                raise AssistantSourceError(
+                    "В Ассистенте изменена принадлежность подписанта. "
+                    "Автоматический перенос истории запрещён."
+                )
+            data = json.dumps(person["data"], ensure_ascii=False)
+            if old:
+                conn.execute(
+                    "UPDATE signatories SET data_json=?,"
+                    "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (data, old["id"]),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO signatories(company_id,house_id,"
+                    "assistant_source_id,data_json) VALUES(?,?,?,?)",
+                    (cid, hid, src_id, data),
+                )
         if save_path:
             conn.execute(
                 "INSERT INTO app_meta(key,value) VALUES(?,?) "
@@ -316,4 +360,5 @@ def synchronize(source: Path | str | None = None, *, save_path: bool = False) ->
     return SyncSummary(
         len(snapshot.organizations), len(snapshot.houses),
         new_companies, new_houses, snapshot.missing_area, path,
+        len(snapshot.people),
     )
