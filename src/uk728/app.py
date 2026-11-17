@@ -52,7 +52,7 @@ from .backup_restore import (
     verify_backup, pending_restore, stage_restore,
     cancel_restore, apply_pending_restore,
 )
-from .utils import full_year_period, iso_date, money, to_float, parse_date
+from .utils import full_year_period, iso_date, money, to_float, parse_date, format_date
 from .ui_style import apply_theme
 from .ui_shell import ActionFlowLayout, NavigationSidebar, PageChrome, PAGES
 from .report_storage import sync_report_rows
@@ -1153,9 +1153,24 @@ class HousesTab(BaseTab):
         idx = self.company.findData(r["company_id"])
         self.company.setCurrentIndex(max(0, idx))
         self.address.setPlainText(r["address"])
-        self.area.setText(str(r["total_area"] or ""))
+        self._loading_area = True
+        try:
+            self.area.setText(str(r["total_area"]) if r["total_area"] is not None else "")
+            self.residential_area.setText(
+                str(r["residential_area"]) if r["residential_area"] is not None else ""
+            )
+            self.non_residential_area.setText(
+                str(r["non_residential_area"]) if r["non_residential_area"] is not None else ""
+            )
+        finally:
+            self._loading_area = False
+        self._recalculate_area()
         self.start.setText(r["management_start"])
         self.end.setText(r["management_end"])
+        self.agreement_number.setText(r["management_agreement_number"])
+        self.agreement_date.setText(format_date(r["management_agreement_date"]))
+        self.agreement_valid_from.setText(format_date(r["agreement_valid_from"]))
+        self.agreement_valid_to.setText(format_date(r["agreement_valid_to"]))
         self.status.setCurrentText(r["status"])
         self.notes.setPlainText(r["notes"])
         self._remember_form_state()
