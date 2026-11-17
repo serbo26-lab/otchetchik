@@ -1219,34 +1219,97 @@ class HousesTab(BaseTab):
         if not self.current_id:
             self.msg("Сначала выберите или добавьте дом, затем заполните поля и сохраните.")
             return
-        problem = numeric_error(self.area.text(), "Площадь помещений")
-        if problem:
-            QMessageBox.warning(self, "Проверьте площадь", problem)
+        for field, label in (
+            (self.area, "Общая площадь помещений"),
+            (self.residential_area, "Площадь жилых помещений"),
+            (self.non_residential_area, "Площадь нежилых помещений"),
+        ):
+            problem = numeric_error(field.text(), label)
+            if not problem and field.text().strip() and to_float(field.text()) < 0:
+                problem = f"«{label}»: площадь не может быть отрицательной."
+            if problem:
+                QMessageBox.warning(self, "Проверьте площади", problem)
+                return False
+
+        dates = {}
+        for key, edit, label in (
+            ("agreement_date", self.agreement_date, "Дата договора"),
+            ("agreement_valid_from", self.agreement_valid_from, "Начало действия договора"),
+            ("agreement_valid_to", self.agreement_valid_to, "Окончание действия договора"),
+        ):
+            raw = edit.text().strip()
+            if raw and parse_date(raw) is None:
+                QMessageBox.warning(
+                    self, "Проверьте дату",
+                    f"«{label}»: укажите ДД.ММ.ГГГГ либо оставьте пустым.",
+                )
+                return False
+            dates[key] = iso_date(raw)
+        if (dates["agreement_valid_from"] and dates["agreement_valid_to"]
+                and dates["agreement_valid_to"] < dates["agreement_valid_from"]):
+            QMessageBox.warning(
+                self, "Проверьте срок",
+                "Дата окончания действия договора раньше начала его действия.",
+            )
             return False
+
+        residential = (
+            to_float(self.residential_area.text())
+            if self.residential_area.text().strip() else None
+        )
+        non_residential = (
+            to_float(self.non_residential_area.text())
+            if self.non_residential_area.text().strip() else None
+        )
+        if residential is not None and non_residential is not None:
+            total = residential + non_residential
+        else:
+            total = to_float(self.area.text())
+
         with connect() as conn:
             source = conn.execute(
-                "SELECT assistant_source_id,assistant_area_missing "
+                "SELECT assistant_source_id,assistant_area_missing,"
+                "assistant_residential_missing,assistant_non_residential_missing "
                 "FROM houses WHERE id=?", (self.current_id,)
             ).fetchone()
             if source and source["assistant_source_id"]:
-                if source["assistant_area_missing"]:
-                    conn.execute(
-                        "UPDATE houses SET total_area=?,status=?,notes=?,"
-                        "updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                        (to_float(self.area.text()), self.status.currentText(),
-                         self.notes.toPlainText(), self.current_id),
-                    )
-                else:
-                    conn.execute(
-                        "UPDATE houses SET status=?,notes=?,updated_at=CURRENT_TIMESTAMP "
-                        "WHERE id=?",
-                        (self.status.currentText(), self.notes.toPlainText(),
-                         self.current_id),
-                    )
+                # No sourced identity/period/agreement or known component may be
+                # modified from this form. Missing components and contract
+                # validity dates belong only to the Reporter's local database.
+                conn.execute(
+                    "UPDATE houses SET "
+                    "residential_area=CASE WHEN assistant_residential_missing=1 "
+                    "THEN ? ELSE residential_area END,"
+                    "non_residential_area=CASE WHEN assistant_non_residential_missing=1 "
+                    "THEN ? ELSE non_residential_area END,"
+                    "total_area=CASE WHEN assistant_area_missing=1 "
+                    "THEN ? ELSE total_area END,"
+                    "agreement_valid_from=?,agreement_valid_to=?,"
+                    "status=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (
+                        residential, non_residential, total,
+                        dates["agreement_valid_from"], dates["agreement_valid_to"],
+                        self.status.currentText(), self.notes.toPlainText(),
+                        self.current_id,
+                    ),
+                )
             else:
                 conn.execute(
-                    "UPDATE houses SET company_id=?, address=?, total_area=?, management_start=?, management_end=?, status=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                    (self.company.currentData(), self.address.toPlainText(), to_float(self.area.text()), self.start.text(), self.end.text(), self.status.currentText(), self.notes.toPlainText(), self.current_id),
+                    "UPDATE houses SET company_id=?,address=?,total_area=?,"
+                    "residential_area=?,non_residential_area=?,"
+                    "management_start=?,management_end=?,"
+                    "management_agreement_number=?,management_agreement_date=?,"
+                    "agreement_valid_from=?,agreement_valid_to=?,"
+                    "status=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (
+                        self.company.currentData(), self.address.toPlainText(),
+                        total, residential, non_residential,
+                        self.start.text(), self.end.text(),
+                        self.agreement_number.text(), dates["agreement_date"],
+                        dates["agreement_valid_from"], dates["agreement_valid_to"],
+                        self.status.currentText(), self.notes.toPlainText(),
+                        self.current_id,
+                    ),
                 )
             conn.commit()
         self._remember_form_state()
