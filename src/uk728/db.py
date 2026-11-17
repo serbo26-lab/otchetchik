@@ -7,7 +7,7 @@ from typing import Any
 from .paths import db_path
 from .utils import full_year_period
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
@@ -211,6 +211,39 @@ def init_db() -> None:
         _ensure_column(conn, "companies", "assistant_source_id", "TEXT")
         _ensure_column(conn, "houses", "assistant_source_id", "TEXT")
         _ensure_column(conn, "houses", "assistant_area_missing", "INTEGER NOT NULL DEFAULT 0")
+        # Nullable components distinguish unknown area from a genuine zero.
+        # Preserve total_area in old user databases; never infer component
+        # areas by splitting or copying the old total.
+        for column, declaration in (
+            ("residential_area", "REAL"),
+            ("non_residential_area", "REAL"),
+            ("assistant_residential_missing", "INTEGER NOT NULL DEFAULT 0"),
+            ("assistant_non_residential_missing", "INTEGER NOT NULL DEFAULT 0"),
+            ("management_agreement_number", "TEXT NOT NULL DEFAULT ''"),
+            ("management_agreement_date", "TEXT NOT NULL DEFAULT ''"),
+            ("agreement_valid_from", "TEXT NOT NULL DEFAULT ''"),
+            ("agreement_valid_to", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            _ensure_column(conn, "houses", column, declaration)
+        # Signatories belong either to a UO or a house, never both. Imported
+        # people have stable source UUIDs; manually entered people have NULL.
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS signatories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+                house_id INTEGER REFERENCES houses(id) ON DELETE CASCADE,
+                assistant_source_id TEXT,
+                data_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK ((company_id IS NOT NULL) != (house_id IS NOT NULL))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_signatories_assistant
+                ON signatories(assistant_source_id)
+                WHERE assistant_source_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS ix_signatories_company ON signatories(company_id);
+            CREATE INDEX IF NOT EXISTS ix_signatories_house ON signatories(house_id);
+        """)
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_assistant_source "
             "ON companies(assistant_source_id) "
