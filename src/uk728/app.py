@@ -3203,11 +3203,8 @@ class ReportsTab(BaseTab):
                 "\n\nПродолжить выгрузку без устранения замечаний?"
             ) != QMessageBox.Yes:
                 return
-        try:
-            make_backup("before_export")
-        except Exception as exc:
-            self.msg(f"Выгрузка отменена: резервная копия не создана ({exc})")
-            return
+        # Export reads the saved report but does not modify SQLite. A new
+        # database copy for every Word/Excel/PDF export is unnecessary.
         paths = []
         try:
             for fmt, export_func in (
