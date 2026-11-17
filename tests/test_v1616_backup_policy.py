@@ -82,6 +82,9 @@ class BackupPolicyV1616Tests(unittest.TestCase):
         self.assertEqual(len(self.backups("before_assistant_sync")), 1)
         self.assertIsNotNone(make_backup("auto"))
         for _ in range(10):
+            # SQLite may move app_meta rows internally during init_db(), even
+            # when their values stay identical. That is not a data change.
+            db.init_db()
             self.assertIsNone(make_backup("auto"))
         self.assertEqual(len(self.backups("auto")), 1)
 
