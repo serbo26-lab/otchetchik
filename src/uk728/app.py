@@ -3772,7 +3772,8 @@ class BackupsTab(BaseTab):
         if isinstance(win, MainWindow):
             win.reload_after_assistant_sync()
         message = (
-            f"Загружено: УО — {result.organizations}, домов — {result.houses}. "
+            f"Загружено: УО — {result.organizations}, домов — {result.houses}, "
+            f"подписантов — {result.signatories}. "
             f"Новых: УО — {result.new_organizations}, домов — {result.new_houses}."
         )
         if result.missing_area:
