@@ -878,8 +878,8 @@ class HousesTab(BaseTab):
         self.source_note = selectable_label(
             "Дом связан с базой ГИС ЖКХ Ассистента. Адрес и период управления "
             "редактируются только там; статус и примечание — локально. "
-            "Если в Ассистенте отсутствуют площади помещений, площадь "
-            "можно дополнить здесь, не изменяя исходную базу."
+            "Недостающие площади и срок действия договора можно дополнить "
+            "локально, не изменяя базу Ассистента."
         )
         self.source_note.setObjectName("CardSubtitle")
         official.add_widget(self.source_note)
@@ -984,7 +984,10 @@ class HousesTab(BaseTab):
         ) if self.current_id else None
         if complete:
             from decimal import Decimal
-            amounts = [Decimal(v.replace(" ", "").replace(",", ".")) for v in values]
+            amounts = [
+                Decimal(v.replace("\xa0", "").replace(" ", "").replace(",", "."))
+                for v in values
+            ]
             self.area.setText(format(sum(amounts), "f"))
             self.area.setEnabled(False)
             self.area.setToolTip(
