@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sqlite3
@@ -43,10 +44,39 @@ def export_dir(company_name: str, year: int | str, house_address: str) -> Path:
     return path
 
 
+def _logical_digest(path: Path) -> bytes:
+    """Compare SQL contents, including committed WAL transactions, not mtimes.
+
+    Restarting or checkpointing SQLite may change DB bytes without changing
+    any report data. A logical signature also works across SQLite backups.
+    """
+    digest = hashlib.sha256()
+    with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro",
+                                 uri=True, timeout=30)) as conn:
+        conn.execute("PRAGMA query_only=ON")
+        for statement in conn.iterdump():
+            digest.update(statement.encode("utf-8"))
+            digest.update(b"\n")
+    return digest.digest()
+
+
 def make_backup(reason: str = "auto") -> Path | None:
     src = db_path()
     if not src.exists():
         return None
+    # Manual copies, schema changes, restores and destructive actions always
+    # get their own guard. Routine sync and timer backups are content-aware.
+    if reason in ("auto", "before_assistant_sync"):
+        folder = data_dir() / "backups"
+        candidates = list(folder.glob("reporting_728_*.db"))
+        if candidates:
+            latest = max(candidates, key=lambda p: p.stat().st_mtime_ns)
+            try:
+                if _logical_digest(src) == _logical_digest(latest):
+                    return None
+            except (OSError, sqlite3.DatabaseError):
+                # Never skip a protective backup on a failed comparison.
+                pass
     # SQLite uses WAL: copying only the .db file can omit committed data
     # that is still stored in the -wal journal. The online backup API
     # creates a consistent snapshot, including those committed transactions.
