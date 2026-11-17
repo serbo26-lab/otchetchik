@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from .paths import db_path
+from .paths import db_path, make_backup
 from .utils import full_year_period
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
@@ -34,6 +35,19 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
 def init_db() -> None:
     path = db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Back up the existing Reporter database BEFORE any version-12 ALTER/DDL.
+    # The Assistant source is never involved. This also works with Reporter WAL.
+    if path.is_file() and path.stat().st_size > 0:
+        with closing(sqlite3.connect(str(path), timeout=15.0)) as old_conn:
+            try:
+                previous = old_conn.execute(
+                    "SELECT value FROM app_meta WHERE key='schema_version'"
+                ).fetchone()
+                previous_version = str(previous[0]) if previous else None
+            except sqlite3.DatabaseError:
+                previous_version = None
+        if previous_version != str(SCHEMA_VERSION):
+            make_backup("before_schema_v12")
     with connect(path) as conn:
         conn.executescript(
             """
@@ -211,6 +225,39 @@ def init_db() -> None:
         _ensure_column(conn, "companies", "assistant_source_id", "TEXT")
         _ensure_column(conn, "houses", "assistant_source_id", "TEXT")
         _ensure_column(conn, "houses", "assistant_area_missing", "INTEGER NOT NULL DEFAULT 0")
+        # Nullable components distinguish unknown area from a genuine zero.
+        # Preserve total_area in old user databases; never infer component
+        # areas by splitting or copying the old total.
+        for column, declaration in (
+            ("residential_area", "REAL"),
+            ("non_residential_area", "REAL"),
+            ("assistant_residential_missing", "INTEGER NOT NULL DEFAULT 0"),
+            ("assistant_non_residential_missing", "INTEGER NOT NULL DEFAULT 0"),
+            ("management_agreement_number", "TEXT NOT NULL DEFAULT ''"),
+            ("management_agreement_date", "TEXT NOT NULL DEFAULT ''"),
+            ("agreement_valid_from", "TEXT NOT NULL DEFAULT ''"),
+            ("agreement_valid_to", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            _ensure_column(conn, "houses", column, declaration)
+        # Signatories belong either to a UO or a house, never both. Imported
+        # people have stable source UUIDs; manually entered people have NULL.
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS signatories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+                house_id INTEGER REFERENCES houses(id) ON DELETE CASCADE,
+                assistant_source_id TEXT,
+                data_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK ((company_id IS NOT NULL) != (house_id IS NOT NULL))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_signatories_assistant
+                ON signatories(assistant_source_id)
+                WHERE assistant_source_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS ix_signatories_company ON signatories(company_id);
+            CREATE INDEX IF NOT EXISTS ix_signatories_house ON signatories(house_id);
+        """)
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_assistant_source "
             "ON companies(assistant_source_id) "

@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import db, assistant_source
+from .signatories import SignatoryListDialog, count_signatories
 from .db import connect
 from .exporters import export_docx, export_pdf, export_xlsx
 from .paths import data_dir, make_backup
@@ -51,7 +52,7 @@ from .backup_restore import (
     verify_backup, pending_restore, stage_restore,
     cancel_restore, apply_pending_restore,
 )
-from .utils import full_year_period, iso_date, money, to_float
+from .utils import full_year_period, iso_date, money, to_float, parse_date, format_date
 from .ui_style import apply_theme
 from .ui_shell import ActionFlowLayout, NavigationSidebar, PageChrome, PAGES
 from .report_storage import sync_report_rows
@@ -628,7 +629,20 @@ class CompaniesTab(BaseTab):
         report_contact.add_layout(contact_form)
         form_layout.addWidget(report_contact)
 
-        extra = ContentCard("4. Примечания")
+        signers = ContentCard(
+            "4. Подписанты управляющей организации",
+            "ФИО, должности, основания и периоды полномочий. "
+            "История сохраняется отдельно для выбора на дату документа."
+        )
+        self.sign_summary = selectable_label("")
+        self.sign_summary.setObjectName("CardSubtitle")
+        signers.add_widget(self.sign_summary)
+        self.sign_button = QPushButton("Подписанты УО и история полномочий…")
+        self.sign_button.clicked.connect(self.open_signatories)
+        signers.add_widget(self.sign_button)
+        form_layout.addWidget(signers)
+
+        extra = ContentCard("5. Примечания")
         extra_form = QFormLayout()
         extra_form.addRow(selectable_label("Примечание"), self.notes)
         polish_form(extra_form)
@@ -666,6 +680,8 @@ class CompaniesTab(BaseTab):
         self.ogrn.setToolTip("ОГРН изменяется в ГИС ЖКХ Ассистенте." if source_linked else "")
         self.source_note.setVisible(source_linked)
         self.delete_button.setEnabled(has_record and not source_linked)
+        self.sign_button.setEnabled(has_record)
+        self.refresh_sign_summary()
         if hasattr(self, "editor_stack"):
             self.editor_stack.setCurrentIndex(1 if has_record else 0)
         if not has_record:
@@ -714,6 +730,23 @@ class CompaniesTab(BaseTab):
         self.contact.setText(r["report_contact"])
         self.notes.setPlainText(r["notes"])
         self._remember_form_state()
+
+    def refresh_sign_summary(self):
+        amount = count_signatories(company_id=self.current_id)
+        self.sign_summary.setText(
+            f"Записей о подписантах УО: {amount}. "
+            "Запись лица не означает подписания отчёта."
+            if self.current_id else "Сначала выберите управляющую организацию."
+        )
+
+    def open_signatories(self):
+        if not self.current_id:
+            return
+        if self.save(refresh_after=False) is False:
+            return
+        dialog = SignatoryListDialog(company_id=self.current_id, parent=self)
+        dialog.exec()
+        self.refresh_sign_summary()
 
     def add_company(self):
         if self.current_id and self.save() is False:
@@ -818,25 +851,46 @@ class HousesTab(BaseTab):
         )
         self.address = QTextEdit(); self.address.setFixedHeight(70)
         self.area = QLineEdit()
+        self.residential_area = QLineEdit()
+        self.non_residential_area = QLineEdit()
+        self._loading_area = False
+        self.residential_area.textChanged.connect(self._recalculate_area)
+        self.non_residential_area.textChanged.connect(self._recalculate_area)
         self.start = QLineEdit(); self.start.setPlaceholderText("дд.мм.гггг или оставить пустым")
         self.end = QLineEdit(); self.end.setPlaceholderText("дд.мм.гггг или оставить пустым")
+        self.agreement_number = QLineEdit()
+        self.agreement_date = QLineEdit(); self.agreement_date.setPlaceholderText("ДД.ММ.ГГГГ")
+        self.agreement_valid_from = QLineEdit()
+        self.agreement_valid_from.setPlaceholderText("ДД.ММ.ГГГГ")
+        self.agreement_valid_to = QLineEdit()
+        self.agreement_valid_to.setPlaceholderText("ДД.ММ.ГГГГ или оставить пустым")
         self.status = ClickComboBox(); self.status.addItems(["В управлении", "Выбыл", "Архив"])
         self.notes = QTextEdit(); self.notes.setFixedHeight(90)
-        self.form_widgets = [self.company, self.address, self.area, self.start, self.end, self.status, self.notes]
+        self.form_widgets = [
+            self.company, self.address, self.area,
+            self.residential_area, self.non_residential_area,
+            self.start, self.end, self.agreement_number, self.agreement_date,
+            self.agreement_valid_from, self.agreement_valid_to,
+            self.status, self.notes,
+        ]
 
         official = ContentCard("3. Сведения о доме", "Площадь — сумма площадей жилых и нежилых помещений без общего имущества.")
         self.source_note = selectable_label(
             "Дом связан с базой ГИС ЖКХ Ассистента. Адрес и период управления "
             "редактируются только там; статус и примечание — локально. "
-            "Если в Ассистенте отсутствуют площади помещений, площадь "
-            "можно дополнить здесь, не изменяя исходную базу."
+            "Недостающие площади и срок действия договора можно дополнить "
+            "локально, не изменяя базу Ассистента."
         )
         self.source_note.setObjectName("CardSubtitle")
         official.add_widget(self.source_note)
         official_form = QFormLayout()
-        for label, widget in [("Управляющая организация", self.company),
-                              ("Адрес дома", self.address),
-                              ("Площадь помещений, м²", self.area)]:
+        for label, widget in [
+            ("Управляющая организация", self.company),
+            ("Адрес дома", self.address),
+            ("Жилая площадь, м²", self.residential_area),
+            ("Нежилая площадь, м²", self.non_residential_area),
+            ("Общая площадь помещений, м²", self.area),
+        ]:
             official_form.addRow(selectable_label(label), widget)
         polish_form(official_form)
         official.add_layout(official_form)
@@ -852,7 +906,41 @@ class HousesTab(BaseTab):
         management.add_layout(management_form)
         form_l.addWidget(management)
 
-        other = ContentCard("5. Дополнительно")
+        agreement = ContentCard(
+            "5. Договор управления",
+            "Дата заключения договора отличается от даты начала управления "
+            "домом. Период действия договора хранится отдельно."
+        )
+        agreement_form = QFormLayout()
+        for label, widget in [
+            ("Номер договора", self.agreement_number),
+            ("Дата заключения договора", self.agreement_date),
+            ("Начало действия договора", self.agreement_valid_from),
+            ("Окончание действия договора", self.agreement_valid_to),
+        ]:
+            agreement_form.addRow(selectable_label(label), widget)
+        polish_form(agreement_form)
+        agreement.add_layout(agreement_form)
+        form_l.addWidget(agreement)
+
+        signers = ContentCard(
+            "6. Подписывающие лица",
+            "УО и собственники представлены раздельно. "
+            "Можно хранить несколько лиц и периоды их полномочий."
+        )
+        self.org_sign_summary = selectable_label("")
+        signers.add_widget(self.org_sign_summary)
+        self.org_sign_button = QPushButton("Подписанты со стороны УО…")
+        self.org_sign_button.clicked.connect(self.open_org_signatories)
+        signers.add_widget(self.org_sign_button)
+        self.house_sign_summary = selectable_label("")
+        signers.add_widget(self.house_sign_summary)
+        self.house_sign_button = QPushButton("Представители со стороны дома…")
+        self.house_sign_button.clicked.connect(self.open_house_signatories)
+        signers.add_widget(self.house_sign_button)
+        form_l.addWidget(signers)
+
+        other = ContentCard("7. Дополнительно")
         extra_form = QFormLayout()
         extra_form.addRow(selectable_label("Примечание"), self.notes)
         polish_form(extra_form)
@@ -880,30 +968,97 @@ class HousesTab(BaseTab):
         self.address.setPlainText("")
         self.notes.setPlainText("")
 
+    def _recalculate_area(self, *_args):
+        """Sum known component areas; otherwise keep a legacy/manual total."""
+        if self._loading_area:
+            return
+        values = [self.residential_area.text().strip(),
+                  self.non_residential_area.text().strip()]
+        complete = all(values) and all(
+            numeric_error(v, "Площадь") is None and to_float(v) >= 0
+            for v in values
+        )
+        row = db.row(
+            "SELECT assistant_source_id,assistant_area_missing "
+            "FROM houses WHERE id=?", (self.current_id,),
+        ) if self.current_id else None
+        if complete:
+            from decimal import Decimal
+            amounts = [
+                Decimal(v.replace("\xa0", "").replace(" ", "").replace(",", "."))
+                for v in values
+            ]
+            self.area.setText(format(sum(amounts), "f"))
+            self.area.setEnabled(False)
+            self.area.setToolTip(
+                "Автоматически вычисляется как сумма площадей жилых "
+                "и нежилых помещений."
+            )
+        else:
+            can_edit = bool(self.current_id and (
+                not row or not row["assistant_source_id"]
+                or row["assistant_area_missing"]
+            ))
+            self.area.setEnabled(can_edit)
+            self.area.setToolTip(
+                "Если составляющие площади неизвестны, общую площадь "
+                "можно указать отдельно. Уже сохранённые значения не стираются."
+            )
+
+    def refresh_sign_summary(self):
+        if not self.current_id:
+            self.org_sign_summary.setText("Сначала выберите дом.")
+            self.house_sign_summary.setText("Сначала выберите дом.")
+            return
+        house = db.row("SELECT company_id FROM houses WHERE id=?", (self.current_id,))
+        cid = house["company_id"] if house else None
+        org_count = count_signatories(company_id=cid)
+        home_count = count_signatories(house_id=self.current_id)
+        self.org_sign_summary.setText(f"Подписантов УО: {org_count}")
+        self.house_sign_summary.setText(f"Представителей дома: {home_count}")
+        self.org_sign_button.setEnabled(cid is not None)
+
+    def open_org_signatories(self):
+        if not self.current_id or self.save(refresh_after=False) is False:
+            return
+        house = db.row("SELECT company_id FROM houses WHERE id=?", (self.current_id,))
+        if not house or house["company_id"] is None:
+            return
+        SignatoryListDialog(company_id=house["company_id"], parent=self).exec()
+        self.refresh_sign_summary()
+
+    def open_house_signatories(self):
+        if not self.current_id or self.save(refresh_after=False) is False:
+            return
+        SignatoryListDialog(house_id=self.current_id, parent=self).exec()
+        self.refresh_sign_summary()
+
     def update_form_state(self):
         has_record = self.current_id is not None
         record = db.row(
-            "SELECT assistant_source_id,assistant_area_missing FROM houses WHERE id=?",
-            (self.current_id,),
+            "SELECT assistant_source_id,assistant_area_missing,"
+            "assistant_residential_missing,assistant_non_residential_missing "
+            "FROM houses WHERE id=?", (self.current_id,),
         ) if has_record else None
         source_linked = bool(record and record["assistant_source_id"])
         set_widgets_enabled(self.form_widgets + [self.save_button], has_record)
-        self.company.setEnabled(False)  # belong to the house; never reassign implicitly
+        self.company.setEnabled(False)
         if source_linked:
             self.address.setEnabled(False)
             self.start.setEnabled(False)
             self.end.setEnabled(False)
-            self.area.setEnabled(bool(record["assistant_area_missing"]))
-            self.area.setToolTip(
-                "Площади жилых и нежилых помещений отсутствуют в Ассистенте. "
-                "Локальное значение сохранится только в Отчётчике."
-                if record["assistant_area_missing"] else
-                "Площадь вычислена по сведениям Ассистента. Изменяется там."
+            self.residential_area.setEnabled(bool(record["assistant_residential_missing"]))
+            self.non_residential_area.setEnabled(
+                bool(record["assistant_non_residential_missing"])
             )
-        else:
-            self.area.setToolTip("")
+            self.agreement_number.setEnabled(False)
+            self.agreement_date.setEnabled(False)
         self.source_note.setVisible(source_linked)
         self.delete_button.setEnabled(has_record and not source_linked)
+        self.org_sign_button.setEnabled(has_record)
+        self.house_sign_button.setEnabled(has_record)
+        self.refresh_sign_summary()
+        self._recalculate_area()
         if hasattr(self, "editor_stack"):
             self.editor_stack.setCurrentIndex(1 if has_record else 0)
             self.editor_stack.empty_add_button.setEnabled(
@@ -1001,9 +1156,24 @@ class HousesTab(BaseTab):
         idx = self.company.findData(r["company_id"])
         self.company.setCurrentIndex(max(0, idx))
         self.address.setPlainText(r["address"])
-        self.area.setText(str(r["total_area"] or ""))
+        self._loading_area = True
+        try:
+            self.area.setText(str(r["total_area"]) if r["total_area"] is not None else "")
+            self.residential_area.setText(
+                str(r["residential_area"]) if r["residential_area"] is not None else ""
+            )
+            self.non_residential_area.setText(
+                str(r["non_residential_area"]) if r["non_residential_area"] is not None else ""
+            )
+        finally:
+            self._loading_area = False
+        self._recalculate_area()
         self.start.setText(r["management_start"])
         self.end.setText(r["management_end"])
+        self.agreement_number.setText(r["management_agreement_number"])
+        self.agreement_date.setText(format_date(r["management_agreement_date"]))
+        self.agreement_valid_from.setText(format_date(r["agreement_valid_from"]))
+        self.agreement_valid_to.setText(format_date(r["agreement_valid_to"]))
         self.status.setCurrentText(r["status"])
         self.notes.setPlainText(r["notes"])
         self._remember_form_state()
@@ -1052,34 +1222,97 @@ class HousesTab(BaseTab):
         if not self.current_id:
             self.msg("Сначала выберите или добавьте дом, затем заполните поля и сохраните.")
             return
-        problem = numeric_error(self.area.text(), "Площадь помещений")
-        if problem:
-            QMessageBox.warning(self, "Проверьте площадь", problem)
+        for field, label in (
+            (self.area, "Общая площадь помещений"),
+            (self.residential_area, "Площадь жилых помещений"),
+            (self.non_residential_area, "Площадь нежилых помещений"),
+        ):
+            problem = numeric_error(field.text(), label)
+            if not problem and field.text().strip() and to_float(field.text()) < 0:
+                problem = f"«{label}»: площадь не может быть отрицательной."
+            if problem:
+                QMessageBox.warning(self, "Проверьте площади", problem)
+                return False
+
+        dates = {}
+        for key, edit, label in (
+            ("agreement_date", self.agreement_date, "Дата договора"),
+            ("agreement_valid_from", self.agreement_valid_from, "Начало действия договора"),
+            ("agreement_valid_to", self.agreement_valid_to, "Окончание действия договора"),
+        ):
+            raw = edit.text().strip()
+            if raw and parse_date(raw) is None:
+                QMessageBox.warning(
+                    self, "Проверьте дату",
+                    f"«{label}»: укажите ДД.ММ.ГГГГ либо оставьте пустым.",
+                )
+                return False
+            dates[key] = iso_date(raw)
+        if (dates["agreement_valid_from"] and dates["agreement_valid_to"]
+                and dates["agreement_valid_to"] < dates["agreement_valid_from"]):
+            QMessageBox.warning(
+                self, "Проверьте срок",
+                "Дата окончания действия договора раньше начала его действия.",
+            )
             return False
+
+        residential = (
+            to_float(self.residential_area.text())
+            if self.residential_area.text().strip() else None
+        )
+        non_residential = (
+            to_float(self.non_residential_area.text())
+            if self.non_residential_area.text().strip() else None
+        )
+        if residential is not None and non_residential is not None:
+            total = residential + non_residential
+        else:
+            total = to_float(self.area.text())
+
         with connect() as conn:
             source = conn.execute(
-                "SELECT assistant_source_id,assistant_area_missing "
+                "SELECT assistant_source_id,assistant_area_missing,"
+                "assistant_residential_missing,assistant_non_residential_missing "
                 "FROM houses WHERE id=?", (self.current_id,)
             ).fetchone()
             if source and source["assistant_source_id"]:
-                if source["assistant_area_missing"]:
-                    conn.execute(
-                        "UPDATE houses SET total_area=?,status=?,notes=?,"
-                        "updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                        (to_float(self.area.text()), self.status.currentText(),
-                         self.notes.toPlainText(), self.current_id),
-                    )
-                else:
-                    conn.execute(
-                        "UPDATE houses SET status=?,notes=?,updated_at=CURRENT_TIMESTAMP "
-                        "WHERE id=?",
-                        (self.status.currentText(), self.notes.toPlainText(),
-                         self.current_id),
-                    )
+                # No sourced identity/period/agreement or known component may be
+                # modified from this form. Missing components and contract
+                # validity dates belong only to the Reporter's local database.
+                conn.execute(
+                    "UPDATE houses SET "
+                    "residential_area=CASE WHEN assistant_residential_missing=1 "
+                    "THEN ? ELSE residential_area END,"
+                    "non_residential_area=CASE WHEN assistant_non_residential_missing=1 "
+                    "THEN ? ELSE non_residential_area END,"
+                    "total_area=CASE WHEN assistant_area_missing=1 "
+                    "THEN ? ELSE total_area END,"
+                    "agreement_valid_from=?,agreement_valid_to=?,"
+                    "status=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (
+                        residential, non_residential, total,
+                        dates["agreement_valid_from"], dates["agreement_valid_to"],
+                        self.status.currentText(), self.notes.toPlainText(),
+                        self.current_id,
+                    ),
+                )
             else:
                 conn.execute(
-                    "UPDATE houses SET company_id=?, address=?, total_area=?, management_start=?, management_end=?, status=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                    (self.company.currentData(), self.address.toPlainText(), to_float(self.area.text()), self.start.text(), self.end.text(), self.status.currentText(), self.notes.toPlainText(), self.current_id),
+                    "UPDATE houses SET company_id=?,address=?,total_area=?,"
+                    "residential_area=?,non_residential_area=?,"
+                    "management_start=?,management_end=?,"
+                    "management_agreement_number=?,management_agreement_date=?,"
+                    "agreement_valid_from=?,agreement_valid_to=?,"
+                    "status=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (
+                        self.company.currentData(), self.address.toPlainText(),
+                        total, residential, non_residential,
+                        self.start.text(), self.end.text(),
+                        self.agreement_number.text(), dates["agreement_date"],
+                        dates["agreement_valid_from"], dates["agreement_valid_to"],
+                        self.status.currentText(), self.notes.toPlainText(),
+                        self.current_id,
+                    ),
                 )
             conn.commit()
         self._remember_form_state()
@@ -3539,7 +3772,8 @@ class BackupsTab(BaseTab):
         if isinstance(win, MainWindow):
             win.reload_after_assistant_sync()
         message = (
-            f"Загружено: УО — {result.organizations}, домов — {result.houses}. "
+            f"Загружено: УО — {result.organizations}, домов — {result.houses}, "
+            f"подписантов — {result.signatories}. "
             f"Новых: УО — {result.new_organizations}, домов — {result.new_houses}."
         )
         if result.missing_area:
