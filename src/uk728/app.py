@@ -792,6 +792,9 @@ class CompaniesTab(BaseTab):
         if not self.current_id:
             self.msg("Нажмите «Добавить организацию», затем заполните поля и сохраните.")
             return
+        if (getattr(self, "_loaded_form_id", None) == self.current_id
+                and self._form_snapshot == self._form_signature()):
+            return True
         with connect() as conn:
             source = conn.execute(
                 "SELECT assistant_source_id FROM companies WHERE id=?", (self.current_id,)
@@ -1222,6 +1225,9 @@ class HousesTab(BaseTab):
         if not self.current_id:
             self.msg("Сначала выберите или добавьте дом, затем заполните поля и сохраните.")
             return
+        if (getattr(self, "_loaded_form_id", None) == self.current_id
+                and self._form_snapshot == self._form_signature()):
+            return True
         for field, label in (
             (self.area, "Общая площадь помещений"),
             (self.residential_area, "Площадь жилых помещений"),
@@ -3759,8 +3765,8 @@ class BackupsTab(BaseTab):
             if not win.save_before_assistant_sync():
                 return
         try:
-            # Preserve the complete reporting database, NOT the Assistant DB.
-            make_backup("before_assistant_sync")
+            # synchronize() compares source data and makes a safety copy
+            # only when an actual import is necessary.
             result = assistant_source.synchronize(path, save_path=remember)
         except Exception as exc:
             QMessageBox.warning(
@@ -3776,10 +3782,17 @@ class BackupsTab(BaseTab):
             f"подписантов — {result.signatories}. "
             f"Новых: УО — {result.new_organizations}, домов — {result.new_houses}."
         )
+        if result.unchanged:
+            message += " Изменений в исходных сведениях нет."
         if result.missing_area:
             message += (
-                f" У {result.missing_area} домов отсутствуют обе составляющие "
-                "площади. В Отчётчике их можно заполнить локально."
+                f" У {result.missing_area} домов отсутствует хотя бы одна "
+                "составляющая площади. Её можно заполнить локально."
+            )
+        if result.missing_management_start:
+            message += (
+                f" У {result.missing_management_start} домов в источнике "
+                "не указана дата начала управления."
             )
         self.update_assistant_status(message)
         self.msg("Данные Ассистента прочитаны. Изменена только локальная база Отчётчика.")
@@ -4269,7 +4282,10 @@ class MainWindow(QMainWindow):
                 if tab.save() is False:
                     raise ValueError("Не все обязательные поля заполнены.")
             path = make_backup("auto")
-            self.statusBar().showMessage(f"Резервная копия создана: {path.name if path else ''}", 5000)
+            if path is not None:
+                self.statusBar().showMessage(f"Резервная копия создана: {path.name}", 5000)
+            else:
+                self.statusBar().showMessage("Данные не изменились — новая копия не требуется", 5000)
         except Exception as exc:
             self.set_save_status("error")
             self.statusBar().showMessage(f"Не удалось создать резервную копию: {exc}", 8000)
@@ -4320,7 +4336,6 @@ def main():
     try:
         source = assistant_source.configured_source_path()
         if source.is_file():
-            make_backup("before_assistant_sync")
             assistant_source.synchronize()
         else:
             assistant_warning = f"База Ассистента не найдена: {source}"
