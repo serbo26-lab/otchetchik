@@ -282,7 +282,19 @@ class HouseFieldsAndSignatoriesV1615Tests(unittest.TestCase):
             "INSERT INTO houses(company_id,address,total_area) VALUES(?,?,?)",
             (company, "Старый дом", 6300),
         )
+        # Simulate a previous installed version before the schema migration.
+        db.execute("UPDATE app_meta SET value='11' WHERE key='schema_version'")
         db.init_db()
+        backups = list((self.folder / "data" / "backups").glob(
+            "reporting_728_before_schema_v12_*.db"
+        ))
+        self.assertEqual(len(backups), 1)
+        with sqlite3.connect(backups[0]) as previous:
+            self.assertEqual(
+                previous.execute("SELECT value FROM app_meta "
+                                 "WHERE key='schema_version'").fetchone()[0],
+                "11",
+            )
         house = db.row("SELECT * FROM houses WHERE id=?", (house_id,))
         self.assertEqual(house["total_area"], 6300)
         self.assertIsNone(house["residential_area"])
