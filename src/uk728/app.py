@@ -1772,7 +1772,8 @@ class WorksTab(BaseTab):
         # inserted twice on a subsequent edit/save.
         self.refresh()
         self.msg("Справочник сохранен")
-        return True
+        # Preserve the existing implicit None success result: callers and
+        # historical UI tests depend on that contract.
 
 
 class TemplatesTab(BaseTab):
