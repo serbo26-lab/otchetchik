@@ -137,6 +137,69 @@ class BackupPolicyV1616Tests(unittest.TestCase):
         self.assertEqual(house["management_start"], "")
         self.assertEqual(house["total_area"], 0)
 
+    def test_russian_date_format_is_normalized_without_losing_the_date(self):
+        # All values in this test are invented.
+        with sqlite3.connect(self.source) as conn:
+            conn.execute(
+                "UPDATE houses SET management_start_date=?,management_end_date=? "
+                "WHERE id='house-example'",
+                ("05.07.2021", "30.11.2025"),
+            )
+        result = assistant_source.synchronize(self.source)
+        self.assertEqual(result.missing_management_start, 0)
+        row = db.row("SELECT * FROM houses WHERE assistant_source_id='house-example'")
+        self.assertEqual(row["management_start"], "2021-07-05")
+        self.assertEqual(row["management_end"], "2025-11-30")
+        window = MainWindow()
+        try:
+            window.navigate(1)
+            tab = window.houses_tab
+            self.assertEqual(tab.start.text(), "05.07.2021")
+            self.assertEqual(tab.end.text(), "30.11.2025")
+            # The source did not provide separate agreement validity dates.
+            self.assertEqual(tab.agreement_valid_from.text(), "")
+        finally:
+            window.timer.stop()
+            window.context_timer.stop()
+            window.close()
+
+    def test_missing_source_area_is_explained_in_house_card(self):
+        with sqlite3.connect(self.source) as conn:
+            conn.execute(
+                "UPDATE houses SET residential_area=NULL,non_residential_area=NULL "
+                "WHERE id='house-example'"
+            )
+        assistant_source.synchronize(self.source)
+        window = MainWindow()
+        try:
+            window.navigate(1)
+            message = window.houses_tab.source_note.text()
+            self.assertIn("не указана площадь", message)
+            self.assertIn("Площадь для начислений не подменяет", message)
+            self.assertEqual(window.houses_tab.residential_area.text(), "")
+            self.assertEqual(window.houses_tab.non_residential_area.text(), "")
+        finally:
+            window.timer.stop()
+            window.context_timer.stop()
+            window.close()
+
+    def test_invalid_source_date_is_rejected_without_overwriting_data(self):
+        assistant_source.synchronize(self.source)
+        original = db.row(
+            "SELECT management_start FROM houses WHERE assistant_source_id='house-example'"
+        )["management_start"]
+        with sqlite3.connect(self.source) as conn:
+            conn.execute(
+                "UPDATE houses SET management_start_date=? "
+                "WHERE id='house-example'", ("32.12.2022",)
+            )
+        with self.assertRaises(assistant_source.AssistantSourceError):
+            assistant_source.synchronize(self.source)
+        current = db.row(
+            "SELECT management_start FROM houses WHERE assistant_source_id='house-example'"
+        )["management_start"]
+        self.assertEqual(current, original)
+
     def test_ui_timer_does_not_write_untouched_card_or_duplicate_backup(self):
         assistant_source.synchronize(self.source)
         window = MainWindow()
