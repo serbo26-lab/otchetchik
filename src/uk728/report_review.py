@@ -98,6 +98,15 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
                 )
             if key in ("content", "repair", "management") and not str(item.get("name") or "").strip():
                 errors.append(f"{section}: строка {index} не имеет наименования.")
+            if (key == "repair" and str(item.get("source") or "").startswith("assistant-work-list:")
+                    and (not str(item.get("basis") or "").strip()
+                         or not str(item.get("volume") or "").strip()
+                         or _number(item.get("cost")) <= 0)):
+                errors.append(
+                    f"Текущий ремонт: строка {index} перенесена из перечня "
+                    "как черновик. Укажите подтверждённые основание, объём и "
+                    "стоимость выполненной работы либо удалите строку."
+                )
 
     management_total = _number(report.get("management_cost"))
     if counts["management"] and not isfinite(management_total):
