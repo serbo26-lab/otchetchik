@@ -16,6 +16,7 @@ import sqlite3
 
 from . import assistant_source, db
 from .paths import db_path, make_backup
+from .utils import iso_date
 
 SKIP = "skip"
 CONTENT = "content"
@@ -77,8 +78,7 @@ def _parse_amount(raw: object, label: str) -> Decimal:
 
 def _report_digest(conn: sqlite3.Connection, report_id: int) -> tuple[str, sqlite3.Row]:
     row = conn.execute(
-        "SELECT id,house_id,year,period_start,period_end,show_period_note "
-        "FROM reports WHERE id=?", (report_id,)
+        "SELECT * FROM reports WHERE id=?", (report_id,)
     ).fetchone()
     if row is None:
         raise WorkListImportError("Выбранный отчёт больше не существует.")
@@ -213,9 +213,14 @@ def read_preview(report_id: int) -> Preview:
                 "Дом не связан с ГИС ЖКХ Ассистентом. Выберите связанный дом."
             )
         year = int(report["year"])
+        if str(report["status"] or "") in ("Размещен", "Архив"):
+            raise WorkListImportError(
+                "Перечень нельзя импортировать в размещённый или архивный отчёт. "
+                "Используйте черновик для изменения данных."
+            )
         if (
-            str(report["period_start"] or "").strip() != f"{year}-01-01"
-            or str(report["period_end"] or "").strip() != f"{year}-12-31"
+            iso_date(report["period_start"]) != f"{year}-01-01"
+            or iso_date(report["period_end"]) != f"{year}-12-31"
         ):
             raise WorkListImportError(
                 "Годовой перечень нельзя применять к отчёту за неполный период. "
@@ -288,6 +293,7 @@ def apply_selected(preview: Preview, selections: dict[str, tuple[str, str]]) -> 
             "SELECT assistant_source_id FROM houses WHERE id=?", (report["house_id"],)
         ).fetchone()
         if (before != preview.report_digest or int(report["year"]) != preview.year
+                or str(report["status"] or "") in ("Размещен", "Архив")
                 or not house or house["assistant_source_id"] != preview.house_source_id):
             raise WorkListImportError(
                 "Отчёт изменился после предварительного просмотра. "
@@ -367,5 +373,11 @@ def apply_selected(preview: Preview, selections: dict[str, tuple[str, str]]) -> 
                     ),
                 )
                 added_repair += 1
+        # Any newly imported information invalidates a previously checked
+        # report. Never retain "Проверен" for data not yet reviewed.
+        conn.execute(
+            "UPDATE reports SET status='Черновик',updated_at=CURRENT_TIMESTAMP "
+            "WHERE id=? AND status='Проверен'", (preview.report_id,)
+        )
         conn.commit()
     return ImportResult(added_content, added_repair, skipped)
