@@ -200,6 +200,21 @@ class WorkListTransferTests(unittest.TestCase):
         self.assertEqual(saved["unit"], "раз")
         self.assertEqual(saved["plan_qty"], 4)
 
+    def test_repair_draft_needs_no_source_unit(self):
+        preview = read_preview(self.report_id)
+        result = apply_selected(preview, {
+            "item-unknown-unit": (REPAIR, ""),
+        })
+        self.assertEqual(result.added_repair, 1)
+        repair = db.row(
+            "SELECT name,basis,cost,volume FROM report_repair_items WHERE report_id=?",
+            (self.report_id,),
+        )
+        self.assertEqual(repair["name"], "Учебная работа без единицы")
+        self.assertEqual(repair["basis"], "")
+        self.assertEqual(repair["cost"], 0)
+        self.assertEqual(repair["volume"], "")
+
     def test_invalid_numeric_row_cannot_be_imported(self):
         preview = read_preview(self.report_id)
         with self.assertRaisesRegex(WorkListImportError, "числовые"):
