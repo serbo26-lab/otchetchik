@@ -1267,6 +1267,8 @@ class HousesTab(BaseTab):
 
         dates = {}
         for key, edit, label in (
+            ("management_start", self.start, "Дата начала управления"),
+            ("management_end", self.end, "Дата прекращения управления"),
             ("agreement_date", self.agreement_date, "Дата договора"),
             ("agreement_valid_from", self.agreement_valid_from, "Начало действия договора"),
             ("agreement_valid_to", self.agreement_valid_to, "Окончание действия договора"),
@@ -1338,7 +1340,7 @@ class HousesTab(BaseTab):
                     (
                         self.company.currentData(), self.address.toPlainText(),
                         total, residential, non_residential,
-                        self.start.text(), self.end.text(),
+                        dates["management_start"], dates["management_end"],
                         self.agreement_number.text(), dates["agreement_date"],
                         dates["agreement_valid_from"], dates["agreement_valid_to"],
                         self.status.currentText(), self.notes.toPlainText(),
