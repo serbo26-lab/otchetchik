@@ -985,6 +985,16 @@ class HousesTab(BaseTab):
             "SELECT assistant_source_id,assistant_area_missing "
             "FROM houses WHERE id=?", (self.current_id,),
         ) if self.current_id else None
+        # Assistant's charge_area already represents the total premises area.
+        # Editing optional local breakdown fields must never replace that
+        # authoritative total in the UI while the database remains unchanged.
+        if row and row["assistant_source_id"] and not row["assistant_area_missing"]:
+            self.area.setEnabled(False)
+            self.area.setToolTip(
+                "Итоговая площадь получена из ГИС ЖКХ Ассистента. "
+                "Отдельная разбивка на жилую и нежилую площадь необязательна."
+            )
+            return
         if complete:
             from decimal import Decimal
             amounts = [
@@ -1068,18 +1078,23 @@ class HousesTab(BaseTab):
                 missing_parts.append("жилых помещений")
             if record["assistant_non_residential_missing"]:
                 missing_parts.append("нежилых помещений")
-            if missing_parts:
+            if not record["assistant_area_missing"]:
                 note += (
-                    "\nВ Ассистенте не указана площадь "
-                    + " и ".join(missing_parts)
-                    + ". Площадь для начислений не подменяет этот показатель "
-                      "в отчёте по приказу № 728/пр."
+                    "\nОбщая площадь помещений берётся из итоговой площади "
+                    "к начислению в Ассистенте либо рассчитывается из "
+                    "предусмотренных там составляющих."
                 )
-                if (record["residential_area"] is None
-                        or record["non_residential_area"] is None):
-                    note += " Заполните отсутствующие составляющие здесь или в Ассистенте."
-                else:
-                    note += " Недостающие площади уже дополнены локально."
+                if missing_parts:
+                    note += (
+                        " Разбивка на жилую и нежилую площадь указана не полностью; "
+                        "это не мешает использовать уже известную общую площадь."
+                    )
+            else:
+                note += (
+                    "\nВ Ассистенте отсутствует итоговая площадь помещений "
+                    "и не хватает данных для её расчёта. Укажите общую "
+                    "площадь здесь либо дополните сведения в Ассистенте."
+                )
             self.source_note.setText(note)
         self.source_note.setVisible(source_linked)
         self.delete_button.setEnabled(has_record and not source_linked)
