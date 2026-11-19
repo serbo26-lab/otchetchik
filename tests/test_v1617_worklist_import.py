@@ -235,6 +235,64 @@ class WorkListTransferTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkListImportError, "не связан"):
             read_preview(another)
 
+    def test_partial_report_period_blocks_annual_import(self):
+        db.execute(
+            "UPDATE reports SET period_end=? WHERE id=?",
+            ("2025-11-30", self.report_id),
+        )
+        with self.assertRaisesRegex(WorkListImportError, "неполный период"):
+            read_preview(self.report_id)
+
+    def test_period_change_after_preview_cancels_transfer(self):
+        preview = read_preview(self.report_id)
+        db.execute(
+            "UPDATE reports SET period_end=? WHERE id=?",
+            ("2025-11-30", self.report_id),
+        )
+        with self.assertRaisesRegex(WorkListImportError, "изменился"):
+            apply_selected(preview, {"item-content": (CONTENT, "м²")})
+        self.assertFalse(self._backups())
+
+    def test_partial_source_list_does_not_pretend_to_be_annual(self):
+        with sqlite3.connect(self.source) as conn:
+            conn.execute(
+                "UPDATE work_lists SET end_month=? WHERE id=?",
+                (11, "list-2025"),
+            )
+        with self.assertRaisesRegex(WorkListImportError, "неполный год"):
+            read_preview(self.report_id)
+
+    def test_actual_data_are_not_pretended_performed_and_trigger_warning(self):
+        original_hash = hashlib.sha256(self.source.read_bytes()).digest()
+        preview = read_preview(self.report_id)
+        apply_selected(preview, {"item-content": (CONTENT, "м²")})
+        self.assertEqual(hashlib.sha256(self.source.read_bytes()).digest(), original_hash)
+        warnings = inspect_report(db.load_report_bundle(self.report_id))["warnings"]
+        self.assertTrue(any(
+            "Перечень не подтверждает" in text for text in warnings
+        ))
+
+    def test_existing_manual_row_is_preserved_without_name_duplicate(self):
+        db.execute(
+            "INSERT INTO report_content_items(report_id,name,unit,unit_price,plan_qty,"
+            "plan_cost,actual_qty,actual_cost,is_manual) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (self.report_id, "Учебная работа по содержанию", "м²", 8, 10,
+             80, 10, 80, 1),
+        )
+        preview = read_preview(self.report_id)
+        result = apply_selected(preview, {"item-content": (CONTENT, "м²")})
+        self.assertEqual(result.skipped, 1)
+        self.assertEqual(result.added_content, 0)
+        row = db.row(
+            "SELECT unit_price,plan_qty,actual_qty,is_manual "
+            "FROM report_content_items WHERE report_id=?", (self.report_id,),
+        )
+        self.assertEqual((row["unit_price"], row["plan_qty"], row["actual_qty"]),
+                         (8, 10, 10))
+        self.assertEqual(row["is_manual"], 1)
+        self.assertFalse(self._backups())
+
     def test_dialog_requires_explicit_section_choice(self):
         dialog = AssistantWorkListDialog(self.report_id)
         try:
