@@ -453,11 +453,15 @@ class BaseTab(QWidget):
         self.current_id = selected_id
         return True
 
-    def save(self) -> None:
-        pass
+    def save(self, *_args, refresh_after: bool = True) -> bool | None:
+        # Intentional default hook: tabs without editable form data may
+        # inherit this. Data-editing tabs override it. Keep a uniform
+        # refresh_after interface for _commit_form_before_load().
+        return None
 
     def refresh(self) -> None:
-        pass
+        # Intentional no-op: not every tab has a refreshable data list.
+        return None
 
     def msg(self, text: str) -> None:
         win = self.window()
@@ -1754,7 +1758,9 @@ class WorksTab(BaseTab):
         self.table.scrollToBottom()
         self.filter_rows()
 
-    def save(self):
+    def save(self, *_args, refresh_after: bool = True):
+        # Accept the same optional refresh_after argument as other tabs:
+        # save_before_assistant_sync() invokes this from the Works tab.
         # Navigation and timed backups should not rewrite an untouched
         # directory or block users because of incomplete legacy records.
         if self._form_signature() == getattr(self, "_form_snapshot", None):
@@ -1809,8 +1815,13 @@ class WorksTab(BaseTab):
             else:
                 conn.execute("UPDATE work_items SET is_active=0 WHERE is_active=1")
             conn.commit()
+        # Reconcile generated IDs and the in-memory snapshot even when the
+        # caller requested no refresh. Otherwise newly added rows could be
+        # inserted twice on a subsequent edit/save.
         self.refresh()
         self.msg("Справочник сохранен")
+        # Preserve the existing implicit None success result: callers and
+        # historical UI tests depend on that contract.
 
 
 class TemplatesTab(BaseTab):
@@ -3309,8 +3320,10 @@ class MassPreviewTable(CopyPasteTable):
     def paste_selection(self):
         return
 
-    def delete_selected_rows(self):
-        return
+    def delete_selected_rows(self, confirmed: bool = False) -> bool:
+        # Read-only preview: preserve the base method signature but reject
+        # deletion even when called with confirmed=True.
+        return False
 
     def _menu(self, pos):
         menu = QMenu(self)
