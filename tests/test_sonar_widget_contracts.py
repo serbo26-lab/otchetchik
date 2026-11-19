@@ -72,6 +72,9 @@ class SonarWidgetContractTests(unittest.TestCase):
             "SELECT id FROM work_items WHERE name=?",
             ("Учебная работа без раздела",)
         ))
+        # This test deliberately leaves invalid form data. Clear its synthetic
+        # editor before MainWindow.closeEvent() saves pending changes.
+        directory.refresh()
 
     def test_preview_rejects_delete_even_when_called_as_parent_method(self):
         table = MassPreviewTable(1, 2)
