@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QHBoxLayout, QHeaderView, QLabel, QMessageBox,
     QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
@@ -19,7 +20,15 @@ class AssistantWorkListDialog(QDialog):
     def __init__(self, report_id: int, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Перечень работ из ГИС ЖКХ Ассистента")
-        self.resize(1120, 700)
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            self.resize(980, 660)
+        else:
+            available = screen.availableGeometry()
+            self.resize(
+                min(1120, max(560, available.width() - 60)),
+                min(700, max(380, available.height() - 70)),
+            )
         self.preview = read_preview(report_id)
         self.import_result = None
 
