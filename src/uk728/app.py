@@ -2370,10 +2370,12 @@ class ReportsTab(BaseTab):
         apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template("Содержание", self.content_template_combo))
         add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference("Содержание"))
         add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_blank_report_row("Содержание"))
+        from_assistant = QPushButton("Перенести перечень из Ассистента…")
+        from_assistant.clicked.connect(self.import_assistant_work_list)
         # Keep the complete template title on its own wide row. Actions
         # can wrap below, instead of shrinking the selection field.
         layout.addWidget(action_panel(
-            "Наполнение раздела", apply, add_ref, add_empty, primary=add_ref
+            "Наполнение раздела", apply, add_ref, add_empty, from_assistant, primary=from_assistant
         ))
         self.content_table = CopyPasteTable(0, 9)
         self.content_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование работы/услуги", "Ед. изм.", "Цена единицы", "Кол-во по перечню", "Стоимость по перечню", "Выполнено кол-во", "Стоимость выполнено"])
@@ -2419,10 +2421,12 @@ class ReportsTab(BaseTab):
         apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template("Текущий ремонт", self.repair_template_combo))
         add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference("Текущий ремонт"))
         add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_blank_report_row("Текущий ремонт"))
+        from_assistant_repair = QPushButton("Перенести перечень из Ассистента…")
+        from_assistant_repair.clicked.connect(self.import_assistant_work_list)
         # Keep the complete template title on its own wide row. Actions
         # can wrap below, instead of shrinking the selection field.
         layout.addWidget(action_panel(
-            "Наполнение раздела", apply, add_ref, add_empty, primary=add_ref
+            "Наполнение раздела", apply, add_ref, add_empty, from_assistant_repair, primary=from_assistant_repair
         ))
         self.repair_table = CopyPasteTable(0, 7)
         self.repair_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование работы", "Основание", "Стоимость", "Объем", "Акт/ссылка"])
@@ -2952,6 +2956,25 @@ class ReportsTab(BaseTab):
         if self.management_table.rowCount() > 0:
             self.management_cost.setText(money(total))
         self.schedule_autosave()
+
+    def import_assistant_work_list(self):
+        """Read the linked annual list, preview it, and add only chosen rows."""
+        if not self.current_id:
+            self.msg("Сначала выберите или создайте отчёт.")
+            return
+        try:
+            self.flush_autosave()
+            from .assistant_work_list_ui import AssistantWorkListDialog
+            dialog = AssistantWorkListDialog(int(self.current_id), self)
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Не удалось открыть перечень Ассистента", str(exc)
+            )
+            return
+        if dialog.exec() == QDialog.Accepted and dialog.import_result:
+            if (dialog.import_result.added_content
+                    or dialog.import_result.added_repair):
+                self._load_current()
 
     def add_from_reference(self, category: str):
         if not self.current_id:
