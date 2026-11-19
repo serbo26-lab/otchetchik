@@ -293,6 +293,34 @@ class WorkListTransferTests(unittest.TestCase):
         self.assertEqual(row["is_manual"], 1)
         self.assertFalse(self._backups())
 
+    def test_published_or_archived_reports_are_immutable_to_import(self):
+        for status in ("Размещен", "Архив"):
+            db.execute("UPDATE reports SET status=? WHERE id=?",
+                       (status, self.report_id))
+            with self.assertRaisesRegex(
+                WorkListImportError, "размещённый или архивный"
+            ):
+                read_preview(self.report_id)
+        self.assertFalse(self._backups())
+
+    def test_import_invalidates_previously_verified_status(self):
+        db.execute("UPDATE reports SET status='Проверен' WHERE id=?",
+                   (self.report_id,))
+        preview = read_preview(self.report_id)
+        apply_selected(preview, {"item-content": (CONTENT, "м²")})
+        status = db.row(
+            "SELECT status FROM reports WHERE id=?", (self.report_id,)
+        )["status"]
+        self.assertEqual(status, "Черновик")
+
+    def test_full_year_in_local_date_format_is_accepted(self):
+        db.execute(
+            "UPDATE reports SET period_start=?,period_end=? WHERE id=?",
+            ("01.01.2025", "31.12.2025", self.report_id),
+        )
+        preview = read_preview(self.report_id)
+        self.assertEqual(preview.year, 2025)
+
     def test_dialog_requires_explicit_section_choice(self):
         dialog = AssistantWorkListDialog(self.report_id)
         try:
