@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sqlite3
@@ -43,10 +44,67 @@ def export_dir(company_name: str, year: int | str, house_address: str) -> Path:
     return path
 
 
+def _logical_digest(path: Path) -> bytes:
+    """Compare SQL contents, including committed WAL transactions, not mtimes.
+
+    Restarting or checkpointing SQLite may change DB bytes without changing
+    any report data. A logical signature also works across SQLite backups.
+    """
+    digest = hashlib.sha256()
+    with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro",
+                                 uri=True, timeout=30)) as conn:
+        conn.execute("PRAGMA query_only=ON")
+        conn.execute("BEGIN")  # One consistent WAL snapshot for the checksum.
+        schema = conn.execute(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master "
+            "WHERE name NOT GLOB 'sqlite_autoindex_*' "
+            "ORDER BY type,name"
+        ).fetchall()
+        for item in schema:
+            digest.update(repr(tuple(item)).encode("utf-8"))
+            digest.update(b"\n")
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND (name NOT GLOB 'sqlite_*' OR name='sqlite_sequence') "
+            "ORDER BY name"
+        ).fetchall()
+        for (name,) in tables:
+            escaped = name.replace('"', '""')
+            columns = conn.execute(f'PRAGMA table_info("{escaped}")').fetchall()
+            # Do not treat sqlite_sequence/app_meta rowid churn on reopening as
+            # a data change. Sort by explicit PK or all columns otherwise.
+            ordered = sorted(((int(col[5]), str(col[1])) for col in columns
+                              if col[5]), key=lambda pair: pair[0])
+            keys = [key for _, key in ordered] or [str(col[1]) for col in columns]
+            order_by = ",".join('"' + key.replace('"', '""') + '"' for key in keys)
+            digest.update(name.encode("utf-8"))
+            digest.update(b"\0")
+            query = f'SELECT * FROM "{escaped}"'
+            if order_by:
+                query += f" ORDER BY {order_by}"
+            for row in conn.execute(query):
+                digest.update(repr(tuple(row)).encode("utf-8"))
+                digest.update(b"\n")
+    return digest.digest()
+
+
 def make_backup(reason: str = "auto") -> Path | None:
     src = db_path()
     if not src.exists():
         return None
+    # Manual copies, schema changes, restores and destructive actions always
+    # get their own guard. Routine sync and timer backups are content-aware.
+    if reason in ("auto", "before_assistant_sync"):
+        folder = data_dir() / "backups"
+        candidates = list(folder.glob("reporting_728_*.db"))
+        if candidates:
+            latest = max(candidates, key=lambda p: p.stat().st_mtime_ns)
+            try:
+                if _logical_digest(src) == _logical_digest(latest):
+                    return None
+            except (OSError, sqlite3.DatabaseError):
+                # Never skip a protective backup on a failed comparison.
+                pass
     # SQLite uses WAL: copying only the .db file can omit committed data
     # that is still stored in the -wal journal. The online backup API
     # creates a consistent snapshot, including those committed transactions.

@@ -139,7 +139,11 @@ class BackupRestorationTests(unittest.TestCase):
         self.create_company("Хранение")
         manual = make_backup("manual")
         safety = make_backup("before_restore")
+        # Automatic backups only occur after real changes. Two different
+        # versions are needed to check that retention removes only autos.
+        self.create_company("Версия 1")
         old_auto = make_backup("auto")
+        self.create_company("Версия 2")
         newer_auto = make_backup("auto")
         cleanup_backups(max_files=1)
         self.assertTrue(manual.exists())

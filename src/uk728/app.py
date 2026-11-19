@@ -792,6 +792,9 @@ class CompaniesTab(BaseTab):
         if not self.current_id:
             self.msg("Нажмите «Добавить организацию», затем заполните поля и сохраните.")
             return
+        if (getattr(self, "_loaded_form_id", None) == self.current_id
+                and self._form_snapshot == self._form_signature()):
+            return True
         with connect() as conn:
             source = conn.execute(
                 "SELECT assistant_source_id FROM companies WHERE id=?", (self.current_id,)
@@ -982,6 +985,16 @@ class HousesTab(BaseTab):
             "SELECT assistant_source_id,assistant_area_missing "
             "FROM houses WHERE id=?", (self.current_id,),
         ) if self.current_id else None
+        # Assistant's charge_area already represents the total premises area.
+        # Editing optional local breakdown fields must never replace that
+        # authoritative total in the UI while the database remains unchanged.
+        if row and row["assistant_source_id"] and not row["assistant_area_missing"]:
+            self.area.setEnabled(False)
+            self.area.setToolTip(
+                "Итоговая площадь получена из ГИС ЖКХ Ассистента. "
+                "Отдельная разбивка на жилую и нежилую площадь необязательна."
+            )
+            return
         if complete:
             from decimal import Decimal
             amounts = [
@@ -1037,7 +1050,8 @@ class HousesTab(BaseTab):
         has_record = self.current_id is not None
         record = db.row(
             "SELECT assistant_source_id,assistant_area_missing,"
-            "assistant_residential_missing,assistant_non_residential_missing "
+            "assistant_residential_missing,assistant_non_residential_missing,"
+            "residential_area,non_residential_area "
             "FROM houses WHERE id=?", (self.current_id,),
         ) if has_record else None
         source_linked = bool(record and record["assistant_source_id"])
@@ -1053,6 +1067,35 @@ class HousesTab(BaseTab):
             )
             self.agreement_number.setEnabled(False)
             self.agreement_date.setEnabled(False)
+        if source_linked:
+            note = (
+                "Дом связан с базой ГИС ЖКХ Ассистента. Адрес, даты "
+                "управления и реквизиты договора берутся оттуда; "
+                "статус, примечание и сроки действия договора — локальные."
+            )
+            missing_parts = []
+            if record["assistant_residential_missing"]:
+                missing_parts.append("жилых помещений")
+            if record["assistant_non_residential_missing"]:
+                missing_parts.append("нежилых помещений")
+            if not record["assistant_area_missing"]:
+                note += (
+                    "\nОбщая площадь помещений берётся из итоговой площади "
+                    "к начислению в Ассистенте либо рассчитывается из "
+                    "предусмотренных там составляющих."
+                )
+                if missing_parts:
+                    note += (
+                        " Разбивка на жилую и нежилую площадь указана не полностью; "
+                        "это не мешает использовать уже известную общую площадь."
+                    )
+            else:
+                note += (
+                    "\nВ Ассистенте отсутствует итоговая площадь помещений "
+                    "и не хватает данных для её расчёта. Укажите общую "
+                    "площадь здесь либо дополните сведения в Ассистенте."
+                )
+            self.source_note.setText(note)
         self.source_note.setVisible(source_linked)
         self.delete_button.setEnabled(has_record and not source_linked)
         self.org_sign_button.setEnabled(has_record)
@@ -1168,8 +1211,8 @@ class HousesTab(BaseTab):
         finally:
             self._loading_area = False
         self._recalculate_area()
-        self.start.setText(r["management_start"])
-        self.end.setText(r["management_end"])
+        self.start.setText(format_date(r["management_start"]))
+        self.end.setText(format_date(r["management_end"]))
         self.agreement_number.setText(r["management_agreement_number"])
         self.agreement_date.setText(format_date(r["management_agreement_date"]))
         self.agreement_valid_from.setText(format_date(r["agreement_valid_from"]))
@@ -1222,6 +1265,9 @@ class HousesTab(BaseTab):
         if not self.current_id:
             self.msg("Сначала выберите или добавьте дом, затем заполните поля и сохраните.")
             return
+        if (getattr(self, "_loaded_form_id", None) == self.current_id
+                and self._form_snapshot == self._form_signature()):
+            return True
         for field, label in (
             (self.area, "Общая площадь помещений"),
             (self.residential_area, "Площадь жилых помещений"),
@@ -1236,6 +1282,8 @@ class HousesTab(BaseTab):
 
         dates = {}
         for key, edit, label in (
+            ("management_start", self.start, "Дата начала управления"),
+            ("management_end", self.end, "Дата прекращения управления"),
             ("agreement_date", self.agreement_date, "Дата договора"),
             ("agreement_valid_from", self.agreement_valid_from, "Начало действия договора"),
             ("agreement_valid_to", self.agreement_valid_to, "Окончание действия договора"),
@@ -1307,7 +1355,7 @@ class HousesTab(BaseTab):
                     (
                         self.company.currentData(), self.address.toPlainText(),
                         total, residential, non_residential,
-                        self.start.text(), self.end.text(),
+                        dates["management_start"], dates["management_end"],
                         self.agreement_number.text(), dates["agreement_date"],
                         dates["agreement_valid_from"], dates["agreement_valid_to"],
                         self.status.currentText(), self.notes.toPlainText(),
@@ -3197,11 +3245,8 @@ class ReportsTab(BaseTab):
                 "\n\nПродолжить выгрузку без устранения замечаний?"
             ) != QMessageBox.Yes:
                 return
-        try:
-            make_backup("before_export")
-        except Exception as exc:
-            self.msg(f"Выгрузка отменена: резервная копия не создана ({exc})")
-            return
+        # Export reads the saved report but does not modify SQLite. A new
+        # database copy for every Word/Excel/PDF export is unnecessary.
         paths = []
         try:
             for fmt, export_func in (
@@ -3759,8 +3804,8 @@ class BackupsTab(BaseTab):
             if not win.save_before_assistant_sync():
                 return
         try:
-            # Preserve the complete reporting database, NOT the Assistant DB.
-            make_backup("before_assistant_sync")
+            # synchronize() compares source data and makes a safety copy
+            # only when an actual import is necessary.
             result = assistant_source.synchronize(path, save_path=remember)
         except Exception as exc:
             QMessageBox.warning(
@@ -3776,10 +3821,18 @@ class BackupsTab(BaseTab):
             f"подписантов — {result.signatories}. "
             f"Новых: УО — {result.new_organizations}, домов — {result.new_houses}."
         )
+        if result.unchanged:
+            message += " Изменений в исходных сведениях нет."
         if result.missing_area:
             message += (
-                f" У {result.missing_area} домов отсутствуют обе составляющие "
-                "площади. В Отчётчике их можно заполнить локально."
+                f" У {result.missing_area} домов отсутствует общая площадь "
+                "помещений: нет площади к начислению и недостаточно "
+                "составляющих для расчёта. Её можно указать локально."
+            )
+        if result.missing_management_start:
+            message += (
+                f" У {result.missing_management_start} домов в источнике "
+                "не указана дата начала управления."
             )
         self.update_assistant_status(message)
         self.msg("Данные Ассистента прочитаны. Изменена только локальная база Отчётчика.")
@@ -4269,7 +4322,10 @@ class MainWindow(QMainWindow):
                 if tab.save() is False:
                     raise ValueError("Не все обязательные поля заполнены.")
             path = make_backup("auto")
-            self.statusBar().showMessage(f"Резервная копия создана: {path.name if path else ''}", 5000)
+            if path is not None:
+                self.statusBar().showMessage(f"Резервная копия создана: {path.name}", 5000)
+            else:
+                self.statusBar().showMessage("Данные не изменились — новая копия не требуется", 5000)
         except Exception as exc:
             self.set_save_status("error")
             self.statusBar().showMessage(f"Не удалось создать резервную копию: {exc}", 8000)
@@ -4320,7 +4376,6 @@ def main():
     try:
         source = assistant_source.configured_source_path()
         if source.is_file():
-            make_backup("before_assistant_sync")
             assistant_source.synchronize()
         else:
             assistant_warning = f"База Ассистента не найдена: {source}"

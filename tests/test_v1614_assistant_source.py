@@ -42,7 +42,7 @@ def source_fixture(path: Path, *, areas=True):
             "INSERT INTO houses VALUES(?,?,?,?,?,?,?,?)",
             ("house-001", "org-001", "г. Примерск, ул. Тестовая, д. 7",
              "1000,50" if areas else None, "200,25" if areas else None,
-             "9999,99", "2024-01-01", None),
+             "1200,75" if areas else None, "2024-01-01", None),
         )
         conn.commit()
 
@@ -101,7 +101,7 @@ class AssistantReadOnlySourceTests(unittest.TestCase):
             conn.execute("UPDATE management_organizations SET name='УК Новое название'")
             conn.execute(
                 "UPDATE houses SET address='г. Примерск, д. 9', residential_area='1400',"
-                "non_residential_area='100' WHERE id='house-001'"
+                "non_residential_area='100',charge_area='1500' WHERE id='house-001'"
             )
             conn.commit()
         summary = assistant_source.synchronize()
@@ -125,13 +125,33 @@ class AssistantReadOnlySourceTests(unittest.TestCase):
         self.assertEqual(self.local_count("houses"), 1)
         self.assertIsNotNone(db.row("SELECT id FROM reports WHERE id=?", (report_id,)))
 
-    def test_missing_area_is_not_replaced_by_charge_area(self):
+    def test_charge_area_imports_total_even_without_breakdown(self):
+        # Source fields are synthetic; no identifiable data is involved.
         with sqlite3.connect(self.source) as conn:
             conn.execute(
                 "UPDATE houses SET residential_area=NULL,non_residential_area=NULL,"
-                "charge_area='9999,99'"
+                "charge_area='1400,75'"
             )
-            conn.commit()
+        result = assistant_source.synchronize(self.source)
+        house = db.row("SELECT * FROM houses WHERE assistant_source_id='house-001'")
+        self.assertEqual(result.missing_area, 0)
+        self.assertEqual(house["total_area"], 1400.75)
+        self.assertEqual(house["assistant_area_missing"], 0)
+        self.assertIsNone(house["residential_area"])
+        self.assertIsNone(house["non_residential_area"])
+        # The total is authoritative and updates on the next source refresh.
+        with sqlite3.connect(self.source) as conn:
+            conn.execute("UPDATE houses SET charge_area='1450' ")
+        assistant_source.synchronize(self.source)
+        house = db.row("SELECT * FROM houses WHERE id=?", (house["id"],))
+        self.assertEqual(house["total_area"], 1450)
+
+    def test_missing_all_source_areas_keeps_existing_local_total(self):
+        with sqlite3.connect(self.source) as conn:
+            conn.execute(
+                "UPDATE houses SET residential_area=NULL,non_residential_area=NULL,"
+                "charge_area=NULL"
+            )
         result = assistant_source.synchronize(self.source)
         house = db.row("SELECT * FROM houses WHERE assistant_source_id='house-001'")
         self.assertEqual(result.missing_area, 1)

@@ -13,15 +13,18 @@ from __future__ import annotations
 from contextlib import closing
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+import hashlib
 import json
 import os
 from pathlib import Path
 import sqlite3
 
 from . import db
-from .paths import db_path
+from .paths import db_path, make_backup
+from .utils import iso_date, parse_date
 
 _CONFIG_KEY = "assistant_database_path"
+_DIGEST_KEY = "assistant_snapshot_digest_v2"
 PERSON_FIELDS = (
     "full_name", "name_genitive", "position", "position_genitive", "role",
     "premises", "gender", "basis_kind", "basis_number", "basis_date",
@@ -46,6 +49,8 @@ class SyncSummary:
     missing_area: int
     path: Path
     signatories: int = 0
+    unchanged: bool = False
+    missing_management_start: int = 0
 
 
 class AssistantSourceError(ValueError):
@@ -105,6 +110,23 @@ def _decimal(value: object, *, house_id: str) -> float | None:
             f"В базе Ассистента у дома {house_id} некорректная площадь: {value!r}."
         )
     return float(number)
+
+
+def _source_date(value: object, *, house_id: str, field: str) -> str:
+    """Keep sourced dates in the Reporter's ISO date format.
+
+    Assistant can store exact dates as DD.MM.YYYY or YYYY-MM-DD. Preserve
+    blanks, and reject invalid input rather than silently erasing dates.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if parse_date(raw) is None:
+        raise AssistantSourceError(
+            f"В базе Ассистента у дома {house_id} некорректное поле "
+            f"«{field}»: требуется ДД.ММ.ГГГГ или ГГГГ-ММ-ДД."
+        )
+    return iso_date(raw)
 
 
 def read_source(source: Path | str) -> AssistantSnapshot:
@@ -176,15 +198,23 @@ def read_source(source: Path | str) -> AssistantSnapshot:
                 "У дома в базе Ассистента отсутствует корректный ID или связь с УО."
             )
         house_ids.add(key)
-        # The 728/pr form requires residential+non-residential premises area.
-        # charge_area is a tariff denominator and must NOT substitute for it.
+        # GIS JKH Assistant maintains charge_area as the premises area used
+        # for billing, excluding common property. The separate residential
+        # and non-residential fields are optional breakdowns, not prerequisites.
+        # Preserve known source totals without inventing the missing parts.
         a = _decimal(house.get("residential_area"), house_id=key)
         b = _decimal(house.get("non_residential_area"), house_id=key)
-        if a is None or b is None:
-            area = None
-            missing_area += 1
-        else:
+        charge = _decimal(house.get("charge_area"), house_id=key)
+        if charge is not None:
+            area = charge
+        elif a is not None and b is not None:
             area = float(Decimal(str(a)) + Decimal(str(b)))
+        elif a is not None:
+            area = a
+        else:
+            area = None
+        if area is None:
+            missing_area += 1
         houses.append({
             "id": key,
             "organization_id": owner,
@@ -192,10 +222,19 @@ def read_source(source: Path | str) -> AssistantSnapshot:
             "total_area": area,
             "residential_area": a,
             "non_residential_area": b,
-            "management_start": str(house.get("management_start_date") or ""),
-            "management_end": str(house.get("management_end_date") or ""),
+            "management_start": _source_date(
+                house.get("management_start_date"), house_id=key,
+                field="Дата начала управления",
+            ),
+            "management_end": _source_date(
+                house.get("management_end_date"), house_id=key,
+                field="Дата окончания управления",
+            ),
             "management_agreement_number": str(house.get("management_agreement_number") or ""),
-            "management_agreement_date": str(house.get("management_agreement_date") or ""),
+            "management_agreement_date": _source_date(
+                house.get("management_agreement_date"), house_id=key,
+                field="Дата заключения договора",
+            ),
         })
     people: list[dict] = []
     seen: set[str] = set()
@@ -221,6 +260,27 @@ def read_source(source: Path | str) -> AssistantSnapshot:
     return AssistantSnapshot(organizations, tuple(houses), missing_area, tuple(people))
 
 
+def _snapshot_digest(snapshot: AssistantSnapshot) -> str:
+    """Hash imported fields, not unrelated Assistant data or SQLite file bytes.
+
+    SQLite WAL and ordinary Assistant writes can change file timestamps without
+    changing any field used by the Reporter. A versioned digest allows future
+    importer changes to invalidate the no-op fast path.
+    """
+    payload = {
+        "schema": 2,
+        "organizations": [
+            (str(org["id"]), str(org["name"]), str(org["ogrn"] or ""))
+            for org in snapshot.organizations
+        ],
+        "houses": snapshot.houses,
+        "people": snapshot.people,
+    }
+    data = json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
 def synchronize(source: Path | str | None = None, *, save_path: bool = False) -> SyncSummary:
     """Read source; atomically upsert only into reporting_728.db.
 
@@ -230,6 +290,21 @@ def synchronize(source: Path | str | None = None, *, save_path: bool = False) ->
     path = Path(source) if source is not None else configured_source_path()
     snapshot = read_source(path)
     path = path.expanduser().absolute()
+    digest = _snapshot_digest(snapshot)
+    old = db.row("SELECT value FROM app_meta WHERE key=?", (_DIGEST_KEY,))
+    same_source = not save_path or configured_source_path().resolve() == path.resolve()
+    missing_start = sum(not h["management_start"].strip() for h in snapshot.houses)
+    if old is not None and old["value"] == digest and same_source:
+        return SyncSummary(
+            len(snapshot.organizations), len(snapshot.houses), 0, 0,
+            snapshot.missing_area, path, len(snapshot.people),
+            unchanged=True, missing_management_start=missing_start,
+        )
+
+    # Only a changed import needs a pre-change safety snapshot. It protects the
+    # Reporter DB, never copies the Assistant DB, and reuses an identical
+    # already existing snapshot instead of producing duplicates.
+    make_backup("before_assistant_sync")
     new_companies = 0
     new_houses = 0
     with db.connect() as conn:
@@ -317,9 +392,9 @@ def synchronize(source: Path | str | None = None, *, save_path: bool = False) ->
                         house["management_agreement_date"], hid,
                     ),
                 )
-                # If one source component is absent and was completed locally,
-                # recalculate after updating the other source component. Never
-                # leave the previous aggregate in reports when the input changes.
+                # When the source has no usable total, a complete locally
+                # supplied breakdown can still determine the report area.
+                # Never replace an available source charge_area with it.
                 if house["total_area"] is None:
                     conn.execute(
                         "UPDATE houses SET total_area=residential_area+non_residential_area "
@@ -366,9 +441,14 @@ def synchronize(source: Path | str | None = None, *, save_path: bool = False) ->
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (_CONFIG_KEY, str(path)),
             )
+        conn.execute(
+            "INSERT INTO app_meta(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (_DIGEST_KEY, digest),
+        )
         conn.commit()
     return SyncSummary(
         len(snapshot.organizations), len(snapshot.houses),
         new_companies, new_houses, snapshot.missing_area, path,
-        len(snapshot.people),
+        len(snapshot.people), missing_management_start=missing_start,
     )
