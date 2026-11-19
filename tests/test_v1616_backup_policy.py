@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QApplication
 from src.uk728 import assistant_source, db
 from src.uk728.app import MainWindow
 from src.uk728.paths import make_backup
+from src.uk728.report_review import inspect_report
 
 
 def source_fixture(path: Path, *, no_areas: bool = False, no_start: bool = False) -> None:
@@ -199,6 +200,25 @@ class BackupPolicyV1616Tests(unittest.TestCase):
             "SELECT management_start FROM houses WHERE assistant_source_id='house-example'"
         )["management_start"]
         self.assertEqual(current, original)
+
+    def test_report_review_explains_incomplete_area_even_with_old_total(self):
+        # A previously entered total does not prove both source area parts.
+        result = inspect_report({
+            "report": {"id": 1, "year": 2026},
+            "company": {"name": "Тест"},
+            "house": {
+                "address": "Учебный объект",
+                "assistant_source_id": "synthetic-house",
+                "assistant_area_missing": 1,
+                "residential_area": None,
+                "non_residential_area": None,
+                "total_area": 1200,
+            },
+        })
+        self.assertTrue(any(
+            "не получены все составляющие площади" in message
+            for message in result["warnings"]
+        ))
 
     def test_ui_timer_does_not_write_untouched_card_or_duplicate_backup(self):
         assistant_source.synchronize(self.source)
