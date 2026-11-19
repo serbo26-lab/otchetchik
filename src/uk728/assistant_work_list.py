@@ -241,9 +241,9 @@ def apply_selected(preview: Preview, selections: dict[str, tuple[str, str]]) -> 
             raise WorkListImportError(
                 "В выбранной строке перечня ошибочные числовые показатели."
             )
-        if not str(unit or "").strip():
+        if section == CONTENT and not str(unit or "").strip():
             raise WorkListImportError(
-                "Укажите единицу измерения для каждой выбранной работы."
+                "Укажите единицу измерения для каждой выбранной работы содержания."
             )
         requested.append((candidate, section, str(unit).strip()))
     if not requested:
