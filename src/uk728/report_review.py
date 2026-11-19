@@ -44,14 +44,9 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
         errors.append("Не указан адрес многоквартирного дома.")
     if _number(house.get("total_area")) <= 0:
         warnings.append("Не заполнена общая площадь жилых и нежилых помещений МКД.")
-    if (house.get("assistant_source_id") and house.get("assistant_area_missing")
-            and (house.get("residential_area") is None
-                 or house.get("non_residential_area") is None)):
-        warnings.append(
-            "Из Ассистента не получены все составляющие площади помещений. "
-            "Уточните жилую и нежилую площади отдельно: площадь для "
-            "начислений не является их автоматической заменой."
-        )
+    # Assistant's charge_area is the total premises area without common
+    # property. Missing residential/non-residential breakdown is not an error
+    # when the required aggregate has been populated from that source.
     for field, description in (
         ("ogrn_inn", "ОГРН / ИНН управляющей организации"),
         ("reception_address", "адрес приёма населения по вопросам отчёта"),
