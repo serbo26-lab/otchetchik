@@ -140,6 +140,12 @@ def _source_snapshot(path: Path, house_source_id: str, year: int):
                     "Автоматический выбор небезопасен."
                 )
             work_list = dict(lists[0])
+            if str(work_list["status"] or "").strip() != "placed":
+                raise WorkListImportError(
+                    "Выбранный перечень не имеет статуса «Размещён» в "
+                    "ГИС ЖКХ Ассистенте. Черновики и отменённые перечни "
+                    "не используются для автоматического заполнения отчёта."
+                )
             if (
                 work_list["start_year"] != year
                 or work_list["end_year"] != year
