@@ -61,7 +61,14 @@ class ReportLayoutV169Tests(unittest.TestCase):
             panels = [item for item in screen.findChildren(ActionPanel)
                       if item.heading.text() == "Наполнение раздела"]
             self.assertEqual(len(panels), 1, index)
-            self.assertEqual(len(panels[0].findChildren(QPushButton)), 3)
+            buttons = panels[0].findChildren(QPushButton)
+            self.assertEqual(len(buttons), 4 if index in (1, 2) else 3)
+            if index in (1, 2):
+                self.assertEqual(
+                    len([button for button in buttons
+                         if "Перенести перечень из Ассистента" in button.text()]),
+                    1,
+                )
 
     def test_blank_row_receives_keyboard_focus_and_context_header(self):
         table = self.page.content_table
