@@ -325,14 +325,17 @@ class WorkListTransferTests(unittest.TestCase):
         dialog = AssistantWorkListDialog(self.report_id)
         try:
             self.assertEqual(dialog.choices[0].currentData(), SKIP)
+            self.assertFalse(dialog.apply_button.isEnabled())
             self.assertFalse(dialog.choices[3].isEnabled())
             dialog._set_all(CONTENT)
+            self.assertTrue(dialog.apply_button.isEnabled())
             self.assertEqual(dialog.choices[0].currentData(), CONTENT)
             self.assertEqual(dialog.choices[1].currentData(), CONTENT)
             self.assertEqual(dialog.choices[2].currentData(), SKIP)
             self.assertEqual(dialog.choices[3].currentData(), SKIP)
             dialog._set_all(SKIP)
             self.assertEqual(dialog.choices[0].currentData(), SKIP)
+            self.assertFalse(dialog.apply_button.isEnabled())
         finally:
             dialog.close()
             dialog.deleteLater()
