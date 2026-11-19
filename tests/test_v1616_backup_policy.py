@@ -42,7 +42,8 @@ def source_fixture(path: Path, *, no_areas: bool = False, no_start: bool = False
             ("house-example", "uo-example", "г. Тестовый, дом 1",
              None if no_areas else "1000,5",
              None if no_areas else "200,25",
-             "123456", None if no_start else "2021-07-01", None),
+             "1200,75" if not no_areas else None,
+             None if no_start else "2021-07-01", None),
         )
         conn.commit()
 
@@ -111,8 +112,9 @@ class BackupPolicyV1616Tests(unittest.TestCase):
         backups_before = len(self.backups("before_assistant_sync"))
         with sqlite3.connect(self.source) as conn:
             conn.execute(
-                "UPDATE houses SET management_start_date=?,residential_area=? "
-                "WHERE id='house-example'", ("2022-04-01", "1100"),
+                "UPDATE houses SET management_start_date=?,residential_area=?,"
+                "charge_area=? WHERE id='house-example'",
+                ("2022-04-01", "1100", "1300,25"),
             )
         result = assistant_source.synchronize(self.source)
         self.assertFalse(result.unchanged)
@@ -127,7 +129,7 @@ class BackupPolicyV1616Tests(unittest.TestCase):
         with sqlite3.connect(self.source) as conn:
             conn.execute(
                 "UPDATE houses SET residential_area=NULL,non_residential_area=NULL,"
-                "management_start_date=NULL WHERE id='house-example'"
+                "charge_area=NULL,management_start_date=NULL WHERE id='house-example'"
             )
         result = assistant_source.synchronize(self.source)
         self.assertEqual(result.missing_area, 1)
@@ -164,7 +166,7 @@ class BackupPolicyV1616Tests(unittest.TestCase):
             window.context_timer.stop()
             window.close()
 
-    def test_missing_source_area_is_explained_in_house_card(self):
+    def test_charge_only_source_area_is_shown_without_required_breakdown(self):
         with sqlite3.connect(self.source) as conn:
             conn.execute(
                 "UPDATE houses SET residential_area=NULL,non_residential_area=NULL "
@@ -174,11 +176,23 @@ class BackupPolicyV1616Tests(unittest.TestCase):
         window = MainWindow()
         try:
             window.navigate(1)
-            message = window.houses_tab.source_note.text()
-            self.assertIn("не указана площадь", message)
-            self.assertIn("Площадь для начислений не подменяет", message)
-            self.assertEqual(window.houses_tab.residential_area.text(), "")
-            self.assertEqual(window.houses_tab.non_residential_area.text(), "")
+            tab = window.houses_tab
+            message = tab.source_note.text()
+            self.assertIn("площади к начислению", message)
+            self.assertIn("указана не полностью", message)
+            self.assertEqual(tab.residential_area.text(), "")
+            self.assertEqual(tab.non_residential_area.text(), "")
+            self.assertAlmostEqual(float(tab.area.text()), 1200.75)
+            self.assertFalse(tab.area.isEnabled())
+            tab.residential_area.setText("1000")
+            tab.non_residential_area.setText("250")
+            self.assertAlmostEqual(float(tab.area.text()), 1200.75)
+            tab.save(refresh_after=False)
+            self.assertAlmostEqual(
+                db.row("SELECT total_area FROM houses WHERE assistant_source_id='house-example'")
+                  ["total_area"],
+                1200.75,
+            )
         finally:
             window.timer.stop()
             window.context_timer.stop()
@@ -201,24 +215,39 @@ class BackupPolicyV1616Tests(unittest.TestCase):
         )["management_start"]
         self.assertEqual(current, original)
 
-    def test_report_review_explains_incomplete_area_even_with_old_total(self):
-        # A previously entered total does not prove both source area parts.
+    def test_review_accepts_charge_total_without_optional_breakdown(self):
         result = inspect_report({
             "report": {"id": 1, "year": 2026},
-            "company": {"name": "Тест"},
+            "company": {"name": "УК Тест"},
             "house": {
                 "address": "Учебный объект",
                 "assistant_source_id": "synthetic-house",
-                "assistant_area_missing": 1,
+                "assistant_area_missing": 0,
                 "residential_area": None,
                 "non_residential_area": None,
-                "total_area": 1200,
+                "total_area": 1200.75,
             },
         })
-        self.assertTrue(any(
-            "не получены все составляющие площади" in message
-            for message in result["warnings"]
+        self.assertFalse(any(
+            "площадь" in message.lower() for message in result["warnings"]
         ))
+
+    def test_residential_only_fallback_without_charge_total(self):
+        with sqlite3.connect(self.source) as conn:
+            conn.execute(
+                "UPDATE houses SET residential_area='700',"
+                "non_residential_area=NULL,charge_area=NULL "
+                "WHERE id='house-example'"
+            )
+        result = assistant_source.synchronize(self.source)
+        self.assertEqual(result.missing_area, 0)
+        house = db.row(
+            "SELECT * FROM houses WHERE assistant_source_id='house-example'"
+        )
+        self.assertEqual(house["total_area"], 700)
+        self.assertEqual(house["residential_area"], 700)
+        self.assertIsNone(house["non_residential_area"])
+
 
     def test_ui_timer_does_not_write_untouched_card_or_duplicate_backup(self):
         assistant_source.synchronize(self.source)
