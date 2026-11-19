@@ -76,9 +76,14 @@ def _parse_amount(raw: object, label: str) -> Decimal:
 
 
 def _report_digest(conn: sqlite3.Connection, report_id: int) -> tuple[str, sqlite3.Row]:
-    row = conn.execute("SELECT id,house_id,year FROM reports WHERE id=?", (report_id,)).fetchone()
+    row = conn.execute(
+        "SELECT id,house_id,year,period_start,period_end,show_period_note "
+        "FROM reports WHERE id=?", (report_id,)
+    ).fetchone()
     if row is None:
         raise WorkListImportError("Выбранный отчёт больше не существует.")
+    # Report dates are part of the preview identity: changing the covered
+    # period must invalidate the import, even if row contents are unchanged.
     payload = {"report": dict(row)}
     for table in ("report_content_items", "report_repair_items"):
         payload[table] = [
@@ -108,7 +113,7 @@ def _source_snapshot(path: Path, house_source_id: str, year: int):
             conn.execute("BEGIN")
             for table, required in (
                 ("work_lists", {"id", "house_id", "base_year", "start_year",
-                                "start_month", "end_year", "end_month"}),
+                                "start_month", "end_year", "end_month", "status"}),
                 ("work_list_items", {"id", "work_list_id", "position",
                                      "work_name", "work_code", "price", "volume",
                                      "quantity", "cost", "unit_name"}),
@@ -135,6 +140,16 @@ def _source_snapshot(path: Path, house_source_id: str, year: int):
                     "Автоматический выбор небезопасен."
                 )
             work_list = dict(lists[0])
+            if (
+                work_list["start_year"] != year
+                or work_list["end_year"] != year
+                or work_list["start_month"] != 1
+                or work_list["end_month"] != 12
+            ):
+                raise WorkListImportError(
+                    "Перечень Ассистента охватывает неполный год. "
+                    "Нельзя автоматически переносить его в годовой отчёт."
+                )
             records = [
                 dict(x) for x in conn.execute(
                     "SELECT id,work_code,work_name,unit_name,price,volume,"
@@ -196,6 +211,15 @@ def read_preview(report_id: int) -> Preview:
         if not linked_id:
             raise WorkListImportError(
                 "Дом не связан с ГИС ЖКХ Ассистентом. Выберите связанный дом."
+            )
+        year = int(report["year"])
+        if (
+            str(report["period_start"] or "").strip() != f"{year}-01-01"
+            or str(report["period_end"] or "").strip() != f"{year}-12-31"
+        ):
+            raise WorkListImportError(
+                "Годовой перечень нельзя применять к отчёту за неполный период. "
+                "Выберите отчёт за полный календарный год."
             )
         existing = set()
         for table in ("report_content_items", "report_repair_items"):
