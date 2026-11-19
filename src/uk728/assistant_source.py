@@ -21,6 +21,7 @@ import sqlite3
 
 from . import db
 from .paths import db_path, make_backup
+from .utils import iso_date, parse_date
 
 _CONFIG_KEY = "assistant_database_path"
 _DIGEST_KEY = "assistant_snapshot_digest_v1"
@@ -111,6 +112,23 @@ def _decimal(value: object, *, house_id: str) -> float | None:
     return float(number)
 
 
+def _source_date(value: object, *, house_id: str, field: str) -> str:
+    """Keep sourced dates in the Reporter's ISO date format.
+
+    Assistant can store exact dates as DD.MM.YYYY or YYYY-MM-DD. Preserve
+    blanks, and reject invalid input rather than silently erasing dates.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if parse_date(raw) is None:
+        raise AssistantSourceError(
+            f"В базе Ассистента у дома {house_id} некорректное поле "
+            f"«{field}»: требуется ДД.ММ.ГГГГ или ГГГГ-ММ-ДД."
+        )
+    return iso_date(raw)
+
+
 def read_source(source: Path | str) -> AssistantSnapshot:
     """All source queries complete before any local data is modified."""
     path = Path(source).expanduser().absolute()
@@ -196,10 +214,19 @@ def read_source(source: Path | str) -> AssistantSnapshot:
             "total_area": area,
             "residential_area": a,
             "non_residential_area": b,
-            "management_start": str(house.get("management_start_date") or ""),
-            "management_end": str(house.get("management_end_date") or ""),
+            "management_start": _source_date(
+                house.get("management_start_date"), house_id=key,
+                field="Дата начала управления",
+            ),
+            "management_end": _source_date(
+                house.get("management_end_date"), house_id=key,
+                field="Дата окончания управления",
+            ),
             "management_agreement_number": str(house.get("management_agreement_number") or ""),
-            "management_agreement_date": str(house.get("management_agreement_date") or ""),
+            "management_agreement_date": _source_date(
+                house.get("management_agreement_date"), house_id=key,
+                field="Дата заключения договора",
+            ),
         })
     people: list[dict] = []
     seen: set[str] = set()
