@@ -3825,8 +3825,9 @@ class BackupsTab(BaseTab):
             message += " Изменений в исходных сведениях нет."
         if result.missing_area:
             message += (
-                f" У {result.missing_area} домов отсутствует хотя бы одна "
-                "составляющая площади. Её можно заполнить локально."
+                f" У {result.missing_area} домов отсутствует общая площадь "
+                "помещений: нет площади к начислению и недостаточно "
+                "составляющих для расчёта. Её можно указать локально."
             )
         if result.missing_management_start:
             message += (
