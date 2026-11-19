@@ -335,6 +335,8 @@ class WorkListTransferTests(unittest.TestCase):
             self.assertEqual(dialog.choices[0].currentData(), SKIP)
         finally:
             dialog.close()
+            dialog.deleteLater()
+            self.application.processEvents()
 
 
 if __name__ == "__main__":
