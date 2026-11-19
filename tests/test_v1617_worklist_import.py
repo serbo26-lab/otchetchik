@@ -253,6 +253,17 @@ class WorkListTransferTests(unittest.TestCase):
             apply_selected(preview, {"item-content": (CONTENT, "м²")})
         self.assertFalse(self._backups())
 
+    def test_unplaced_and_cancelled_lists_do_not_feed_official_report(self):
+        for status in ("local", "gis_draft", "cancelled"):
+            with sqlite3.connect(self.source) as conn:
+                conn.execute(
+                    "UPDATE work_lists SET status=? WHERE id='list-2025'",
+                    (status,),
+                )
+            with self.assertRaisesRegex(WorkListImportError, "Размещён"):
+                read_preview(self.report_id)
+        self.assertFalse(self._backups())
+
     def test_partial_source_list_does_not_pretend_to_be_annual(self):
         with sqlite3.connect(self.source) as conn:
             conn.execute(
