@@ -108,12 +108,28 @@ class AssistantWorkListDialog(QDialog):
         cancel = QPushButton("Отмена")
         cancel.clicked.connect(self.reject)
         controls.addWidget(cancel)
-        apply_button = QPushButton("Добавить выбранные")
-        apply_button.clicked.connect(self._apply)
-        controls.addWidget(apply_button)
+        self.apply_button = QPushButton("Добавить выбранные")
+        self.apply_button.clicked.connect(self._apply)
+        controls.addWidget(self.apply_button)
         root.addLayout(controls)
+        for choice in self.choices:
+            choice.currentIndexChanged.connect(self._update_apply_button)
+        self._update_apply_button()
+
+    def _update_apply_button(self, *_args) -> None:
+        self.apply_button.setEnabled(
+            any(choice.isEnabled() and choice.currentData() != SKIP
+                for choice in self.choices)
+        )
 
     def _select_all_content(self) -> None:
+        if QMessageBox.question(
+            self, "Массовое назначение раздела",
+            "Назначить все заполненные позиции разделу «Содержание»? "
+            "В перечне могут быть работы текущего ремонта. "
+            "Проверьте каждую строку перед подтверждением переноса."
+        ) != QMessageBox.StandardButton.Yes:
+            return
         self._set_all(CONTENT)
 
     def _clear_selection(self) -> None:
