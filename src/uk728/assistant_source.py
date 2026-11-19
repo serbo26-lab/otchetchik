@@ -24,7 +24,7 @@ from .paths import db_path, make_backup
 from .utils import iso_date, parse_date
 
 _CONFIG_KEY = "assistant_database_path"
-_DIGEST_KEY = "assistant_snapshot_digest_v1"
+_DIGEST_KEY = "assistant_snapshot_digest_v2"
 PERSON_FIELDS = (
     "full_name", "name_genitive", "position", "position_genitive", "role",
     "premises", "gender", "basis_kind", "basis_number", "basis_date",
@@ -198,15 +198,23 @@ def read_source(source: Path | str) -> AssistantSnapshot:
                 "У дома в базе Ассистента отсутствует корректный ID или связь с УО."
             )
         house_ids.add(key)
-        # The 728/pr form requires residential+non-residential premises area.
-        # charge_area is a tariff denominator and must NOT substitute for it.
+        # GIS JKH Assistant maintains charge_area as the premises area used
+        # for billing, excluding common property. The separate residential
+        # and non-residential fields are optional breakdowns, not prerequisites.
+        # Preserve known source totals without inventing the missing parts.
         a = _decimal(house.get("residential_area"), house_id=key)
         b = _decimal(house.get("non_residential_area"), house_id=key)
-        if a is None or b is None:
-            area = None
-            missing_area += 1
-        else:
+        charge = _decimal(house.get("charge_area"), house_id=key)
+        if charge is not None:
+            area = charge
+        elif a is not None and b is not None:
             area = float(Decimal(str(a)) + Decimal(str(b)))
+        elif a is not None:
+            area = a
+        else:
+            area = None
+        if area is None:
+            missing_area += 1
         houses.append({
             "id": key,
             "organization_id": owner,
@@ -260,7 +268,7 @@ def _snapshot_digest(snapshot: AssistantSnapshot) -> str:
     importer changes to invalidate the no-op fast path.
     """
     payload = {
-        "schema": 1,
+        "schema": 2,
         "organizations": [
             (str(org["id"]), str(org["name"]), str(org["ogrn"] or ""))
             for org in snapshot.organizations
@@ -384,9 +392,9 @@ def synchronize(source: Path | str | None = None, *, save_path: bool = False) ->
                         house["management_agreement_date"], hid,
                     ),
                 )
-                # If one source component is absent and was completed locally,
-                # recalculate after updating the other source component. Never
-                # leave the previous aggregate in reports when the input changes.
+                # When the source has no usable total, a complete locally
+                # supplied breakdown can still determine the report area.
+                # Never replace an available source charge_area with it.
                 if house["total_area"] is None:
                     conn.execute(
                         "UPDATE houses SET total_area=residential_area+non_residential_area "
