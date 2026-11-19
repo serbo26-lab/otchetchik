@@ -98,7 +98,7 @@ class AssistantWorkListDialog(QDialog):
         summary.setWordWrap(True)
         root.addWidget(summary)
         controls = QHBoxLayout()
-        self.select_content = QPushButton("Все доступные — в содержание")
+        self.select_content = QPushButton("Все заполненные — в содержание")
         self.select_content.clicked.connect(lambda: self._set_all(CONTENT))
         controls.addWidget(self.select_content)
         self.reset = QPushButton("Снять выбор")
@@ -114,11 +114,16 @@ class AssistantWorkListDialog(QDialog):
         root.addLayout(controls)
 
     def _set_all(self, section: str) -> None:
-        for choice in self.choices:
-            if choice.isEnabled():
-                idx = choice.findData(section)
-                if idx >= 0:
-                    choice.setCurrentIndex(idx)
+        for row, choice in enumerate(self.choices):
+            if not choice.isEnabled():
+                continue
+            # Bulk selection must not stall on rows whose unit is missing.
+            # These rows remain available for explicit unit entry and selection.
+            if section == CONTENT and not self.table.item(row, 2).text().strip():
+                continue
+            idx = choice.findData(section)
+            if idx >= 0:
+                choice.setCurrentIndex(idx)
 
     def _apply(self) -> None:
         selections = {
