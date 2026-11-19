@@ -108,6 +108,23 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
                     "стоимость выполненной работы либо удалите строку."
                 )
 
+    # An annual work-list is a plan, not evidence that the services were
+    # actually performed. Imported zeroes are unknown until the user checks
+    # and completes the performed quantity/cost columns.
+    unconfirmed_work_list_rows = sum(
+        1 for item in (bundle.get("content") or [])
+        if str(item.get("source") or "").startswith("assistant-work-list:")
+        and _number(item.get("actual_qty")) == 0
+        and _number(item.get("actual_cost")) == 0
+    )
+    if unconfirmed_work_list_rows:
+        warnings.append(
+            f"В разделе 1 {unconfirmed_work_list_rows} строк(и) из перечня "
+            "Ассистента с нулевым выполнением. Перечень не подтверждает "
+            "фактическое выполнение: проверьте и заполните графы «Выполнено» "
+            "или подтвердите обоснованность нулевых значений перед выгрузкой."
+        )
+
     management_total = _number(report.get("management_cost"))
     if counts["management"] and not isfinite(management_total):
         errors.append("В разделе 3 указана некорректная итоговая сумма.")
