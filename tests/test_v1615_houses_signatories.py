@@ -44,7 +44,7 @@ def assistant_fixture(path):
         conn.execute(
             "INSERT INTO houses VALUES(?,?,?,?,?,?,?,?,?,?)",
             ("house-test", "uo-test", "г. Тестовый, д. 7",
-             "1200,25", "240,75", "9999", "2022-05-01", None,
+             "1200,25", "240,75", "1441", "2022-05-01", None,
              "Д-17", "2022-04-27"),
         )
         for src_id, org, home, name, role in (
@@ -126,7 +126,8 @@ class HouseFieldsAndSignatoriesV1615Tests(unittest.TestCase):
         }, house_id=house["id"])
         with sqlite3.connect(self.source) as conn:
             conn.execute("UPDATE houses SET residential_area='1300',"
-                         "non_residential_area='200',management_agreement_number='Д-18'")
+                         "non_residential_area='200',charge_area='1500',"
+                         "management_agreement_number='Д-18'")
             conn.execute(
                 "UPDATE act_people SET data_json=? WHERE id='person-home'",
                 (json.dumps(dict(full_name="Петров П. П.", role="Председатель совета МКД",
@@ -239,7 +240,8 @@ class HouseFieldsAndSignatoriesV1615Tests(unittest.TestCase):
     def test_source_fields_locked_but_missing_component_can_be_filled(self):
         with sqlite3.connect(self.source) as conn:
             conn.execute(
-                "UPDATE houses SET residential_area=NULL,non_residential_area='500'"
+                "UPDATE houses SET residential_area=NULL,non_residential_area='500',"
+                "charge_area=NULL"
             )
             conn.commit()
         assistant_source.synchronize(self.source)
