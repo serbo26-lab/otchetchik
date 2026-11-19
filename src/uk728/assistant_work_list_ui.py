@@ -99,10 +99,10 @@ class AssistantWorkListDialog(QDialog):
         root.addWidget(summary)
         controls = QHBoxLayout()
         self.select_content = QPushButton("Все заполненные — в содержание")
-        self.select_content.clicked.connect(lambda: self._set_all(CONTENT))
+        self.select_content.clicked.connect(self._select_all_content)
         controls.addWidget(self.select_content)
         self.reset = QPushButton("Снять выбор")
-        self.reset.clicked.connect(lambda: self._set_all(SKIP))
+        self.reset.clicked.connect(self._clear_selection)
         controls.addWidget(self.reset)
         controls.addStretch(1)
         cancel = QPushButton("Отмена")
@@ -112,6 +112,12 @@ class AssistantWorkListDialog(QDialog):
         apply_button.clicked.connect(self._apply)
         controls.addWidget(apply_button)
         root.addLayout(controls)
+
+    def _select_all_content(self) -> None:
+        self._set_all(CONTENT)
+
+    def _clear_selection(self) -> None:
+        self._set_all(SKIP)
 
     def _set_all(self, section: str) -> None:
         for row, choice in enumerate(self.choices):
