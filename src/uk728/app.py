@@ -1040,7 +1040,8 @@ class HousesTab(BaseTab):
         has_record = self.current_id is not None
         record = db.row(
             "SELECT assistant_source_id,assistant_area_missing,"
-            "assistant_residential_missing,assistant_non_residential_missing "
+            "assistant_residential_missing,assistant_non_residential_missing,"
+            "residential_area,non_residential_area "
             "FROM houses WHERE id=?", (self.current_id,),
         ) if has_record else None
         source_linked = bool(record and record["assistant_source_id"])
@@ -1056,6 +1057,30 @@ class HousesTab(BaseTab):
             )
             self.agreement_number.setEnabled(False)
             self.agreement_date.setEnabled(False)
+        if source_linked:
+            note = (
+                "Дом связан с базой ГИС ЖКХ Ассистента. Адрес, даты "
+                "управления и реквизиты договора берутся оттуда; "
+                "статус, примечание и сроки действия договора — локальные."
+            )
+            missing_parts = []
+            if record["assistant_residential_missing"]:
+                missing_parts.append("жилых помещений")
+            if record["assistant_non_residential_missing"]:
+                missing_parts.append("нежилых помещений")
+            if missing_parts:
+                note += (
+                    "\nВ Ассистенте не указана площадь "
+                    + " и ".join(missing_parts)
+                    + ". Площадь для начислений не подменяет этот показатель "
+                      "в отчёте по приказу № 728/пр."
+                )
+                if (record["residential_area"] is None
+                        or record["non_residential_area"] is None):
+                    note += " Заполните отсутствующие составляющие здесь или в Ассистенте."
+                else:
+                    note += " Недостающие площади уже дополнены локально."
+            self.source_note.setText(note)
         self.source_note.setVisible(source_linked)
         self.delete_button.setEnabled(has_record and not source_linked)
         self.org_sign_button.setEnabled(has_record)
@@ -1171,8 +1196,8 @@ class HousesTab(BaseTab):
         finally:
             self._loading_area = False
         self._recalculate_area()
-        self.start.setText(r["management_start"])
-        self.end.setText(r["management_end"])
+        self.start.setText(format_date(r["management_start"]))
+        self.end.setText(format_date(r["management_end"]))
         self.agreement_number.setText(r["management_agreement_number"])
         self.agreement_date.setText(format_date(r["management_agreement_date"]))
         self.agreement_valid_from.setText(format_date(r["agreement_valid_from"]))
