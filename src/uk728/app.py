@@ -601,34 +601,7 @@ class HousesTab(BaseTab):
             self.agreement_number.setEnabled(False)
             self.agreement_date.setEnabled(False)
         if source_linked:
-            note = (
-                "Дом связан с базой ГИС ЖКХ Ассистента. Адрес, даты "
-                "управления и реквизиты договора берутся оттуда; "
-                "статус, примечание и сроки действия договора — локальные."
-            )
-            missing_parts = []
-            if record["assistant_residential_missing"]:
-                missing_parts.append("жилых помещений")
-            if record["assistant_non_residential_missing"]:
-                missing_parts.append("нежилых помещений")
-            if not record["assistant_area_missing"]:
-                note += (
-                    "\nОбщая площадь помещений берётся из итоговой площади "
-                    "к начислению в Ассистенте либо рассчитывается из "
-                    "предусмотренных там составляющих."
-                )
-                if missing_parts:
-                    note += (
-                        " Разбивка на жилую и нежилую площадь указана не полностью; "
-                        "это не мешает использовать уже известную общую площадь."
-                    )
-            else:
-                note += (
-                    "\nВ Ассистенте отсутствует итоговая площадь помещений "
-                    "и не хватает данных для её расчёта. Укажите общую "
-                    "площадь здесь либо дополните сведения в Ассистенте."
-                )
-            self.source_note.setText(note)
+            self.source_note.setText(self._source_house_note(record))
         self.source_note.setVisible(source_linked)
         self.delete_button.setEnabled(has_record and not source_linked)
         self.org_sign_button.setEnabled(has_record)
@@ -794,13 +767,37 @@ class HousesTab(BaseTab):
             self.refresh()
             self.update_form_state()
 
-    def save(self, *_args, refresh_after: bool = True):
-        if not self.current_id:
-            self.msg("Сначала выберите или добавьте дом, затем заполните поля и сохраните.")
-            return
-        if (getattr(self, "_loaded_form_id", None) == self.current_id
-                and self._form_snapshot == self._form_signature()):
-            return True
+    def _source_house_note(self, record):
+        note = (
+            "Дом связан с базой ГИС ЖКХ Ассистента. Адрес, даты "
+            "управления и реквизиты договора берутся оттуда; "
+            "статус, примечание и сроки действия договора — локальные."
+        )
+        missing_parts = []
+        if record["assistant_residential_missing"]:
+            missing_parts.append("жилых помещений")
+        if record["assistant_non_residential_missing"]:
+            missing_parts.append("нежилых помещений")
+        if not record["assistant_area_missing"]:
+            note += (
+                "\nОбщая площадь помещений берётся из итоговой площади "
+                "к начислению в Ассистенте либо рассчитывается из "
+                "предусмотренных там составляющих."
+            )
+            if missing_parts:
+                note += (
+                    " Разбивка на жилую и нежилую площадь указана не полностью; "
+                    "это не мешает использовать уже известную общую площадь."
+                )
+        else:
+            note += (
+                "\nВ Ассистенте отсутствует итоговая площадь помещений "
+                "и не хватает данных для её расчёта. Укажите общую "
+                "площадь здесь либо дополните сведения в Ассистенте."
+            )
+        return note
+
+    def _validate_house_areas(self):
         for field, label in (
             (self.area, "Общая площадь помещений"),
             (self.residential_area, "Площадь жилых помещений"),
@@ -812,7 +809,9 @@ class HousesTab(BaseTab):
             if problem:
                 QMessageBox.warning(self, "Проверьте площади", problem)
                 return False
+        return True
 
+    def _validated_house_dates(self):
         dates = {}
         for key, edit, label in (
             ("management_start", self.start, "Дата начала управления"),
@@ -827,7 +826,7 @@ class HousesTab(BaseTab):
                     self, "Проверьте дату",
                     f"«{label}»: укажите ДД.ММ.ГГГГ либо оставьте пустым.",
                 )
-                return False
+                return None
             dates[key] = iso_date(raw)
         if (dates["agreement_valid_from"] and dates["agreement_valid_to"]
                 and dates["agreement_valid_to"] < dates["agreement_valid_from"]):
@@ -835,6 +834,20 @@ class HousesTab(BaseTab):
                 self, "Проверьте срок",
                 "Дата окончания действия договора раньше начала его действия.",
             )
+            return None
+        return dates
+
+    def save(self, *_args, refresh_after: bool = True):
+        if not self.current_id:
+            self.msg("Сначала выберите или добавьте дом, затем заполните поля и сохраните.")
+            return
+        if (getattr(self, "_loaded_form_id", None) == self.current_id
+                and self._form_snapshot == self._form_signature()):
+            return True
+        if not self._validate_house_areas():
+            return False
+        dates = self._validated_house_dates()
+        if dates is None:
             return False
 
         residential = (
@@ -1063,6 +1076,33 @@ class CategoriesTab(BaseTab):
         vals = ["", "Новая подкатегория", section, unit, self.price.text() or "0", ""]
         for c, val in enumerate(vals): self.sub_table.set_value(row, c, val)
 
+    def _save_subcategories(self, conn, section, unit):
+        existing_ids: list[int] = []
+        new_subrows: list[tuple[int, int]] = []
+        for r in range(self.sub_table.rowCount()):
+            name = self.sub_table.value(r, 1)
+            if not name:
+                continue
+            sub_id = self.sub_table.value(r, 0)
+            sub_section = self.sub_table.value(r, 2)
+            sub_unit = self.sub_table.value(r, 3)
+            if sub_section == NOT_SELECTED: sub_section = ""
+            if sub_unit == NOT_SELECTED: sub_unit = ""
+            vals = (self.current_id, name, sub_section or section, sub_unit or unit, to_float(self.sub_table.value(r, 4)), self.sub_table.value(r, 5))
+            if sub_id:
+                conn.execute("UPDATE work_categories SET parent_id=?, name=?, section=?, unit=?, default_price=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (*vals, int(sub_id)))
+                existing_ids.append(int(sub_id))
+            else:
+                cur = conn.execute("INSERT INTO work_categories(parent_id, name, section, unit, default_price, notes) VALUES(?,?,?,?,?,?)", vals)
+                existing_ids.append(int(cur.lastrowid))
+                new_subrows.append((r, int(cur.lastrowid)))
+        if existing_ids:
+            placeholders = ",".join("?" for _ in existing_ids)
+            conn.execute(f"UPDATE work_categories SET is_active=0 WHERE parent_id=? AND id NOT IN ({placeholders})", (self.current_id, *existing_ids))
+        else:
+            conn.execute("UPDATE work_categories SET is_active=0 WHERE parent_id=?", (self.current_id,))
+        return new_subrows
+
     def save(self, *_args, refresh_after: bool = True):
         if not self.current_id:
             self.msg("Нажмите «Добавить категорию», затем заполните поля и сохраните.")
@@ -1099,30 +1139,7 @@ class CategoriesTab(BaseTab):
                 "UPDATE work_categories SET name=?, section=?, unit=?, default_price=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 (self.name.text(), section, unit, to_float(self.price.text()), self.notes.toPlainText(), self.current_id),
             )
-            existing_ids: list[int] = []
-            new_subrows: list[tuple[int, int]] = []
-            for r in range(self.sub_table.rowCount()):
-                name = self.sub_table.value(r, 1)
-                if not name:
-                    continue
-                sub_id = self.sub_table.value(r, 0)
-                sub_section = self.sub_table.value(r, 2)
-                sub_unit = self.sub_table.value(r, 3)
-                if sub_section == NOT_SELECTED: sub_section = ""
-                if sub_unit == NOT_SELECTED: sub_unit = ""
-                vals = (self.current_id, name, sub_section or section, sub_unit or unit, to_float(self.sub_table.value(r, 4)), self.sub_table.value(r, 5))
-                if sub_id:
-                    conn.execute("UPDATE work_categories SET parent_id=?, name=?, section=?, unit=?, default_price=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (*vals, int(sub_id)))
-                    existing_ids.append(int(sub_id))
-                else:
-                    cur = conn.execute("INSERT INTO work_categories(parent_id, name, section, unit, default_price, notes) VALUES(?,?,?,?,?,?)", vals)
-                    existing_ids.append(int(cur.lastrowid))
-                    new_subrows.append((r, int(cur.lastrowid)))
-            if existing_ids:
-                placeholders = ",".join("?" for _ in existing_ids)
-                conn.execute(f"UPDATE work_categories SET is_active=0 WHERE parent_id=? AND id NOT IN ({placeholders})", (self.current_id, *existing_ids))
-            else:
-                conn.execute("UPDATE work_categories SET is_active=0 WHERE parent_id=?", (self.current_id,))
+            new_subrows = self._save_subcategories(conn, section, unit)
             conn.commit()
         for row_index, new_id in new_subrows:
             self.sub_table.set_value(row_index, 0, new_id)
@@ -1287,13 +1304,7 @@ class WorksTab(BaseTab):
         self.table.scrollToBottom()
         self.filter_rows()
 
-    def save(self, *_args, refresh_after: bool = True):
-        # Accept the same optional refresh_after argument as other tabs:
-        # save_before_assistant_sync() invokes this from the Works tab.
-        # Navigation and timed backups should not rewrite an untouched
-        # directory or block users because of incomplete legacy records.
-        if self._form_signature() == getattr(self, "_form_snapshot", None):
-            return True
+    def _validate_work_rows(self):
         for index in range(self.table.rowCount()):
             existing = self.table.value(index, 0)
             if existing and self._initial_work_rows.get(existing) == self._row_signature(index):
@@ -1311,6 +1322,42 @@ class WorksTab(BaseTab):
             if problem:
                 QMessageBox.warning(self, "Проверьте цену", problem)
                 return False
+        return True
+
+    def _save_work_rows(self, conn):
+        active_ids: list[int] = []
+        for r in range(self.table.rowCount()):
+            wid = self.table.value(r, 0)
+            vals = (
+                self.table.value(r, 1),
+                self.table.value(r, 2),
+                self.table.value(r, 3),
+                "" if self.table.value(r, 4) == NOT_SELECTED else self.table.value(r, 4),
+                "" if self.table.value(r, 5) == NOT_SELECTED else (self.table.value(r, 5) or "усл."),
+                to_float(self.table.value(r, 6)),
+                self.table.value(r, 7),
+            )
+            if wid:
+                conn.execute("UPDATE work_items SET group_name=?, subgroup_name=?, name=?, category=?, unit=?, default_price=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (*vals, int(wid)))
+                active_ids.append(int(wid))
+            elif vals[2].strip():
+                cur = conn.execute("INSERT INTO work_items(group_name, subgroup_name, name, category, unit, default_price, notes) VALUES(?,?,?,?,?,?,?)", vals)
+                active_ids.append(int(cur.lastrowid))
+        if active_ids:
+            placeholders = ",".join("?" for _ in active_ids)
+            conn.execute(f"UPDATE work_items SET is_active=0 WHERE is_active=1 AND id NOT IN ({placeholders})", tuple(active_ids))
+        else:
+            conn.execute("UPDATE work_items SET is_active=0 WHERE is_active=1")
+
+    def save(self, *_args, refresh_after: bool = True):
+        # Accept the same optional refresh_after argument as other tabs:
+        # save_before_assistant_sync() invokes this from the Works tab.
+        # Navigation and timed backups should not rewrite an untouched
+        # directory or block users because of incomplete legacy records.
+        if self._form_signature() == getattr(self, "_form_snapshot", None):
+            return True
+        if not self._validate_work_rows():
+            return False
         visible_ids = {
             int(self.table.value(row, 0))
             for row in range(self.table.rowCount()) if self.table.value(row, 0)
@@ -1320,29 +1367,7 @@ class WorksTab(BaseTab):
             if make_backup("before_work_deletion") is None:
                 raise RuntimeError("Не удалось создать резервную копию справочника перед удалением.")
         with connect() as conn:
-            active_ids: list[int] = []
-            for r in range(self.table.rowCount()):
-                wid = self.table.value(r, 0)
-                vals = (
-                    self.table.value(r, 1),
-                    self.table.value(r, 2),
-                    self.table.value(r, 3),
-                    "" if self.table.value(r, 4) == NOT_SELECTED else self.table.value(r, 4),
-                    "" if self.table.value(r, 5) == NOT_SELECTED else (self.table.value(r, 5) or "усл."),
-                    to_float(self.table.value(r, 6)),
-                    self.table.value(r, 7),
-                )
-                if wid:
-                    conn.execute("UPDATE work_items SET group_name=?, subgroup_name=?, name=?, category=?, unit=?, default_price=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (*vals, int(wid)))
-                    active_ids.append(int(wid))
-                elif vals[2].strip():
-                    cur = conn.execute("INSERT INTO work_items(group_name, subgroup_name, name, category, unit, default_price, notes) VALUES(?,?,?,?,?,?,?)", vals)
-                    active_ids.append(int(cur.lastrowid))
-            if active_ids:
-                placeholders = ",".join("?" for _ in active_ids)
-                conn.execute(f"UPDATE work_items SET is_active=0 WHERE is_active=1 AND id NOT IN ({placeholders})", tuple(active_ids))
-            else:
-                conn.execute("UPDATE work_items SET is_active=0 WHERE is_active=1")
+            self._save_work_rows(conn)
             conn.commit()
         # Reconcile generated IDs and the in-memory snapshot even when the
         # caller requested no refresh. Otherwise newly added rows could be
@@ -1539,18 +1564,7 @@ class TemplatesTab(BaseTab):
         vals = ["", wid, r["name"], r["unit"], r["default_price"], "0"]
         for c, val in enumerate(vals): self.table.set_value(row, c, val)
 
-    def save(self, *_args, refresh_after: bool = True):
-        if not self.current_id:
-            self.msg("Нажмите «Добавить шаблон», затем заполните поля и сохраните.")
-            return
-        # Navigation, sync and timer saves must not mutate untouched templates.
-        if (getattr(self, "_loaded_form_id", None) == self.current_id
-                and not self.has_unsaved_changes()):
-            return
-        section = normalize_section(self.category.currentText(), "")
-        if section not in COMMON_SECTIONS:
-            QMessageBox.warning(self, "Раздел шаблона", "Выберите официальный раздел формы.")
-            return False
+    def _validate_template_rows(self, section):
         for index in range(self.table.rowCount()):
             for column, label in ((4, "Цена"), (5, QUANTITY_LABEL)):
                 problem = numeric_error(
@@ -1570,6 +1584,22 @@ class TemplatesTab(BaseTab):
                     "Исправьте состав шаблона или верните прежний раздел.",
                 )
                 return False
+        return True
+
+    def save(self, *_args, refresh_after: bool = True):
+        if not self.current_id:
+            self.msg("Нажмите «Добавить шаблон», затем заполните поля и сохраните.")
+            return
+        # Navigation, sync and timer saves must not mutate untouched templates.
+        if (getattr(self, "_loaded_form_id", None) == self.current_id
+                and not self.has_unsaved_changes()):
+            return
+        section = normalize_section(self.category.currentText(), "")
+        if section not in COMMON_SECTIONS:
+            QMessageBox.warning(self, "Раздел шаблона", "Выберите официальный раздел формы.")
+            return False
+        if not self._validate_template_rows(section):
+            return False
         rows = [
             {
                 "id": self.table.value(r, 0),
