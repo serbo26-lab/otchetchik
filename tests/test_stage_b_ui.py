@@ -95,8 +95,8 @@ class CommonUxTests(TestCase):
         self.window.switch_theme()
         light = self.app.styleSheet()
         self.assertNotEqual(dark, light)
-        self.assertEqual(self.window._scale, 100)
-        self.assertTrue(self.window.sidebar.scale_combo.isHidden())
+        self.assertFalse(hasattr(self.window, "_scale"))
+        self.assertFalse(hasattr(self.window.sidebar, "scale_combo"))
 
 
 if __name__ == "__main__":
