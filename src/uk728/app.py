@@ -2366,26 +2366,57 @@ class ReportsTab(BaseTab):
         except Exception as e:
             QMessageBox.warning(self, "Не удалось удалить отчет", str(e))
 
-    def _load_current(self):
-        item = self.list.currentItem()
-        new_id = item.data(Qt.UserRole) if item else None
-        old_id = self.current_id
+    def _restore_report_selection(self, old_id, exc):
+        # The model selection has changed but the old editor must not be discarded.
+        blocked = self.list.blockSignals(True)
+        for i in range(self.list.count()):
+            if self.list.item(i).data(Qt.UserRole) == old_id:
+                self.list.setCurrentRow(i)
+                break
+        self.list.blockSignals(blocked)
+        win = self.window()
+        if hasattr(win, "set_save_status"):
+            win.set_save_status("error")
+        self.msg(f"Не удалось сохранить предыдущий отчет: {exc}")
+
+    def _save_before_report_switch(self, old_id, new_id):
         if old_id and old_id != new_id and not self._loading_report and not self._saving_report:
             try:
                 self.flush_autosave()
             except Exception as exc:
-                # The model selection has changed but the old editor must not be discarded.
-                blocked = self.list.blockSignals(True)
-                for i in range(self.list.count()):
-                    if self.list.item(i).data(Qt.UserRole) == old_id:
-                        self.list.setCurrentRow(i)
-                        break
-                self.list.blockSignals(blocked)
-                win = self.window()
-                if hasattr(win, "set_save_status"):
-                    win.set_save_status("error")
-                self.msg(f"Не удалось сохранить предыдущий отчет: {exc}")
-                return
+                self._restore_report_selection(old_id, exc)
+                return False
+        return True
+
+    def _populate_loaded_report(self, bundle):
+        r = bundle["report"]
+        self.year.setValue(r["year"]); self.period_start.setText(r["period_start"]); self.period_end.setText(r["period_end"])
+        self.show_period.setChecked(bool(r["show_period_note"]))
+        self.publish.setText(r["publish_date"]); self.status.setCurrentText(r["status"])
+        self.management_cost.setText(str(r["management_cost"] or "")); self.notes.setPlainText(r["notes"])
+        self.repair_start.setText(str(r["repair_start_balance"] or "")); self.repair_accrual.setText(str(r["repair_accrual"] or "")); self.repair_work_cost.setText(str(r["repair_work_cost"] or "")); self.repair_end.setText(str(r["repair_end_balance"] or ""))
+        self.content_table.setRowCount(0)
+        for item in bundle["content"]: self.add_content_row(item)
+        self.repair_table.setRowCount(0)
+        for item in bundle["repair"]: self.add_repair_row(item)
+        self.management_table.setRowCount(0)
+        for item in bundle.get("management", []): self.add_management_row(item)
+        self.finance_table.setRowCount(0)
+        for fin in bundle["financials"]:
+            row = self.finance_table.rowCount(); self.finance_table.insertRow(row)
+            vals = [fin["id"], fin["payer_type"], fin["debt_start"], fin["accrued"], fin["paid"], fin["debt_end"]]
+            for c, val in enumerate(vals): self.finance_table.set_value(row, c, val)
+            payer_item = self.finance_table.item(row, 1)
+            payer_item.setFlags(payer_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        claims = bundle["claims"] or {}
+        self.claim_pret.setText(str(claims.get("pretensions_count") or "")); self.claim_lawsuits.setText(str(claims.get("lawsuits_count") or "")); self.claim_amount.setText(str(claims.get("recovered_amount") or ""))
+
+    def _load_current(self):
+        item = self.list.currentItem()
+        new_id = item.data(Qt.UserRole) if item else None
+        old_id = self.current_id
+        if not self._save_before_report_switch(old_id, new_id):
+            return
         self.current_id = new_id
         if not self.current_id:
             self._invalidate_review()
@@ -2396,27 +2427,7 @@ class ReportsTab(BaseTab):
         self._loading_report = True
         try:
             bundle = db.load_report_bundle(self.current_id)
-            r = bundle["report"]
-            self.year.setValue(r["year"]); self.period_start.setText(r["period_start"]); self.period_end.setText(r["period_end"])
-            self.show_period.setChecked(bool(r["show_period_note"]))
-            self.publish.setText(r["publish_date"]); self.status.setCurrentText(r["status"])
-            self.management_cost.setText(str(r["management_cost"] or "")); self.notes.setPlainText(r["notes"])
-            self.repair_start.setText(str(r["repair_start_balance"] or "")); self.repair_accrual.setText(str(r["repair_accrual"] or "")); self.repair_work_cost.setText(str(r["repair_work_cost"] or "")); self.repair_end.setText(str(r["repair_end_balance"] or ""))
-            self.content_table.setRowCount(0)
-            for item in bundle["content"]: self.add_content_row(item)
-            self.repair_table.setRowCount(0)
-            for item in bundle["repair"]: self.add_repair_row(item)
-            self.management_table.setRowCount(0)
-            for item in bundle.get("management", []): self.add_management_row(item)
-            self.finance_table.setRowCount(0)
-            for fin in bundle["financials"]:
-                row = self.finance_table.rowCount(); self.finance_table.insertRow(row)
-                vals = [fin["id"], fin["payer_type"], fin["debt_start"], fin["accrued"], fin["paid"], fin["debt_end"]]
-                for c, val in enumerate(vals): self.finance_table.set_value(row, c, val)
-                payer_item = self.finance_table.item(row, 1)
-                payer_item.setFlags(payer_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            claims = bundle["claims"] or {}
-            self.claim_pret.setText(str(claims.get("pretensions_count") or "")); self.claim_lawsuits.setText(str(claims.get("lawsuits_count") or "")); self.claim_amount.setText(str(claims.get("recovered_amount") or ""))
+            self._populate_loaded_report(bundle)
         finally:
             self._loading_report = False
         self._dirty_report = False
@@ -2590,24 +2601,27 @@ class ReportsTab(BaseTab):
             section = normalize_section(row_get(wr, "category", template_section), template_section)
         return section
 
-    def apply_template(self, target_section: str, combo: QComboBox):
-        if not self.current_id:
-            return
-        tid = combo.currentData()
-        if not tid:
-            self.msg("Выберите шаблон для этого раздела.")
-            return
-        if QMessageBox.question(self, APPLY_TEMPLATE_TEXT, f"Добавить строки выбранного шаблона в раздел «{target_section}»?") != QMessageBox.Yes:
-            return
-        template_section = self._template_section(int(tid), target_section)
-        added = 0
-        skipped = 0
+    def _append_template_item(self, target_section, it, cost):
+        if target_section == SECTION_MANAGEMENT:
+            self.add_management_row({"work_item_id": it["work_item_id"], "name": it["name"], "unit": it["unit"], "unit_price": it["unit_price"], "qty": it["plan_qty"], "cost": cost, "source": TEMPLATE_SOURCE})
+        elif target_section == SECTION_REPAIR:
+            self.add_repair_row({"work_item_id": it["work_item_id"], "name": it["name"], "cost": cost, "volume": f"{money(it['plan_qty'])} {it['unit']}", "source": TEMPLATE_SOURCE})
+        else:
+            self.add_content_row({"work_item_id": it["work_item_id"], "name": it["name"], "unit": it["unit"], "unit_price": it["unit_price"], "plan_qty": it["plan_qty"], "plan_cost": cost, "actual_qty": it["plan_qty"], "actual_cost": cost, "source": TEMPLATE_SOURCE})
+
+    def _template_target_table(self, target_section):
         if target_section == SECTION_CONTENT:
             target_table = self.content_table
         elif target_section == SECTION_REPAIR:
             target_table = self.repair_table
         else:
             target_table = self.management_table
+        return target_table
+
+    def _apply_template_items(self, tid, target_section, template_section):
+        added = 0
+        skipped = 0
+        target_table = self._template_target_table(target_section)
         known_ids = {target_table.value(row, 1)
                      for row in range(target_table.rowCount()) if target_table.value(row, 1)}
         known_names = {target_table.value(row, 2).strip().casefold()
@@ -2627,14 +2641,39 @@ class ReportsTab(BaseTab):
                 known_ids.add(work_key)
             if name_key:
                 known_names.add(name_key)
-            if target_section == SECTION_MANAGEMENT:
-                self.add_management_row({"work_item_id": it["work_item_id"], "name": it["name"], "unit": it["unit"], "unit_price": it["unit_price"], "qty": it["plan_qty"], "cost": cost, "source": TEMPLATE_SOURCE})
-            elif target_section == SECTION_REPAIR:
-                self.add_repair_row({"work_item_id": it["work_item_id"], "name": it["name"], "cost": cost, "volume": f"{money(it['plan_qty'])} {it['unit']}", "source": TEMPLATE_SOURCE})
-            else:
-                self.add_content_row({"work_item_id": it["work_item_id"], "name": it["name"], "unit": it["unit"], "unit_price": it["unit_price"], "plan_qty": it["plan_qty"], "plan_cost": cost, "actual_qty": it["plan_qty"], "actual_cost": cost, "source": TEMPLATE_SOURCE})
+            self._append_template_item(target_section, it, cost)
             added += 1
+        return added, skipped
+
+    def apply_template(self, target_section: str, combo: QComboBox):
+        if not self.current_id:
+            return
+        tid = combo.currentData()
+        if not tid:
+            self.msg("Выберите шаблон для этого раздела.")
+            return
+        if QMessageBox.question(self, APPLY_TEMPLATE_TEXT, f"Добавить строки выбранного шаблона в раздел «{target_section}»?") != QMessageBox.Yes:
+            return
+        template_section = self._template_section(int(tid), target_section)
+        added, skipped = self._apply_template_items(tid, target_section, template_section)
         self.msg(f"Шаблон применен. Раздел: {target_section}. Добавлено: {added}. Пропущено: {skipped}")
+
+    def _validate_numeric_tables(self):
+        sections = (
+            (self.content_table, SECTION_CONTENT, (4, 5, 6, 7, 8)),
+            (self.repair_table, SECTION_REPAIR, (4,)),
+            (self.management_table, SECTION_MANAGEMENT, (4, 5, 6)),
+            (self.finance_table, "Финансы", (2, 3, 4, 5)),
+        )
+        for table, section, columns in sections:
+            for row in range(table.rowCount()):
+                for column in columns:
+                    problem = numeric_error(
+                        table.value(row, column),
+                        f"{section}, строка {row + 1}, графа «{table.horizontalHeaderItem(column).text()}»",
+                    )
+                    if problem:
+                        raise ValueError(problem)
 
     def validate_numeric_fields(self) -> None:
         inputs = [
@@ -2654,21 +2693,7 @@ class ReportsTab(BaseTab):
             problem = numeric_error(value, label)
             if problem:
                 raise ValueError(problem)
-        sections = (
-            (self.content_table, SECTION_CONTENT, (4, 5, 6, 7, 8)),
-            (self.repair_table, SECTION_REPAIR, (4,)),
-            (self.management_table, SECTION_MANAGEMENT, (4, 5, 6)),
-            (self.finance_table, "Финансы", (2, 3, 4, 5)),
-        )
-        for table, section, columns in sections:
-            for row in range(table.rowCount()):
-                for column in columns:
-                    problem = numeric_error(
-                        table.value(row, column),
-                        f"{section}, строка {row + 1}, графа «{table.horizontalHeaderItem(column).text()}»",
-                    )
-                    if problem:
-                        raise ValueError(problem)
+        self._validate_numeric_tables()
 
     def save_manually(self):
         try:
@@ -2678,6 +2703,127 @@ class ReportsTab(BaseTab):
             if hasattr(win, "set_save_status"):
                 win.set_save_status("error")
             QMessageBox.warning(self, "Проверьте отчет", str(exc))
+
+    def _save_report_fields(self, conn, rid):
+        conn.execute(
+            "UPDATE reports SET year=?, period_start=?, period_end=?, show_period_note=?, publish_date=?, status=?, management_cost=?, repair_start_balance=?, repair_accrual=?, repair_work_cost=?, repair_end_balance=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (self.year.value(), iso_date(self.period_start.text()) or self.period_start.text(), iso_date(self.period_end.text()) or self.period_end.text(), 1 if self.show_period.isChecked() else 0, iso_date(self.publish.text()) or self.publish.text(), self.status.currentText(), to_float(self.management_cost.text()), to_float(self.repair_start.text()), to_float(self.repair_accrual.text()), to_float(self.repair_work_cost.text()), to_float(self.repair_end.text()), self.notes.toPlainText(), rid),
+        )
+
+    def _report_row_fields(self, widget, table_name, row_index):
+        if table_name == "report_content_items":
+            price = to_float(widget.value(row_index, 4))
+            plan_qty = to_float(widget.value(row_index, 5))
+            actual_qty = to_float(widget.value(row_index, 7))
+            plan_text = widget.value(row_index, 6)
+            actual_text = widget.value(row_index, 8)
+            fields = {
+                "unit": widget.value(row_index, 3),
+                "unit_price": price, "plan_qty": plan_qty,
+                "plan_cost": to_float(plan_text) if plan_text else price * plan_qty,
+                "actual_qty": actual_qty,
+                "actual_cost": to_float(actual_text) if actual_text else price * actual_qty,
+            }
+        elif table_name == "report_repair_items":
+            fields = {
+                "basis": widget.value(row_index, 3),
+                "cost": to_float(widget.value(row_index, 4)),
+                "volume": widget.value(row_index, 5),
+                "act_details": widget.value(row_index, 6),
+            }
+        else:
+            price = to_float(widget.value(row_index, 4))
+            qty = to_float(widget.value(row_index, 5))
+            cost_text = widget.value(row_index, 6)
+            fields = {
+                "unit": widget.value(row_index, 3),
+                "unit_price": price, "qty": qty,
+                "cost": to_float(cost_text) if cost_text else price * qty,
+            }
+        return fields
+
+    def _report_row_payload(self, widget, table_name, row_index):
+        name = widget.value(row_index, 2)
+        meta_item = widget.item(row_index, 0)
+        meta = meta_item.data(Qt.UserRole) if meta_item else None
+        meta = meta if isinstance(meta, dict) else {}
+        common = {
+            "id": int(widget.value(row_index, 0) or 0),
+            "work_item_id": int(widget.value(row_index, 1) or 0) or None,
+            "name": name,
+            "source": meta.get("source", MANUAL_SOURCE),
+            "is_manual": meta.get("is_manual", 1),
+        }
+        return {**common, **self._report_row_fields(widget, table_name, row_index)}
+
+    def _sync_report_sections(self, conn, rid):
+        # Reconcile the three report sections by row ID. Unchanged bulk
+        # lines must NOT become manually overridden after autosave.
+        inserted_rows = []
+        report_tables = (
+            (self.content_table, "report_content_items"),
+            (self.repair_table, "report_repair_items"),
+            (self.management_table, "report_management_items"),
+        )
+        for widget, table_name in report_tables:
+            records = []
+            for row_index in range(widget.rowCount()):
+                records.append(self._report_row_payload(widget, table_name, row_index))
+            result = sync_report_rows(conn, table_name, rid, records)
+            inserted_rows.append((widget, result))
+        return inserted_rows
+
+    def _sync_finance_and_claims(self, conn, rid):
+        # Keep stable financial row IDs rather than deleting and recreating
+        # all owner/tenant rows on every autosave.
+        payer_types = []
+        for row_index in range(self.finance_table.rowCount()):
+            payer = self.finance_table.value(row_index, 1).strip()
+            if not payer:
+                continue
+            if payer in payer_types:
+                raise ValueError(f"Повторяется вид плательщика: {payer}")
+            payer_types.append(payer)
+            conn.execute(
+                """INSERT INTO report_financials
+                   (report_id,payer_type,debt_start,accrued,paid,debt_end)
+                   VALUES(?,?,?,?,?,?)
+                   ON CONFLICT(report_id,payer_type) DO UPDATE SET
+                   debt_start=excluded.debt_start,
+                   accrued=excluded.accrued,
+                   paid=excluded.paid,
+                   debt_end=excluded.debt_end""",
+                (rid, payer, to_float(self.finance_table.value(row_index, 2)),
+                 to_float(self.finance_table.value(row_index, 3)),
+                 to_float(self.finance_table.value(row_index, 4)),
+                 to_float(self.finance_table.value(row_index, 5))),
+            )
+        if payer_types:
+            placeholders = ",".join("?" for _ in payer_types)
+            conn.execute(
+                f"DELETE FROM report_financials WHERE report_id=? "
+                f"AND payer_type NOT IN ({placeholders})", (rid, *payer_types)
+            )
+        else:
+            conn.execute("DELETE FROM report_financials WHERE report_id=?", (rid,))
+        conn.execute(
+            """INSERT INTO report_claims
+               (report_id,pretensions_count,lawsuits_count,recovered_amount)
+               VALUES(?,?,?,?)
+               ON CONFLICT(report_id) DO UPDATE SET
+               pretensions_count=excluded.pretensions_count,
+               lawsuits_count=excluded.lawsuits_count,
+               recovered_amount=excluded.recovered_amount""",
+            (rid, int(to_float(self.claim_pret.text())),
+             int(to_float(self.claim_lawsuits.text())),
+             to_float(self.claim_amount.text())),
+        )
+
+    def _reconcile_report_ids(self, inserted_rows):
+        # Update hidden IDs before allowing UI change signals to mark new edits.
+        for widget, inserts in inserted_rows:
+            for row_index, record_id in inserts:
+                widget.set_value(row_index, 0, record_id)
 
     def save(self, silent: bool = False, refresh_after: bool = True):
         if not self.current_id:
@@ -2692,113 +2838,11 @@ class ReportsTab(BaseTab):
             win.set_save_status("saving")
         try:
             with connect() as conn:
-                conn.execute(
-                    "UPDATE reports SET year=?, period_start=?, period_end=?, show_period_note=?, publish_date=?, status=?, management_cost=?, repair_start_balance=?, repair_accrual=?, repair_work_cost=?, repair_end_balance=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                    (self.year.value(), iso_date(self.period_start.text()) or self.period_start.text(), iso_date(self.period_end.text()) or self.period_end.text(), 1 if self.show_period.isChecked() else 0, iso_date(self.publish.text()) or self.publish.text(), self.status.currentText(), to_float(self.management_cost.text()), to_float(self.repair_start.text()), to_float(self.repair_accrual.text()), to_float(self.repair_work_cost.text()), to_float(self.repair_end.text()), self.notes.toPlainText(), rid),
-                )
-                # Reconcile the three report sections by row ID. Unchanged bulk
-                # lines must NOT become manually overridden after autosave.
-                inserted_rows = []
-                report_tables = (
-                    (self.content_table, "report_content_items"),
-                    (self.repair_table, "report_repair_items"),
-                    (self.management_table, "report_management_items"),
-                )
-                for widget, table_name in report_tables:
-                    records = []
-                    for row_index in range(widget.rowCount()):
-                        name = widget.value(row_index, 2)
-                        meta_item = widget.item(row_index, 0)
-                        meta = meta_item.data(Qt.UserRole) if meta_item else None
-                        meta = meta if isinstance(meta, dict) else {}
-                        common = {
-                            "id": int(widget.value(row_index, 0) or 0),
-                            "work_item_id": int(widget.value(row_index, 1) or 0) or None,
-                            "name": name,
-                            "source": meta.get("source", MANUAL_SOURCE),
-                            "is_manual": meta.get("is_manual", 1),
-                        }
-                        if table_name == "report_content_items":
-                            price = to_float(widget.value(row_index, 4))
-                            plan_qty = to_float(widget.value(row_index, 5))
-                            actual_qty = to_float(widget.value(row_index, 7))
-                            plan_text = widget.value(row_index, 6)
-                            actual_text = widget.value(row_index, 8)
-                            fields = {
-                                "unit": widget.value(row_index, 3),
-                                "unit_price": price, "plan_qty": plan_qty,
-                                "plan_cost": to_float(plan_text) if plan_text else price * plan_qty,
-                                "actual_qty": actual_qty,
-                                "actual_cost": to_float(actual_text) if actual_text else price * actual_qty,
-                            }
-                        elif table_name == "report_repair_items":
-                            fields = {
-                                "basis": widget.value(row_index, 3),
-                                "cost": to_float(widget.value(row_index, 4)),
-                                "volume": widget.value(row_index, 5),
-                                "act_details": widget.value(row_index, 6),
-                            }
-                        else:
-                            price = to_float(widget.value(row_index, 4))
-                            qty = to_float(widget.value(row_index, 5))
-                            cost_text = widget.value(row_index, 6)
-                            fields = {
-                                "unit": widget.value(row_index, 3),
-                                "unit_price": price, "qty": qty,
-                                "cost": to_float(cost_text) if cost_text else price * qty,
-                            }
-                        records.append({**common, **fields})
-                    result = sync_report_rows(conn, table_name, rid, records)
-                    inserted_rows.append((widget, result))
-                # Keep stable financial row IDs rather than deleting and recreating
-                # all owner/tenant rows on every autosave.
-                payer_types = []
-                for row_index in range(self.finance_table.rowCount()):
-                    payer = self.finance_table.value(row_index, 1).strip()
-                    if not payer:
-                        continue
-                    if payer in payer_types:
-                        raise ValueError(f"Повторяется вид плательщика: {payer}")
-                    payer_types.append(payer)
-                    conn.execute(
-                        """INSERT INTO report_financials
-                           (report_id,payer_type,debt_start,accrued,paid,debt_end)
-                           VALUES(?,?,?,?,?,?)
-                           ON CONFLICT(report_id,payer_type) DO UPDATE SET
-                           debt_start=excluded.debt_start,
-                           accrued=excluded.accrued,
-                           paid=excluded.paid,
-                           debt_end=excluded.debt_end""",
-                        (rid, payer, to_float(self.finance_table.value(row_index, 2)),
-                         to_float(self.finance_table.value(row_index, 3)),
-                         to_float(self.finance_table.value(row_index, 4)),
-                         to_float(self.finance_table.value(row_index, 5))),
-                    )
-                if payer_types:
-                    placeholders = ",".join("?" for _ in payer_types)
-                    conn.execute(
-                        f"DELETE FROM report_financials WHERE report_id=? "
-                        f"AND payer_type NOT IN ({placeholders})", (rid, *payer_types)
-                    )
-                else:
-                    conn.execute("DELETE FROM report_financials WHERE report_id=?", (rid,))
-                conn.execute(
-                    """INSERT INTO report_claims
-                       (report_id,pretensions_count,lawsuits_count,recovered_amount)
-                       VALUES(?,?,?,?)
-                       ON CONFLICT(report_id) DO UPDATE SET
-                       pretensions_count=excluded.pretensions_count,
-                       lawsuits_count=excluded.lawsuits_count,
-                       recovered_amount=excluded.recovered_amount""",
-                    (rid, int(to_float(self.claim_pret.text())),
-                     int(to_float(self.claim_lawsuits.text())),
-                     to_float(self.claim_amount.text())),
-                )
+                self._save_report_fields(conn, rid)
+                inserted_rows = self._sync_report_sections(conn, rid)
+                self._sync_finance_and_claims(conn, rid)
                 conn.commit()
-                # Update hidden IDs before allowing UI change signals to mark new edits.
-                for widget, inserts in inserted_rows:
-                    for row_index, record_id in inserts:
-                        widget.set_value(row_index, 0, record_id)
+                self._reconcile_report_ids(inserted_rows)
         except Exception:
             win = self.window()
             if hasattr(win, "set_save_status"):
@@ -2815,39 +2859,37 @@ class ReportsTab(BaseTab):
         if refresh_after:
             self.refresh()
 
-    def export(self, kind: str):
-        if kind not in ("xlsx", "docx", "pdf", "all"):
-            return
+    def _reviewed_export_id(self):
         if not self.current_id:
             self.msg("Выберите отчет для выгрузки.")
-            return
+            return None
         if self._review_dirty or not self._review_snapshot:
             self.review_status.setText(
                 "Сначала нажмите «Проверить заполнение», затем выберите формат."
             )
             self.report_tabs.setCurrentIndex(self.report_tabs.count() - 1)
-            return
+            return None
         rid, fingerprint, review = self._review_snapshot
         if rid != int(self.current_id):
             self._invalidate_review()
             self.msg("Отчет изменился. Выполните проверку заново.")
-            return
+            return None
         try:
             self.flush_autosave()
             current_bundle = db.load_report_bundle(rid)
             if bundle_fingerprint(current_bundle) != fingerprint:
                 self._invalidate_review()
                 self.msg("Данные отчета изменились после проверки. Повторите ее.")
-                return
+                return None
         except Exception as exc:
             self._invalidate_review()
             self.msg(f"Экспорт отменен: не удалось проверить сохраненные данные ({exc})")
-            return
+            return None
         if review["errors"]:
             self.review_status.setText(
                 "Экспорт заблокирован: исправьте ошибки и выполните проверку снова."
             )
-            return
+            return None
         if review["warnings"]:
             warning_text = "\n".join(review["warnings"])
             if QMessageBox.question(
@@ -2855,7 +2897,15 @@ class ReportsTab(BaseTab):
                 "В отчете остались предупреждения:\n\n" + warning_text +
                 "\n\nПродолжить выгрузку без устранения замечаний?"
             ) != QMessageBox.Yes:
-                return
+                return None
+        return rid
+
+    def export(self, kind: str):
+        if kind not in ("xlsx", "docx", "pdf", "all"):
+            return
+        rid = self._reviewed_export_id()
+        if rid is None:
+            return
         # Export reads the saved report but does not modify SQLite. A new
         # database copy for every Word/Excel/PDF export is unnecessary.
         paths = []
@@ -3761,24 +3811,28 @@ class MainWindow(QMainWindow):
         if company is not None or isinstance(page, CompaniesTab):
             self._active_company_id = company
 
+    def _select_company_row(self, page, cid):
+        for row in range(page.list.count()):
+            if page.list.item(row).data(Qt.UserRole) == cid:
+                if page.list.currentRow() != row:
+                    page.list.setCurrentRow(row)
+                break
+
+    def _company_context_combo(self, page):
+        if isinstance(page, (HousesTab, ReportsTab)):
+            return page.company_filter
+        if isinstance(page, MassApplyTab):
+            return page.company
+        return None
+
     def _apply_company_context(self, page):
         cid = self._active_company_id
         if cid is None:
             return
         if isinstance(page, CompaniesTab):
-            for row in range(page.list.count()):
-                if page.list.item(row).data(Qt.UserRole) == cid:
-                    if page.list.currentRow() != row:
-                        page.list.setCurrentRow(row)
-                    break
+            self._select_company_row(page, cid)
         else:
-            combo = None
-            if isinstance(page, HousesTab):
-                combo = page.company_filter
-            elif isinstance(page, ReportsTab):
-                combo = page.company_filter
-            elif isinstance(page, MassApplyTab):
-                combo = page.company
+            combo = self._company_context_combo(page)
             if combo is not None:
                 index = combo.findData(cid)
                 if index >= 0 and combo.currentIndex() != index:
@@ -3849,6 +3903,26 @@ class MainWindow(QMainWindow):
         if isinstance(current, ReportsTab) and current.current_id and not current._dirty_report:
             self.set_save_status("saved")
 
+    def _refresh_sidebar_company(self, current):
+        display_cid = current.current_id if isinstance(current, CompaniesTab) else self._active_company_id
+        if isinstance(current, HousesTab):
+            display_cid = current.company_filter.currentData()
+        elif isinstance(current, ReportsTab):
+            display_cid = current.company_filter.currentData()
+        elif isinstance(current, MassApplyTab):
+            display_cid = current.company.currentData()
+        company = db.row("SELECT name FROM companies WHERE id=?", (display_cid,)) if display_cid else None
+        self.sidebar.set_company_name(str(company["name"]) if company else "")
+
+    def _refresh_editor_save_status(self, current):
+        if isinstance(current, BaseTab) and not isinstance(current, ReportsTab):
+            if current.has_unsaved_changes():
+                if self.page_header.save_status.property("state") not in ("pending", "error"):
+                    self.set_save_status("pending")
+            elif (self._can_autosave_tab(current)
+                  and self.page_header.save_status.property("state") == "pending"):
+                self.set_save_status("saved")
+
     def refresh_context(self):
         """Show only the active page's selection and its meaningful next step."""
         try:
@@ -3856,23 +3930,9 @@ class MainWindow(QMainWindow):
             context, guidance = describe_context(current)
             self.page_header.set_context(context)
             self.page_header.guide.setText(guidance)
-            display_cid = current.current_id if isinstance(current, CompaniesTab) else self._active_company_id
-            if isinstance(current, HousesTab):
-                display_cid = current.company_filter.currentData()
-            elif isinstance(current, ReportsTab):
-                display_cid = current.company_filter.currentData()
-            elif isinstance(current, MassApplyTab):
-                display_cid = current.company.currentData()
-            company = db.row("SELECT name FROM companies WHERE id=?", (display_cid,)) if display_cid else None
-            self.sidebar.set_company_name(str(company["name"]) if company else "")
+            self._refresh_sidebar_company(current)
             self._update_next_action(current)
-            if isinstance(current, BaseTab) and not isinstance(current, ReportsTab):
-                if current.has_unsaved_changes():
-                    if self.page_header.save_status.property("state") not in ("pending", "error"):
-                        self.set_save_status("pending")
-                elif (self._can_autosave_tab(current)
-                      and self.page_header.save_status.property("state") == "pending"):
-                    self.set_save_status("saved")
+            self._refresh_editor_save_status(current)
         except (AttributeError, RuntimeError):
             self.page_header.set_context("Рабочий контекст")
 

@@ -118,6 +118,30 @@ class ReportWorkflowTests(TestCase):
         self.assertEqual(claim_id, after["claims"]["id"])
         self.assertEqual(after["financials"][0]["accrued"], 875)
 
+    def test_financial_validation_rolls_back_earlier_section_writes(self):
+        before = db.load_report_bundle(self.report_id)
+        self.page.notes.setPlainText("Synthetic pending change")
+        self.page.add_content_row({
+            "name": "Synthetic work", "unit": "шт.", "unit_price": 3,
+            "plan_qty": 2, "actual_qty": 1,
+        })
+        table = self.page.finance_table
+        original_payer = table.value(1, 1)
+        table.set_value(1, 1, table.value(0, 1))
+        try:
+            with self.assertRaisesRegex(ValueError, "Повторяется вид плательщика"):
+                self.page.save(silent=True, refresh_after=False)
+            self.assertEqual(db.load_report_bundle(self.report_id), before)
+            self.assertEqual(self.page.content_table.value(0, 0), "")
+            self.assertTrue(self.page._dirty_report)
+        finally:
+            table.set_value(1, 1, original_payer)
+            self.page.flush_autosave()
+        saved = db.load_report_bundle(self.report_id)
+        self.assertEqual(saved["report"]["notes"], "Synthetic pending change")
+        self.assertEqual(len(saved["content"]), 1)
+        self.assertEqual(int(self.page.content_table.value(0, 0)), saved["content"][0]["id"])
+
     def test_duplicate_template_application_skips_existing_work(self):
         wid = db.execute(
             "INSERT INTO work_items(name,category,unit,default_price) VALUES(?,?,?,?)",
