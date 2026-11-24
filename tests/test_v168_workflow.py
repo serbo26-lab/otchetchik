@@ -190,7 +190,7 @@ class WorkflowV168Tests(unittest.TestCase):
         page.preview()
         self.assertTrue(page.apply_button.isEnabled())
         with patch("src.uk728.app.QMessageBox.question", return_value=QMessageBox.Yes), \
-             patch("src.uk728.app.make_backup", side_effect=OSError("no disk")):
+             patch("src.uk728.mass_apply_ui.make_backup", side_effect=OSError("no disk")):
             page.apply()
         self.assertEqual(len(db.rows("SELECT id FROM report_content_items")), 0)
         self.assertIn("Запись не выполнена", page.status_label.text())
