@@ -57,7 +57,10 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
             warnings.append(f"Не заполнены сведения: {description}.")
     if not str(report.get("publish_date") or "").strip():
         warnings.append("Не заполнена дата размещения отчёта.")
-    year = int(report.get("year") or 0)
+    try:
+        year = int(report.get("year") or 0)
+    except (ValueError, TypeError, OverflowError):
+        year = 0
     if not 2000 <= year <= 2100:
         errors.append("Некорректный отчетный год.")
 
@@ -70,6 +73,10 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
         errors.append("Неверный формат даты окончания управления.")
     if start and end and start > end:
         errors.append("Период управления: дата начала позже даты окончания.")
+    if 2000 <= year <= 2100 and any(
+        boundary is not None and boundary.year != year for boundary in (start, end)
+    ):
+        errors.append("Даты периода управления в отчете должны относиться к отчетному году.")
     if bool(report.get("show_period_note")) and (not start or not end):
         errors.append("Включено отображение периода управления, но его даты не заполнены.")
     if not start_raw or not end_raw:
