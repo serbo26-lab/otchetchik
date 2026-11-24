@@ -185,7 +185,8 @@ class TemplatesTab(BaseTab):
     def delete_template(self):
         if self.current_id and QMessageBox.question(self, DELETE_QUESTION, "Удалить шаблон?") == QMessageBox.Yes:
             try:
-                make_backup("before_delete_template")
+                if make_backup("before_delete_template") is None:
+                    raise RuntimeError("Не удалось создать резервную копию.")
                 db.execute("DELETE FROM templates WHERE id=?", (self.current_id,))
             except Exception as exc:
                 QMessageBox.warning(self, DELETE_CANCELLED, f"Не удалось сохранить резервную копию или удалить шаблон: {exc}")
