@@ -353,6 +353,40 @@ class WorkListTransferTests(unittest.TestCase):
         self.assertEqual(result.skipped, 2)
         self.assertEqual(len(db.load_report_bundle(self.report_id)["content"]), 2)
 
+    def test_second_section_failure_rolls_back_first_and_keeps_verified_status(self):
+        db.execute("UPDATE reports SET status='Проверен' WHERE id=?", (self.report_id,))
+        db.execute("""CREATE TRIGGER synthetic_import_failure
+            BEFORE INSERT ON report_repair_items
+            BEGIN SELECT RAISE(ABORT, 'synthetic import rollback'); END;""")
+        original = hashlib.sha256(self.source.read_bytes()).digest()
+        preview = read_preview(self.report_id)
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "synthetic import rollback"):
+            apply_selected(preview, {
+                "item-content": (CONTENT, "м²"),
+                "item-repair": (REPAIR, "шт."),
+            })
+        bundle = db.load_report_bundle(self.report_id)
+        self.assertFalse(bundle["content"])
+        self.assertFalse(bundle["repair"])
+        self.assertEqual(bundle["report"]["status"], "Проверен")
+        self.assertEqual(len(self._backups()), 1)
+        self.assertEqual(hashlib.sha256(self.source.read_bytes()).digest(), original)
+
+    def test_dialog_preserves_imported_and_invalid_row_tooltips(self):
+        apply_selected(read_preview(self.report_id), {"item-content": (CONTENT, "м²")})
+        dialog = AssistantWorkListDialog(self.report_id)
+        try:
+            self.assertFalse(dialog.choices[0].isEnabled())
+            self.assertFalse(dialog.choices[3].isEnabled())
+            self.assertIn("уже была перенесена", dialog.table.item(0, 1).toolTip())
+            self.assertIn("Стоимость не совпадает", dialog.table.item(3, 1).toolTip())
+            self.assertEqual(dialog.table.item(2, 2).text(), "")
+            self.assertFalse(dialog.apply_button.isEnabled())
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            self.application.processEvents()
+
     def test_dialog_requires_explicit_section_choice(self):
         dialog = AssistantWorkListDialog(self.report_id)
         try:
