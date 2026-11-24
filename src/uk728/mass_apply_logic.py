@@ -26,6 +26,7 @@ ACTION_TEXT = {
     "skip_manual": "Ручные правки защищены — пропуск",
     "skip_report": "Нет отчета — пропуск",
     "skip_many_reports": "Несколько отчетов за год — пропуск",
+    "skip_protected_report": "Размещенный или архивный отчет — пропуск",
     "skip_ambiguous": "Неоднозначная строка — пропуск",
     "skip_area": "Площадь не указана — пропуск",
 }
@@ -131,7 +132,7 @@ def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
         hid = int(h["id"])
         area = _decimal(h["total_area"])
         reports = conn.execute(
-            "SELECT id FROM reports WHERE house_id=? AND year=? ORDER BY id",
+            "SELECT * FROM reports WHERE house_id=? AND year=? ORDER BY id",
             (hid, inputs["year"]),
         ).fetchall()
         report_id = int(reports[0]["id"]) if len(reports) == 1 else None
@@ -139,6 +140,8 @@ def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
         existing = matches[0] if len(matches) == 1 else None
         if len(reports) > 1:
             action = "skip_many_reports"
+        elif report_id is not None and str(reports[0]["status"] or "") in ("Размещен", "Размещён", "Архив"):
+            action = "skip_protected_report"
         elif len(matches) > 1:
             action = "skip_ambiguous"
         elif existing and int(existing["is_manual"] or 0) and not inputs["override_manual"]:
@@ -162,6 +165,7 @@ def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
             "existing_state": _fingerprint(existing),
             "match_ids": [int(r["id"]) for r in matches],
             "report_ids": [int(r["id"]) for r in reports],
+            "report_state": [_fingerprint(r) for r in reports],
             "action": action,
             "unit": "", "price": 0.0, "quantity": 0.0, "cost": 0.0,
         })
@@ -282,6 +286,12 @@ def apply_plan(conn, preview: dict[str, Any]) -> dict[str, Any]:
                         (report_id,work_item_id,name,unit,unit_price,qty,cost,source,is_manual,position)
                         VALUES(?,?,?,?,?,?,?,?,?,?)""",
                         (rid, wid, work_name, unit, price, qty, cost, "массовое применение", 0, pos))
+            # Editing a checked report invalidates the previous check.
+            conn.execute(
+                "UPDATE reports SET status=CASE WHEN status='Проверен' "
+                "THEN 'Черновик' ELSE status END, updated_at=CURRENT_TIMESTAMP "
+                "WHERE id=?", (rid,)
+            )
         conn.commit()
         return preview["summary"]
     except Exception:
