@@ -35,6 +35,15 @@ class StorageRefactoringTests(unittest.TestCase):
         self.assertFalse(same_business_data(old, {"name": "", "cost": "invalid", "position": 1}, keys))
         self.assertFalse(same_business_data(old, {"name": "changed", "cost": 2, "position": 1}, keys))
 
+    def test_numeric_comparison_preserves_unordered_float_semantics(self):
+        for old, new in ((float("nan"), 1.0), (1.0, float("nan")),
+                         (float("inf"), float("inf")), (float("-inf"), float("-inf"))):
+            with self.subTest(old=old, new=new):
+                self.assertTrue(same_business_data({"cost": old}, {"cost": new}, ("cost",)))
+        self.assertFalse(same_business_data(
+            {"cost": float("inf")}, {"cost": 1.0}, ("cost",)
+        ))
+
     def test_report_reorder_does_not_mark_imported_rows_as_manual(self):
         for table in COLUMNS:
             with self.subTest(table=table), closing(db.connect()) as conn:

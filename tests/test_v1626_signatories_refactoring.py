@@ -35,10 +35,9 @@ class SignatoryRefactoringTests(unittest.TestCase):
         values = {"full_name": "Synthetic representative", "basis_kind": "Устав",
                   "valid_from": "01.01.2025"}
         ident = signatories.save_local_signatory(values, company_id=self.company)
+        duplicate = {**values, "full_name": values["full_name"].upper()}
         with self.assertRaisesRegex(ValueError, "уже есть"):
-            signatories.save_local_signatory(
-                {**values, "full_name": values["full_name"].upper()}, company_id=self.company,
-            )
+            signatories.save_local_signatory(duplicate, company_id=self.company)
         with self.assertRaisesRegex(ValueError, "другому"):
             signatories.save_local_signatory(values, house_id=self.house, existing_id=ident)
         updated = signatories.save_local_signatory(

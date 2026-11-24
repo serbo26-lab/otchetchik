@@ -197,6 +197,23 @@ def _normalize_houses(house_rows, org_ids):
     return houses, house_ids, missing_area
 
 
+def _validate_person_owner(key, owner_org, owner_house, seen, org_ids, house_ids):
+    if not key or key in seen or (bool(owner_org) == bool(owner_house)):
+        raise AssistantSourceError("Подписант с повторным ID или без корректного владельца.")
+    if (owner_org and owner_org not in org_ids) or (owner_house and owner_house not in house_ids):
+        raise AssistantSourceError("Подписант ссылается на отсутствующую УО или дом.")
+
+
+def _normalize_person_data(person, key):
+    try:
+        value = json.loads(person["data_json"])
+    except (TypeError, ValueError) as exc:
+        raise AssistantSourceError(f"Ошибочные реквизиты подписанта {key}: {exc}") from exc
+    if not isinstance(value, dict) or not str(value.get("full_name") or "").strip():
+        raise AssistantSourceError(f"Подписант {key} не содержит ФИО.")
+    return {field: str(value.get(field) or "").strip() for field in PERSON_FIELDS}
+
+
 def _normalize_people(people_rows, org_ids, house_ids):
     people: list[dict] = []
     seen: set[str] = set()
@@ -204,20 +221,11 @@ def _normalize_people(people_rows, org_ids, house_ids):
         key = str(person["id"] or "").strip()
         owner_org = str(person["organization_id"] or "").strip()
         owner_house = str(person["house_id"] or "").strip()
-        if not key or key in seen or (bool(owner_org) == bool(owner_house)):
-            raise AssistantSourceError("Подписант с повторным ID или без корректного владельца.")
-        if (owner_org and owner_org not in org_ids) or (owner_house and owner_house not in house_ids):
-            raise AssistantSourceError("Подписант ссылается на отсутствующую УО или дом.")
+        _validate_person_owner(key, owner_org, owner_house, seen, org_ids, house_ids)
         seen.add(key)
-        try:
-            value = json.loads(person["data_json"])
-        except (TypeError, ValueError) as exc:
-            raise AssistantSourceError(f"Ошибочные реквизиты подписанта {key}: {exc}") from exc
-        if not isinstance(value, dict) or not str(value.get("full_name") or "").strip():
-            raise AssistantSourceError(f"Подписант {key} не содержит ФИО.")
         people.append({
             "id": key, "organization_id": owner_org, "house_id": owner_house,
-            "data": {field: str(value.get(field) or "").strip() for field in PERSON_FIELDS},
+            "data": _normalize_person_data(person, key),
         })
     return people
 

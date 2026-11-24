@@ -1,6 +1,8 @@
 """Preserve report-row identities and provenance without database migration."""
 from __future__ import annotations
 
+from math import isnan
+
 COLUMNS = {
     "report_content_items": ("work_item_id", "name", "unit", "unit_price", "plan_qty", "plan_cost", "actual_qty", "actual_cost", "position"),
     "report_repair_items": ("work_item_id", "name", "basis", "cost", "volume", "act_details", "position"),
@@ -10,7 +12,9 @@ COLUMNS = {
 def _same_field(a, b):
     if isinstance(a, (int, float)):
         try:
-            return not abs(float(a or 0) - float(b or 0)) > 0.000001
+            difference = abs(float(a or 0) - float(b or 0))
+            # Preserve the original comparison for unordered float values.
+            return isnan(difference) or difference <= 0.000001
         except (TypeError, ValueError):
             return False
     return (a if a is not None else "") == (b if b is not None else "")

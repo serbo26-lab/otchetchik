@@ -272,6 +272,29 @@ class AssistantReadOnlySourceTests(unittest.TestCase):
         reports.company_filter.setCurrentIndex(reports.company_filter.findData(cid))
         self.assertGreaterEqual(reports.house_filter.findData(hid), 0)
 
+    def test_person_normalization_preserves_owner_and_data_validation(self):
+        row = {"id": " synthetic-person ", "organization_id": " synthetic-org ",
+               "house_id": None, "data_json": '{"full_name": " Synthetic name "}'}
+        organizations = {"synthetic-org"}
+        houses = {"synthetic-house"}
+        result = assistant_source._normalize_people([row], organizations, houses)
+        self.assertEqual(result[0]["id"], "synthetic-person")
+        self.assertEqual(result[0]["organization_id"], "synthetic-org")
+        self.assertEqual(result[0]["house_id"], "")
+        self.assertEqual(result[0]["data"]["full_name"], "Synthetic name")
+        cases = [
+            ([row, row], "повторным ID"),
+            ([{**row, "house_id": "synthetic-house"}], "корректного владельца"),
+            ([{**row, "organization_id": "missing"}], "отсутствующую УО"),
+            ([{**row, "data_json": "not-json"}], "Ошибочные реквизиты"),
+            ([{**row, "data_json": "[]"}], "не содержит ФИО"),
+            ([{**row, "data_json": '{"full_name": " "}'}], "не содержит ФИО"),
+        ]
+        for records, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(assistant_source.AssistantSourceError, message):
+                    assistant_source._normalize_people(records, organizations, houses)
+
     def test_read_source_with_live_wal_commits(self):
         writer = sqlite3.connect(self.source)
         self.addCleanup(writer.close)
