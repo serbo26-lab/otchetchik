@@ -103,8 +103,46 @@ class ReportWorkflowTests(TestCase):
         ):
             self.page.export("xlsx")
         confirm.assert_called_once()
-        exporter.assert_called_once_with(self.report_id)
+        exporter.assert_called_once_with(self.report_id, bundle=db.load_report_bundle(self.report_id))
         self.assertFalse(self.page._review_dirty)
+
+    def test_change_during_warning_confirmation_blocks_export(self):
+        self.page.run_review()
+
+        def change_and_confirm(*args):
+            db.execute("UPDATE reports SET notes=? WHERE id=?", ("Synthetic edit", self.report_id))
+            return QMessageBox.Yes
+
+        with (
+            patch.object(QMessageBox, "question", side_effect=change_and_confirm),
+            patch("src.uk728.reports_ui.export_xlsx") as exporter,
+        ):
+            self.page.export("xlsx")
+        exporter.assert_not_called()
+        self.assertTrue(self.page._review_dirty)
+
+    def test_all_formats_use_same_reviewed_snapshot(self):
+        self.page.run_review()
+        reviewed = db.load_report_bundle(self.report_id)
+        target = Path(self.tmp.name) / "synthetic.xlsx"
+
+        def first_export(report_id, *, bundle):
+            self.assertEqual(report_id, self.report_id)
+            self.assertEqual(bundle, reviewed)
+            db.execute("UPDATE reports SET notes=? WHERE id=?", ("Synthetic later edit", report_id))
+            return target
+
+        with (
+            patch.object(QMessageBox, "question", return_value=QMessageBox.Yes),
+            patch.object(QMessageBox, "exec", return_value=0),
+            patch("src.uk728.reports_ui.export_xlsx", side_effect=first_export) as xlsx,
+            patch("src.uk728.reports_ui.export_docx", return_value=target) as docx,
+            patch("src.uk728.reports_ui.export_pdf", return_value=target) as pdf,
+        ):
+            self.page.export("all")
+        for exporter in (xlsx, docx, pdf):
+            exporter.assert_called_once_with(self.report_id, bundle=reviewed)
+        self.assertNotEqual(db.load_report_bundle(self.report_id), reviewed)
 
     def test_financial_and_claim_row_ids_survive_repeated_autosave(self):
         before = db.load_report_bundle(self.report_id)
