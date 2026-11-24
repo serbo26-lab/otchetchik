@@ -8,6 +8,22 @@ from .db import load_report_bundle
 from .paths import export_dir, safe_filename
 from .utils import balance_text, format_date, is_full_year, money, to_float
 
+OWNER_PAYER_TYPE = "Собственники"
+REPORT_TITLE = "ОТЧЕТ"
+REPORT_SUBTITLE = "о деятельности по управлению многоквартирным домом"
+CONTENT_HEADING = "1. За отчетный период выполнены следующие работы (оказаны следующие услуги) по содержанию общего имущества собственников помещений в многоквартирном доме:"
+TOTAL_LABEL = "ИТОГО"
+NUMBER_LABEL = "N п/п"
+REPAIR_HEADING = "2. За отчетный период выполнены следующие работы по текущему ремонту общего имущества собственников помещений в многоквартирном доме:"
+MANAGEMENT_HEADING = "3. Стоимость услуг по управлению многоквартирным домом, оказанных за отчетный период:"
+CLAIMS_HEADING = "4. Сведения о претензионно-исковой работе:"
+FINANCIAL_HEADING = "5. Сведения о начислениях и поступлении средств за отчетный период:"
+OWNER_PAYMENTS_LABEL = "Платежи собственников помещений в многоквартирном доме"
+TENANT_PAYMENTS_LABEL = "Платежи нанимателей помещений в многоквартирном доме"
+PAYMENT_TYPE_LABEL = "Вид платежа"
+WORD_TABLE_STYLE = "Table Grid"
+COST_LABEL = "Стоимость"
+
 
 @contextmanager
 def _new_export_path(base: Path):
@@ -61,7 +77,7 @@ def _financial_rows(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
     for fin in bundle["financials"]:
         payer = fin.get("payer_type") or ""
-        if payer not in ("Собственники", "Наниматели"):
+        if payer not in (OWNER_PAYER_TYPE, "Наниматели"):
             raise ValueError(
                 "Невозможно сформировать форму 728/пр: "
                 f"неизвестный вид плательщика «{payer}»."
@@ -71,7 +87,7 @@ def _financial_rows(bundle: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         rows.append(fin)
     if not rows:
-        rows.append({"payer_type": "Собственники", "debt_start": 0, "accrued": 0, "paid": 0, "debt_end": 0})
+        rows.append({"payer_type": OWNER_PAYER_TYPE, "debt_start": 0, "accrued": 0, "paid": 0, "debt_end": 0})
     return rows
 
 
@@ -151,8 +167,8 @@ def export_xlsx(report_id: int) -> Path:
             r += 1
         ws.row_dimensions[start].height = 42
 
-    merge_text("ОТЧЕТ", 14, True)
-    merge_text("о деятельности по управлению многоквартирным домом", 12, True)
+    merge_text(REPORT_TITLE, 14, True)
+    merge_text(REPORT_SUBTITLE, 12, True)
     merge_text(f"по адресу: {house.get('address','')}", 10, False, 2)
     merge_text(f"за {report.get('year','____')} год", 10, True)
     line = _period_line(report)
@@ -167,7 +183,7 @@ def export_xlsx(report_id: int) -> Path:
     merge_text(f"Дата размещения отчета: {format_date(report.get('publish_date')) or '________________'}", 10)
     r += 1
 
-    section("1. За отчетный период выполнены следующие работы (оказаны следующие услуги) по содержанию общего имущества собственников помещений в многоквартирном доме:")
+    section(CONTENT_HEADING)
     content_data = []
     total_plan = 0.0
     total_actual = 0.0
@@ -177,11 +193,11 @@ def export_xlsx(report_id: int) -> Path:
         total_plan += plan_cost
         total_actual += actual_cost
         content_data.append([i, item.get("name", ""), item.get("unit", ""), money(item.get("unit_price")), money(item.get("plan_qty")), money(plan_cost), money(item.get("actual_qty")), money(actual_cost)])
-    content_data.append(["ИТОГО", "", "", "", "", money(total_plan), "", money(total_actual)])
-    table(["N п/п", "Наименование работы (услуги)", "Ед. изм.", "Цена единицы, руб.", "Кол-во по перечню", "Стоимость по перечню, руб.", "Выполнено, кол-во", "Стоимость выполнено, руб."], content_data, 8)
+    content_data.append([TOTAL_LABEL, "", "", "", "", money(total_plan), "", money(total_actual)])
+    table([NUMBER_LABEL, "Наименование работы (услуги)", "Ед. изм.", "Цена единицы, руб.", "Кол-во по перечню", "Стоимость по перечню, руб.", "Выполнено, кол-во", "Стоимость выполнено, руб."], content_data, 8)
     r += 1
 
-    section("2. За отчетный период выполнены следующие работы по текущему ремонту общего имущества собственников помещений в многоквартирном доме:")
+    section(REPAIR_HEADING)
     merge_text(f"Остаток (перерасход, сальдо) на 1 января отчетного периода: {balance_text(report.get('repair_start_balance'))}", 10)
     merge_text(f"Общий объем денежных средств, подлежащий внесению собственниками за текущий ремонт: {money(report.get('repair_accrual'))} руб.", 10)
     merge_text(f"Стоимость работ по текущему ремонту, выполненных за отчетный период: {money(report.get('repair_work_cost'))} руб.", 10)
@@ -191,30 +207,30 @@ def export_xlsx(report_id: int) -> Path:
     for i, item in enumerate(bundle["repair"], 1):
         total_repair += to_float(item.get("cost"))
         repair_data.append([i, item.get("name", ""), item.get("basis", ""), money(item.get("cost")), item.get("volume", ""), item.get("act_details", "")])
-    repair_data.append(["ИТОГО", "", "", money(total_repair), "", ""])
-    table(["N п/п", "Наименование работы", "Основание проведения", "Стоимость, руб.", "Объем выполненных работ", "Реквизиты акта или ссылка"], repair_data, 6)
+    repair_data.append([TOTAL_LABEL, "", "", money(total_repair), "", ""])
+    table([NUMBER_LABEL, "Наименование работы", "Основание проведения", "Стоимость, руб.", "Объем выполненных работ", "Реквизиты акта или ссылка"], repair_data, 6)
     r += 1
 
-    section("3. Стоимость услуг по управлению многоквартирным домом, оказанных за отчетный период:")
+    section(MANAGEMENT_HEADING)
     merge_text(f"{money(_management_cost(bundle))} руб.", 10, True)
     r += 1
 
-    section("4. Сведения о претензионно-исковой работе:")
+    section(CLAIMS_HEADING)
     claims = bundle["claims"] or {}
-    table(["N п/п", "Количество претензий", "Количество исковых заявлений / судебных приказов", "Сумма поступивших средств, руб."], [[1, claims.get("pretensions_count", 0), claims.get("lawsuits_count", 0), money(claims.get("recovered_amount", 0))]], 4)
+    table([NUMBER_LABEL, "Количество претензий", "Количество исковых заявлений / судебных приказов", "Сумма поступивших средств, руб."], [[1, claims.get("pretensions_count", 0), claims.get("lawsuits_count", 0), money(claims.get("recovered_amount", 0))]], 4)
     r += 1
 
-    section("5. Сведения о начислениях и поступлении средств за отчетный период:")
+    section(FINANCIAL_HEADING)
     fin_rows = _financial_rows(bundle)
     fin_data = []
     total = {"debt_start": 0.0, "accrued": 0.0, "paid": 0.0, "debt_end": 0.0}
     for i, fin in enumerate(fin_rows, 1):
-        name = "Платежи собственников помещений в многоквартирном доме" if fin.get("payer_type") == "Собственники" else "Платежи нанимателей помещений в многоквартирном доме"
+        name = OWNER_PAYMENTS_LABEL if fin.get("payer_type") == OWNER_PAYER_TYPE else TENANT_PAYMENTS_LABEL
         for key in total:
             total[key] += to_float(fin.get(key))
         fin_data.append([i, name, money(fin.get("debt_start")), money(fin.get("accrued")), money(fin.get("paid")), money(fin.get("debt_end"))])
-    fin_data.append(["ИТОГО", "", money(total["debt_start"]), money(total["accrued"]), money(total["paid"]), money(total["debt_end"])])
-    table(["N п/п", "Вид платежа", "Задолженность на начало периода, руб.", "Размер начисленных средств, руб.", "Размер поступивших средств, руб.", "Задолженность на 1 января следующего периода, руб."], fin_data, 6)
+    fin_data.append([TOTAL_LABEL, "", money(total["debt_start"]), money(total["accrued"]), money(total["paid"]), money(total["debt_end"])])
+    table([NUMBER_LABEL, PAYMENT_TYPE_LABEL, "Задолженность на начало периода, руб.", "Размер начисленных средств, руб.", "Размер поступивших средств, руб.", "Задолженность на 1 января следующего периода, руб."], fin_data, 6)
 
     for row in ws.iter_rows():
         for cell in row:
@@ -248,8 +264,8 @@ def export_docx(report_id: int) -> Path:
         para.alignment = WD_ALIGN_PARAGRAPH.CENTER if center else WD_ALIGN_PARAGRAPH.LEFT
         return para
 
-    p("ОТЧЕТ", True, True)
-    p("о деятельности по управлению многоквартирным домом", True, True)
+    p(REPORT_TITLE, True, True)
+    p(REPORT_SUBTITLE, True, True)
     p(f"по адресу: {house.get('address','')}", False, True)
     p(f"за {report.get('year','____')} год", True, True)
     line = _period_line(report)
@@ -263,10 +279,10 @@ def export_docx(report_id: int) -> Path:
     p(f"Общая площадь жилых и нежилых помещений: {money(house.get('total_area',0))} м²")
     p(f"Дата размещения отчета: {format_date(report.get('publish_date')) or '________________'}")
 
-    p("1. За отчетный период выполнены следующие работы (оказаны следующие услуги) по содержанию общего имущества собственников помещений в многоквартирном доме:", True)
+    p(CONTENT_HEADING, True)
     tbl = doc.add_table(rows=1, cols=8)
-    tbl.style = "Table Grid"
-    for i, h in enumerate(["N п/п", "Наименование работы (услуги)", "Ед. изм.", "Цена единицы, руб.", "Кол-во по перечню", "Стоимость по перечню, руб.", "Выполнено, кол-во", "Стоимость выполнено, руб."]):
+    tbl.style = WORD_TABLE_STYLE
+    for i, h in enumerate([NUMBER_LABEL, "Наименование работы (услуги)", "Ед. изм.", "Цена единицы, руб.", "Кол-во по перечню", "Стоимость по перечню, руб.", "Выполнено, кол-во", "Стоимость выполнено, руб."]):
         tbl.rows[0].cells[i].text = h
     total_plan = total_actual = 0.0
     for idx, item in enumerate(bundle["content"], 1):
@@ -279,18 +295,18 @@ def export_docx(report_id: int) -> Path:
         for i, v in enumerate(vals):
             row[i].text = str(v)
     row = tbl.add_row().cells
-    row[0].text = "ИТОГО"
+    row[0].text = TOTAL_LABEL
     row[5].text = money(total_plan)
     row[7].text = money(total_actual)
 
-    p("2. За отчетный период выполнены следующие работы по текущему ремонту общего имущества собственников помещений в многоквартирном доме:", True)
+    p(REPAIR_HEADING, True)
     p(f"Остаток (перерасход, сальдо) на 1 января отчетного периода: {balance_text(report.get('repair_start_balance'))}")
     p(f"Общий объем денежных средств, подлежащий внесению собственниками за текущий ремонт: {money(report.get('repair_accrual'))} руб.")
     p(f"Стоимость работ по текущему ремонту, выполненных за отчетный период: {money(report.get('repair_work_cost'))} руб.")
     p(f"Остаток (перерасход, сальдо) на 31 декабря отчетного периода: {balance_text(report.get('repair_end_balance'))}")
     tbl = doc.add_table(rows=1, cols=6)
-    tbl.style = "Table Grid"
-    for i, h in enumerate(["N п/п", "Наименование работы", "Основание проведения", "Стоимость, руб.", "Объем выполненных работ", "Реквизиты акта или ссылка"]):
+    tbl.style = WORD_TABLE_STYLE
+    for i, h in enumerate([NUMBER_LABEL, "Наименование работы", "Основание проведения", "Стоимость, руб.", "Объем выполненных работ", "Реквизиты акта или ссылка"]):
         tbl.rows[0].cells[i].text = h
     total_repair = 0.0
     for idx, item in enumerate(bundle["repair"], 1):
@@ -300,29 +316,29 @@ def export_docx(report_id: int) -> Path:
         for i, v in enumerate(vals):
             row[i].text = str(v)
     row = tbl.add_row().cells
-    row[0].text = "ИТОГО"
+    row[0].text = TOTAL_LABEL
     row[3].text = money(total_repair)
 
-    p("3. Стоимость услуг по управлению многоквартирным домом, оказанных за отчетный период:", True)
+    p(MANAGEMENT_HEADING, True)
     p(f"{money(_management_cost(bundle))} руб.")
 
-    p("4. Сведения о претензионно-исковой работе:", True)
+    p(CLAIMS_HEADING, True)
     claims = bundle["claims"] or {}
     tbl = doc.add_table(rows=2, cols=4)
-    tbl.style = "Table Grid"
-    for i, h in enumerate(["N п/п", "Количество претензий", "Количество исковых заявлений / судебных приказов", "Сумма поступивших средств, руб."]):
+    tbl.style = WORD_TABLE_STYLE
+    for i, h in enumerate([NUMBER_LABEL, "Количество претензий", "Количество исковых заявлений / судебных приказов", "Сумма поступивших средств, руб."]):
         tbl.rows[0].cells[i].text = h
     for i, v in enumerate([1, claims.get("pretensions_count", 0), claims.get("lawsuits_count", 0), money(claims.get("recovered_amount", 0))]):
         tbl.rows[1].cells[i].text = str(v)
 
-    p("5. Сведения о начислениях и поступлении средств за отчетный период:", True)
+    p(FINANCIAL_HEADING, True)
     tbl = doc.add_table(rows=1, cols=6)
-    tbl.style = "Table Grid"
-    for i, h in enumerate(["N п/п", "Вид платежа", "Задолженность на начало периода, руб.", "Размер начисленных средств, руб.", "Размер поступивших средств, руб.", "Задолженность на 1 января следующего периода, руб."]):
+    tbl.style = WORD_TABLE_STYLE
+    for i, h in enumerate([NUMBER_LABEL, PAYMENT_TYPE_LABEL, "Задолженность на начало периода, руб.", "Размер начисленных средств, руб.", "Размер поступивших средств, руб.", "Задолженность на 1 января следующего периода, руб."]):
         tbl.rows[0].cells[i].text = h
     total = {"debt_start": 0.0, "accrued": 0.0, "paid": 0.0, "debt_end": 0.0}
     for idx, fin in enumerate(_financial_rows(bundle), 1):
-        name = "Платежи собственников помещений в многоквартирном доме" if fin.get("payer_type") == "Собственники" else "Платежи нанимателей помещений в многоквартирном доме"
+        name = OWNER_PAYMENTS_LABEL if fin.get("payer_type") == OWNER_PAYER_TYPE else TENANT_PAYMENTS_LABEL
         for key in total:
             total[key] += to_float(fin.get(key))
         vals = [idx, name, money(fin.get("debt_start")), money(fin.get("accrued")), money(fin.get("paid")), money(fin.get("debt_end"))]
@@ -330,7 +346,7 @@ def export_docx(report_id: int) -> Path:
         for i, v in enumerate(vals):
             row[i].text = str(v)
     row = tbl.add_row().cells
-    row[0].text = "ИТОГО"
+    row[0].text = TOTAL_LABEL
     row[2].text = money(total["debt_start"])
     row[3].text = money(total["accrued"])
     row[4].text = money(total["paid"])
@@ -372,7 +388,7 @@ def export_pdf(report_id: int) -> Path:
 
     elems = []
     P = lambda txt, st=normal: Paragraph(str(txt).replace("\n", "<br/>"), st)
-    elems += [P("ОТЧЕТ", title), P("о деятельности по управлению многоквартирным домом", title), P(f"по адресу: {house.get('address','')}", title), P(f"за {report.get('year','____')} год", title)]
+    elems += [P(REPORT_TITLE, title), P(REPORT_SUBTITLE, title), P(f"по адресу: {house.get('address','')}", title), P(f"за {report.get('year','____')} год", title)]
     line = _period_line(report)
     if line:
         elems.append(P(line, title))
@@ -389,8 +405,8 @@ def export_pdf(report_id: int) -> Path:
         elems.append(table)
         elems.append(Spacer(1, 5))
 
-    elems.append(P("1. За отчетный период выполнены следующие работы (оказаны следующие услуги) по содержанию общего имущества собственников помещений в многоквартирном доме:", section))
-    data = [["N", "Наименование", "Ед.", "Цена", "Кол-во", "Стоимость", "Выполнено", "Стоимость"]]
+    elems.append(P(CONTENT_HEADING, section))
+    data = [["N", "Наименование", "Ед.", "Цена", "Кол-во", COST_LABEL, "Выполнено", COST_LABEL]]
     total_plan = total_actual = 0.0
     for idx, item in enumerate(bundle["content"], 1):
         plan_cost = to_float(item.get("plan_cost"))
@@ -398,38 +414,38 @@ def export_pdf(report_id: int) -> Path:
         total_plan += plan_cost
         total_actual += actual_cost
         data.append([idx, item.get("name", ""), item.get("unit", ""), money(item.get("unit_price")), money(item.get("plan_qty")), money(plan_cost), money(item.get("actual_qty")), money(actual_cost)])
-    data.append(["ИТОГО", "", "", "", "", money(total_plan), "", money(total_actual)])
+    data.append([TOTAL_LABEL, "", "", "", "", money(total_plan), "", money(total_actual)])
     add_table(data, [10*mm, 54*mm, 13*mm, 20*mm, 20*mm, 24*mm, 20*mm, 25*mm])
 
-    elems.append(P("2. За отчетный период выполнены следующие работы по текущему ремонту общего имущества собственников помещений в многоквартирном доме:", section))
+    elems.append(P(REPAIR_HEADING, section))
     elems.append(P(f"Остаток (перерасход, сальдо) на 1 января отчетного периода: {balance_text(report.get('repair_start_balance'))}"))
     elems.append(P(f"Общий объем денежных средств, подлежащий внесению собственниками за текущий ремонт: {money(report.get('repair_accrual'))} руб."))
     elems.append(P(f"Стоимость работ по текущему ремонту, выполненных за отчетный период: {money(report.get('repair_work_cost'))} руб."))
     elems.append(P(f"Остаток (перерасход, сальдо) на 31 декабря отчетного периода: {balance_text(report.get('repair_end_balance'))}"))
-    data = [["N", "Наименование", "Основание", "Стоимость", "Объем", "Акт/ссылка"]]
+    data = [["N", "Наименование", "Основание", COST_LABEL, "Объем", "Акт/ссылка"]]
     total_repair = 0.0
     for idx, item in enumerate(bundle["repair"], 1):
         total_repair += to_float(item.get("cost"))
         data.append([idx, item.get("name", ""), item.get("basis", ""), money(item.get("cost")), item.get("volume", ""), item.get("act_details", "")])
-    data.append(["ИТОГО", "", "", money(total_repair), "", ""])
+    data.append([TOTAL_LABEL, "", "", money(total_repair), "", ""])
     add_table(data, [10*mm, 48*mm, 34*mm, 24*mm, 28*mm, 42*mm])
 
-    elems.append(P("3. Стоимость услуг по управлению многоквартирным домом, оказанных за отчетный период:", section))
+    elems.append(P(MANAGEMENT_HEADING, section))
     elems.append(P(f"{money(_management_cost(bundle))} руб."))
 
-    elems.append(P("4. Сведения о претензионно-исковой работе:", section))
+    elems.append(P(CLAIMS_HEADING, section))
     claims = bundle["claims"] or {}
     add_table([["N", "Претензий", "Исков / судебных приказов", "Поступило, руб."], [1, claims.get("pretensions_count", 0), claims.get("lawsuits_count", 0), money(claims.get("recovered_amount", 0))]], [12*mm, 50*mm, 74*mm, 50*mm])
 
-    elems.append(P("5. Сведения о начислениях и поступлении средств за отчетный период:", section))
-    data = [["N", "Вид платежа", "Задолженность на начало", "Начислено", "Поступило", "Задолженность на 1 января следующего периода"]]
+    elems.append(P(FINANCIAL_HEADING, section))
+    data = [["N", PAYMENT_TYPE_LABEL, "Задолженность на начало", "Начислено", "Поступило", "Задолженность на 1 января следующего периода"]]
     total = {"debt_start": 0.0, "accrued": 0.0, "paid": 0.0, "debt_end": 0.0}
     for idx, fin in enumerate(_financial_rows(bundle), 1):
-        name = "Платежи собственников помещений в многоквартирном доме" if fin.get("payer_type") == "Собственники" else "Платежи нанимателей помещений в многоквартирном доме"
+        name = OWNER_PAYMENTS_LABEL if fin.get("payer_type") == OWNER_PAYER_TYPE else TENANT_PAYMENTS_LABEL
         for key in total:
             total[key] += to_float(fin.get(key))
         data.append([idx, name, money(fin.get("debt_start")), money(fin.get("accrued")), money(fin.get("paid")), money(fin.get("debt_end"))])
-    data.append(["ИТОГО", "", money(total["debt_start"]), money(total["accrued"]), money(total["paid"]), money(total["debt_end"])])
+    data.append([TOTAL_LABEL, "", money(total["debt_start"]), money(total["accrued"]), money(total["paid"]), money(total["debt_end"])])
     add_table(data, [10*mm, 62*mm, 30*mm, 28*mm, 28*mm, 28*mm])
     with _new_export_path(out_path) as target:
         doc.filename = str(target)
