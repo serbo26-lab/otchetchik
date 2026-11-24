@@ -108,15 +108,16 @@ class ReportsTab(BaseTab):
         self._review_dirty = True
         self._review_snapshot = None
         self._report_tab_index = 0
+        self._last_report_filters = None
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.timeout.connect(self._autosave_current_report)
         root = QHBoxLayout(self)
         splitter = QSplitter(); self.splitter = splitter; root.addWidget(splitter)
         left = QWidget(); left_l = QVBoxLayout(left)
-        self.company_filter = ClickComboBox(); self.company_filter.currentIndexChanged.connect(lambda _i: self.reload_houses_filter())
-        self.house_filter = ClickComboBox(); self.house_filter.currentIndexChanged.connect(self.refresh)
-        self.year_filter = SafeSpinBox(); self.year_filter.setRange(2000, 2100); self.year_filter.setValue(2026); self.year_filter.valueChanged.connect(self.refresh)
+        self.company_filter = ClickComboBox(); self.company_filter.currentIndexChanged.connect(self._on_company_filter_changed)
+        self.house_filter = ClickComboBox(); self.house_filter.currentIndexChanged.connect(self._on_report_filter_changed)
+        self.year_filter = SafeSpinBox(); self.year_filter.setRange(2000, 2100); self.year_filter.setValue(2026); self.year_filter.valueChanged.connect(self._on_report_filter_changed)
         context_card = ContentCard("1. Выберите УО, дом и отчетный год")
         choices = QFormLayout()
         choices.addRow(selectable_label("УО"), self.company_filter)
@@ -613,7 +614,51 @@ class ReportsTab(BaseTab):
             self.msg(f"Проверка не выполнена: {exc}")
             return None
 
+    def _current_report_filters(self):
+        return (self.company_filter.currentData(), self.house_filter.currentData(),
+                self.year_filter.value())
+
+    def _restore_report_filters(self):
+        if self._last_report_filters is None:
+            return
+        company_id, house_id, year = self._last_report_filters
+        for combo, ident in ((self.company_filter, company_id),
+                             (self.house_filter, house_id)):
+            blocked = combo.blockSignals(True)
+            try:
+                combo.setCurrentIndex(combo.findData(ident))
+                combo._update_selected_tooltip(combo.currentText())
+            finally:
+                combo.blockSignals(blocked)
+        blocked = self.year_filter.blockSignals(True)
+        try:
+            self.year_filter.setValue(year)
+        finally:
+            self.year_filter.blockSignals(blocked)
+
+    def _save_before_filter_change(self):
+        try:
+            self.flush_autosave()
+        except Exception as exc:
+            self._restore_report_filters()
+            win = self.window()
+            if hasattr(win, "set_save_status"):
+                win.set_save_status("error")
+            self.msg(f"Переход отменен: отчет не сохранен ({exc})")
+            return False
+        return True
+
+    def _on_company_filter_changed(self, *_args):
+        # The old house list is still intact until the previous report is saved.
+        if self._save_before_filter_change():
+            self.reload_houses_filter()
+
+    def _on_report_filter_changed(self, *_args):
+        if self._save_before_filter_change():
+            self.refresh()
+
     def reload_filters(self):
+        self.flush_autosave()
         fill_combo(self.company_filter, COMPANY_LIST_SQL, empty="Выберите организацию")
         # A single UO needs no extra selection; never silently choose
         # the first of several organizations.
@@ -679,6 +724,7 @@ class ReportsTab(BaseTab):
         # Before rebuilding the report list, persist the report still on screen.
         if self._dirty_report and self.current_id and not self._loading_report:
             self.flush_autosave()
+        self._last_report_filters = self._current_report_filters()
         target_id = self.current_id
         self.list.blockSignals(True)
         self.list.clear()
@@ -738,6 +784,10 @@ class ReportsTab(BaseTab):
         if dlg.exec() != QDialog.Accepted:
             return
         year, p_start, p_end, show_period = dlg.values()
+        # Do not change current_id or create a new record until the previous
+        # editor has been committed; the current year may remain unchanged.
+        if not self._save_before_filter_change():
+            return
         try:
             rid = db.create_report(int(cid), int(hid), int(year), p_start, p_end, show_period)
         except Exception as e:
