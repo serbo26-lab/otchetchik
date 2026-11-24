@@ -191,9 +191,11 @@ class MainWindow(QMainWindow):
 
     def notification_received(self, text: str):
         low = text.lower()
-        if "не удалось" in low and "сохран" in low:
+        if "сохран" not in low:
+            return
+        if any(word in low for word in ("не удалось", "не сохран", "не выполн", "отменен", "отменён")):
             self.set_save_status("error")
-        elif "сохран" in low and any(word in low for word in ("выполнено", "сохранен", "сохранён", "сохранена")):
+        elif any(word in low for word in ("выполнено", "сохранен", "сохранён", "сохранена")):
             self.set_save_status("saved")
 
     def _remember_company_context(self, page):
