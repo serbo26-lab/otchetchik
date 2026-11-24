@@ -20,6 +20,7 @@ from src.uk728 import db
 from src.uk728.app import MainWindow
 from src.uk728.exporters import (
     _management_cost, _period_line, export_docx, export_pdf, export_xlsx,
+    _content_rows, _repair_rows, _financial_table_rows,
 )
 from src.uk728.paths import db_path
 
@@ -252,6 +253,40 @@ class AcceptanceStageTests(unittest.TestCase):
         last = doc.tables[-1].rows[-1]
         self.assertEqual([cell.text for cell in last.cells][2:6],
                          ["85", "370", "245", "210"])
+
+    def test_xlsx_and_docx_use_identical_report_table_values(self):
+        workbook = load_workbook(export_xlsx(self.rid), read_only=True, data_only=True)
+        self.addCleanup(workbook.close)
+        xlsx_rows = list(workbook.active.iter_rows(values_only=True))
+        document = Document(export_docx(self.rid))
+        header_rows = [index for index, row in enumerate(xlsx_rows) if row[0] == "N п/п"]
+        self.assertEqual(len(header_rows), 4)
+        for table, start in zip(document.tables, header_rows):
+            columns = len(table.columns)
+            expected = [
+                ["" if value is None else str(value) for value in row[:columns]]
+                for row in xlsx_rows[start:start + len(table.rows)]
+            ]
+            actual = [[cell.text for cell in row.cells] for row in table.rows]
+            self.assertEqual(actual, expected)
+
+    def test_shared_table_rows_preserve_empty_sections_and_financial_filter(self):
+        bundle = {"content": [], "repair": [], "financials": [
+            {"payer_type": "Наниматели", "debt_start": 0, "accrued": 0,
+             "paid": 0, "debt_end": 0, "notes": ""},
+        ]}
+        self.assertEqual(_content_rows(bundle), [["ИТОГО", "", "", "", "", "0", "", "0"]])
+        self.assertEqual(_repair_rows(bundle), [["ИТОГО", "", "", "0", "", ""]])
+        self.assertEqual(_financial_table_rows(bundle), [
+            [1, "Платежи собственников помещений в многоквартирном доме", "0", "0", "0", "0"],
+            ["ИТОГО", "", "0", "0", "0", "0"],
+        ])
+        bundle["financials"][0]["notes"] = "Synthetic note"
+        self.assertEqual(_financial_table_rows(bundle)[0][1],
+                         "Платежи нанимателей помещений в многоквартирном доме")
+        bundle["financials"][0]["payer_type"] = "Synthetic unknown payer"
+        with self.assertRaisesRegex(ValueError, "неизвестный вид плательщика"):
+            _financial_table_rows(bundle)
 
     def test_saved_data_directory_stays_beside_application(self):
         actual = db_path()
