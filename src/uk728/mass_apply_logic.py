@@ -223,7 +223,7 @@ def _calculate_row(area, mode, rate, total, qty, months, split_cost):
         unit = "усл."
     if not all(isfinite(float(value)) for value in (cost, price, line_qty)):
         raise ValueError("Результат расчета превышает допустимый числовой диапазон.")
-    return dict(cost=float(cost), price=float(price), quantity=float(line_qty), unit=unit)
+    return {"cost": float(cost), "price": float(price), "quantity": float(line_qty), "unit": unit}
 
 
 def _calculate_rows(inputs, rows):
