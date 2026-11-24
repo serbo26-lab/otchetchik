@@ -30,6 +30,33 @@ def sync_report_rows(conn, table, report_id, rows):
     keys = COLUMNS[table]
     existing = {int(r["id"]): r for r in conn.execute(
         f"SELECT * FROM {table} WHERE report_id=?", (report_id,)).fetchall()}
+    # An empty new placeholder may be ignored, but clearing a saved row's
+    # name must never turn an autosave into an implicit deletion. Also reject
+    # new unnamed rows containing user-entered data instead of dropping it.
+    rows = list(rows)
+    for row_index, payload in enumerate(rows):
+        if str(payload.get("name") or "").strip():
+            continue
+        has_data = (
+            bool(payload.get("id") or payload.get("work_item_id"))
+            or any(str(payload.get(k) or "").strip()
+                   for k in ("basis", "volume", "act_details"))
+            or str(payload.get("unit") or "").strip() not in ("", "усл.")
+            or any(payload.get(k) not in (None, "", 0, "0", "0.0")
+                   for k in ("unit_price", "plan_qty", "plan_cost",
+                             "actual_qty", "actual_cost", "qty", "cost"))
+        )
+        if has_data:
+            section = {
+                "report_content_items": "Содержание",
+                "report_repair_items": "Текущий ремонт",
+                "report_management_items": "Управление",
+            }[table]
+            raise ValueError(
+                f"{section}, строка {row_index + 1}: заполните наименование "
+                "или явно удалите строку. Отчет не сохранен."
+            )
+
     kept, inserted = set(), []
     for row_index, payload in enumerate(rows):
         if not str(payload.get("name") or "").strip():
