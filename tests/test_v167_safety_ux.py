@@ -73,7 +73,7 @@ class SafetyUxTests(unittest.TestCase):
         page.company_filter.setCurrentIndex(page.company_filter.findData(cid))
         page.house_filter.setCurrentIndex(page.house_filter.findData(hid))
         with patch("src.uk728.app.QMessageBox.question", return_value=QMessageBox.Yes), \
-             patch("src.uk728.app.make_backup", side_effect=OSError("disk full")), \
+             patch("src.uk728.reports_ui.make_backup", side_effect=OSError("disk full")), \
              patch("src.uk728.app.QMessageBox.warning"):
             page.delete_report()
         self.assertIsNotNone(db.row("SELECT id FROM reports WHERE id=?", (rid,)))
