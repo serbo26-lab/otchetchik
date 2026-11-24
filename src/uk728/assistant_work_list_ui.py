@@ -65,38 +65,7 @@ class AssistantWorkListDialog(QDialog):
         for index, width in ((0, 95), (2, 90), (3, 90), (4, 135), (5, 125), (6, 220)):
             self.table.setColumnWidth(index, width)
         self.choices = []
-        missing_units = 0
-        invalid = 0
-        imported = 0
-        for row, candidate in enumerate(self.preview.items):
-            if not candidate.unit:
-                missing_units += 1
-            if candidate.problem:
-                invalid += 1
-            if candidate.already_imported:
-                imported += 1
-            fields = [
-                candidate.code, candidate.name, candidate.unit,
-                "" if candidate.unit_price is None else str(candidate.unit_price),
-                "" if candidate.plan_qty is None else str(candidate.plan_qty),
-                "" if candidate.plan_cost is None else str(candidate.plan_cost),
-            ]
-            for column, value in enumerate(fields):
-                cell = QTableWidgetItem(value)
-                if column != 2:
-                    cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                if candidate.problem:
-                    cell.setToolTip(candidate.problem)
-                if candidate.already_imported:
-                    cell.setToolTip("Эта запись уже была перенесена в отчёт.")
-                self.table.setItem(row, column, cell)
-            choices = QComboBox()
-            choices.addItem("Пропустить", SKIP)
-            choices.addItem("1. Содержание", CONTENT)
-            choices.addItem("2. Текущий ремонт (черновик)", REPAIR)
-            choices.setEnabled(not (candidate.problem or candidate.already_imported))
-            self.table.setCellWidget(row, 6, choices)
-            self.choices.append(choices)
+        missing_units, invalid, imported = self._fill_preview_table()
         root.addWidget(self.table, 1)
         count_message = (
             f"Уже перенесено: {imported}; с ошибками исходных показателей: "
@@ -124,6 +93,44 @@ class AssistantWorkListDialog(QDialog):
         for choice in self.choices:
             choice.currentIndexChanged.connect(self._update_apply_button)
         self._update_apply_button()
+
+    def _fill_preview_table(self):
+        missing_units = 0
+        invalid = 0
+        imported = 0
+        for row, candidate in enumerate(self.preview.items):
+            if not candidate.unit:
+                missing_units += 1
+            if candidate.problem:
+                invalid += 1
+            if candidate.already_imported:
+                imported += 1
+            self._add_candidate_row(row, candidate)
+        return missing_units, invalid, imported
+
+    def _add_candidate_row(self, row, candidate):
+        fields = [
+            candidate.code, candidate.name, candidate.unit,
+            "" if candidate.unit_price is None else str(candidate.unit_price),
+            "" if candidate.plan_qty is None else str(candidate.plan_qty),
+            "" if candidate.plan_cost is None else str(candidate.plan_cost),
+        ]
+        for column, value in enumerate(fields):
+            cell = QTableWidgetItem(value)
+            if column != 2:
+                cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            if candidate.problem:
+                cell.setToolTip(candidate.problem)
+            if candidate.already_imported:
+                cell.setToolTip("Эта запись уже была перенесена в отчёт.")
+            self.table.setItem(row, column, cell)
+        choices = QComboBox()
+        choices.addItem("Пропустить", SKIP)
+        choices.addItem("1. Содержание", CONTENT)
+        choices.addItem("2. Текущий ремонт (черновик)", REPAIR)
+        choices.setEnabled(not (candidate.problem or candidate.already_imported))
+        self.table.setCellWidget(row, 6, choices)
+        self.choices.append(choices)
 
     def _update_apply_button(self, *_args) -> None:
         self.apply_button.setEnabled(
