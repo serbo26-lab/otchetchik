@@ -133,7 +133,7 @@ def _split_cents(total: Decimal, areas: list[Decimal]) -> list[Decimal]:
     return [Decimal(value) * CENT for value in allocated]
 
 
-def _choose_action(inputs, area, reports, report_id, matches, existing):
+def _choose_action(inputs, reports, report_id, matches, existing):
     if len(reports) > 1:
         action = "skip_many_reports"
     elif report_id is not None and str(reports[0]["status"] or "") in ("Размещен", "Размещён", "Архив"):
@@ -152,8 +152,12 @@ def _choose_action(inputs, area, reports, report_id, matches, existing):
         action = "create"
     else:
         action = "insert"
-    if inputs["mode"] in {"area", "monthly", "split"} and area <= 0:
-        action = "skip_area" if action in {"insert", "update", "create"} else action
+    return action
+
+
+def _check_area_action(mode, area, action):
+    if mode in {"area", "monthly", "split"} and area <= 0:
+        return "skip_area" if action in {"insert", "update", "create"} else action
     return action
 
 
@@ -171,7 +175,8 @@ def _preview_rows(conn, inputs, work, table, houses):
         report_id = int(reports[0]["id"]) if len(reports) == 1 else None
         matches = _existing_rows(conn, table, report_id, inputs["work_id"], work["name"]) if report_id else []
         existing = matches[0] if len(matches) == 1 else None
-        action = _choose_action(inputs, area, reports, report_id, matches, existing)
+        action = _choose_action(inputs, reports, report_id, matches, existing)
+        action = _check_area_action(inputs["mode"], area, action)
         rows.append({
             "house_id": hid, "address": str(h["address"] or ""), "area": str(area),
             "house_state": _fingerprint(h),
@@ -184,6 +189,37 @@ def _preview_rows(conn, inputs, work, table, houses):
             "unit": "", "price": 0.0, "quantity": 0.0, "cost": 0.0,
         })
     return rows
+
+
+def _calculate_row(row, area, mode, rate, total, qty, months, split_cost):
+    if mode == "monthly":
+        line_qty = area
+        price = rate * months
+        cost = price * line_qty
+        unit = "м²"
+    elif mode == "area":
+        line_qty = area
+        price = rate
+        cost = price * line_qty
+        unit = "м²"
+    elif mode == "fixed":
+        line_qty = Decimal(1)
+        price = total
+        cost = total
+        unit = "усл."
+    elif mode == "split":
+        line_qty = area
+        cost = split_cost
+        price = cost / line_qty
+        unit = "м²"
+    else:
+        line_qty = qty
+        price = rate
+        cost = price * line_qty
+        unit = "усл."
+    if not all(isfinite(float(value)) for value in (cost, price, line_qty)):
+        raise ValueError("Результат расчета превышает допустимый числовой диапазон.")
+    row.update(cost=float(cost), price=float(price), quantity=float(line_qty), unit=unit)
 
 
 def _calculate_rows(inputs, rows):
@@ -199,34 +235,8 @@ def _calculate_rows(inputs, rows):
     )
     for idx, row in enumerate(actionable):
         area = _decimal(row["area"])
-        if mode == "monthly":
-            line_qty = area
-            price = rate * months
-            cost = price * line_qty
-            unit = "м²"
-        elif mode == "area":
-            line_qty = area
-            price = rate
-            cost = price * line_qty
-            unit = "м²"
-        elif mode == "fixed":
-            line_qty = Decimal(1)
-            price = total
-            cost = total
-            unit = "усл."
-        elif mode == "split":
-            line_qty = area
-            cost = split_costs[idx]
-            price = cost / line_qty
-            unit = "м²"
-        else:
-            line_qty = qty
-            price = rate
-            cost = price * line_qty
-            unit = "усл."
-        if not all(isfinite(float(value)) for value in (cost, price, line_qty)):
-            raise ValueError("Результат расчета превышает допустимый числовой диапазон.")
-        row.update(cost=float(cost), price=float(price), quantity=float(line_qty), unit=unit)
+        split_cost = split_costs[idx] if mode == "split" else None
+        _calculate_row(row, area, mode, rate, total, qty, months, split_cost)
     return actionable
 
 
@@ -288,7 +298,7 @@ def _write_content(conn, row, rid, wid, work_name):
 
 def _write_repair(conn, row, rid, wid, work_name):
     action = row["action"]
-    cost, price, qty, unit = (row["cost"], row["price"], row["quantity"], row["unit"])
+    cost, qty, unit = (row["cost"], row["quantity"], row["unit"])
     existing_id = row["existing_id"]
     volume = f"{qty:g} {unit}" if qty else unit
     if action == "update":
