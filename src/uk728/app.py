@@ -4,11 +4,11 @@ import sys
 import traceback
 from datetime import datetime
 from pathlib import Path
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer, QEvent, QUrl, QSettings
-from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QKeySequence
+from PySide6.QtCore import Qt, QTimer, QUrl, QSettings
+from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QStackedWidget,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -32,8 +31,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QStyledItemDelegate,
-    QSpinBox,
     QSplitter,
     QTabWidget,
     QTableWidget,
