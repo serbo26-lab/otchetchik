@@ -332,6 +332,27 @@ class WorkListTransferTests(unittest.TestCase):
         preview = read_preview(self.report_id)
         self.assertEqual(preview.year, 2025)
 
+    def test_distinct_source_ids_with_same_name_are_not_duplicates(self):
+        with sqlite3.connect(self.source) as conn:
+            conn.execute(
+                "UPDATE work_list_items SET work_name=(SELECT work_name "
+                "FROM work_list_items WHERE id='item-content') "
+                "WHERE id='item-unknown-unit'"
+            )
+        first = read_preview(self.report_id)
+        result = apply_selected(first, {"item-content": (CONTENT, "м²")})
+        self.assertEqual(result.added_content, 1)
+        second = read_preview(self.report_id)
+        result = apply_selected(second, {"item-unknown-unit": (CONTENT, "шт.")})
+        self.assertEqual(result.added_content, 1)
+        retry = read_preview(self.report_id)
+        result = apply_selected(retry, {
+            "item-content": (CONTENT, "м²"),
+            "item-unknown-unit": (CONTENT, "шт."),
+        })
+        self.assertEqual(result.skipped, 2)
+        self.assertEqual(len(db.load_report_bundle(self.report_id)["content"]), 2)
+
     def test_dialog_requires_explicit_section_choice(self):
         dialog = AssistantWorkListDialog(self.report_id)
         try:

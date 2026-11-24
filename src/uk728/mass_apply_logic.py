@@ -5,7 +5,9 @@ The entire plan is rebuilt inside BEGIN IMMEDIATE before any changes are made.
 """
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation
+from fractions import Fraction
+from math import isfinite
 from typing import Any
 
 from . import db
@@ -82,12 +84,18 @@ def validate_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
     if mode == "quantity":
         result["quantity"] = str(amount(inputs.get("quantity"), "Количество", strictly_positive=True))
     if mode in {"fixed", "split"}:
-        result["total"] = str(amount(inputs.get("total"), "Сумма", strictly_positive=True))
+        total = amount(inputs.get("total"), "Сумма", strictly_positive=True)
+        if mode == "split" and total != total.quantize(CENT):
+            raise ValueError("Распределяемая сумма должна быть указана с точностью до копейки.")
+        result["total"] = str(total)
     return result
 
 
 def _decimal(value: Any) -> Decimal:
-    return Decimal(str(value if value is not None else 0))
+    try:
+        return Decimal(str(value if value is not None else 0))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("Некорректный числовой показатель в базе.") from exc
 
 
 def _fingerprint(row):
@@ -105,6 +113,22 @@ def _existing_rows(conn, table: str, rid: int, wid: int, name: str):
             ORDER BY id""", (rid, wid, name)
     ).fetchall()
     return matches
+
+
+def _split_cents(total: Decimal, areas: list[Decimal]) -> list[Decimal]:
+    """Allocate exact integer kopecks by largest remainder, with stable ties."""
+    weights = [Fraction(area) for area in areas]
+    denominator = sum(weights)
+    if not weights or denominator <= 0 or any(weight <= 0 for weight in weights):
+        raise ValueError("Для распределения необходимы положительные площади.")
+    cents = int(total / CENT)
+    exact = [cents * weight / denominator for weight in weights]
+    allocated = [share.numerator // share.denominator for share in exact]
+    remaining = cents - sum(allocated)
+    order = sorted(range(len(weights)), key=lambda i: (-(exact[i] - allocated[i]), i))
+    for index in order[:remaining]:
+        allocated[index] += 1
+    return [Decimal(value) * CENT for value in allocated]
 
 
 def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
@@ -131,6 +155,8 @@ def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
     for h in houses:
         hid = int(h["id"])
         area = _decimal(h["total_area"])
+        if not area.is_finite() or not isfinite(float(area)):
+            raise ValueError("Некорректная площадь выбранного дома.")
         reports = conn.execute(
             "SELECT * FROM reports WHERE house_id=? AND year=? ORDER BY id",
             (hid, inputs["year"]),
@@ -175,10 +201,10 @@ def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
     total = _decimal(inputs["total"] or 0)
     qty = _decimal(inputs["quantity"] or 0)
     months = int(inputs["months"])
-    total_area = sum((_decimal(r["area"]) for r in actionable), Decimal(0))
-    if mode == "split" and actionable and total_area <= 0:
-        raise ValueError("Для распределения суммы необходима положительная площадь выбранных домов.")
-    accumulated = Decimal(0)
+    split_costs = (
+        _split_cents(total, [_decimal(r["area"]) for r in actionable])
+        if mode == "split" and actionable else []
+    )
     for idx, row in enumerate(actionable):
         area = _decimal(row["area"])
         if mode == "monthly":
@@ -198,9 +224,7 @@ def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
             unit = "усл."
         elif mode == "split":
             line_qty = area
-            cost = (total - accumulated if idx == len(actionable) - 1
-                    else (total * area / total_area).quantize(CENT, rounding=ROUND_HALF_UP))
-            accumulated += cost
+            cost = split_costs[idx]
             price = cost / line_qty
             unit = "м²"
         else:
@@ -208,6 +232,8 @@ def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
             price = rate
             cost = price * line_qty
             unit = "усл."
+        if not all(isfinite(float(value)) for value in (cost, price, line_qty)):
+            raise ValueError("Результат расчета превышает допустимый числовой диапазон.")
         row.update(cost=float(cost), price=float(price), quantity=float(line_qty), unit=unit)
     summary = {
         "insert": sum(r["action"] in ("insert", "create") for r in rows),

@@ -57,7 +57,10 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
             warnings.append(f"Не заполнены сведения: {description}.")
     if not str(report.get("publish_date") or "").strip():
         warnings.append("Не заполнена дата размещения отчёта.")
-    year = int(report.get("year") or 0)
+    try:
+        year = int(report.get("year") or 0)
+    except (ValueError, TypeError, OverflowError):
+        year = 0
     if not 2000 <= year <= 2100:
         errors.append("Некорректный отчетный год.")
 
@@ -70,6 +73,10 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
         errors.append("Неверный формат даты окончания управления.")
     if start and end and start > end:
         errors.append("Период управления: дата начала позже даты окончания.")
+    if 2000 <= year <= 2100 and any(
+        boundary is not None and boundary.year != year for boundary in (start, end)
+    ):
+        errors.append("Даты периода управления в отчете должны относиться к отчетному году.")
     if bool(report.get("show_period_note")) and (not start or not end):
         errors.append("Включено отображение периода управления, но его даты не заполнены.")
     if not start_raw or not end_raw:
@@ -77,6 +84,43 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
 
     if report.get("publish_date") and not _date(report["publish_date"]):
         errors.append("Неверный формат даты размещения отчета.")
+
+    previous = bundle.get("previous_report") or {}
+    if previous:
+        previous_end = _date(previous.get("period_end"))
+        if (
+            not start or not previous_end or (start - previous_end).days != 1
+            or previous.get("status") not in ("Проверен", "Размещен", "Размещён")
+            or previous.get("company_id") != report.get("company_id")
+        ):
+            warnings.append(
+                "Предыдущий отчет не проверен, относится к другой УО "
+                "или его период не примыкает к текущему. "
+                "Сверьте начальные остатки и задолженность с учетными данными."
+            )
+
+    numeric_groups = (
+        ("Площадь", [house], ("total_area",)),
+        ("Общие сведения", [report], ("management_cost", "repair_start_balance",
+          "repair_accrual", "repair_work_cost", "repair_end_balance")),
+        ("Содержание", bundle.get("content") or [],
+         ("unit_price", "plan_qty", "plan_cost", "actual_qty", "actual_cost")),
+        ("Текущий ремонт", bundle.get("repair") or [], ("cost",)),
+        ("Управление", bundle.get("management") or [], ("unit_price", "qty", "cost")),
+        ("Начисления", bundle.get("financials") or [], ("debt_start", "accrued", "paid", "debt_end")),
+        ("Претензионная работа", [bundle.get("claims") or {}],
+         ("pretensions_count", "lawsuits_count", "recovered_amount")),
+    )
+    for section, entries, fields in numeric_groups:
+        for index, item in enumerate(entries, 1):
+            for field in fields:
+                try:
+                    valid = isfinite(float(item.get(field) or 0))
+                except (ValueError, TypeError, OverflowError):
+                    valid = False
+                if not valid:
+                    errors.append(f"{section}: строка {index} содержит некорректное число.")
+                    break
 
     counts = {}
     for section, key in (
@@ -126,8 +170,6 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
         )
 
     management_total = _number(report.get("management_cost"))
-    if counts["management"] and not isfinite(management_total):
-        errors.append("В разделе 3 указана некорректная итоговая сумма.")
     if counts["management"]:
         inner_total = sum(_number(row.get("cost")) for row in bundle["management"])
         if abs(inner_total - management_total) > 0.01:

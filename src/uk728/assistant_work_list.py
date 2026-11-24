@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from contextlib import closing
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, DecimalException, InvalidOperation
+from math import isfinite
 import hashlib
 import json
 from pathlib import Path
@@ -71,7 +72,7 @@ def _parse_amount(raw: object, label: str) -> Decimal:
         result = Decimal(value)
     except (InvalidOperation, ValueError):
         raise WorkListImportError(f"Некорректное число в графе «{label}».") from None
-    if not result.is_finite() or result < 0:
+    if not result.is_finite() or result < 0 or not isfinite(float(result)):
         raise WorkListImportError(f"Некорректное число в графе «{label}».")
     return result
 
@@ -194,12 +195,16 @@ def _candidate(item: dict, already: bool) -> Candidate:
         count = _parse_amount(item.get("quantity"), "Количество")
         cost = _parse_amount(item.get("cost"), "Стоимость")
         qty = volume * count
+        if not isfinite(float(qty)) or not isfinite(float(price * qty)):
+            raise WorkListImportError("Результат расчёта превышает допустимый числовой диапазон.")
         # In Assistant cost = price * volume * quantity. The official
         # content form has just price * amount, so multiply its two factors.
         if abs(price * qty - cost) > Decimal("0.02"):
             raise WorkListImportError("Стоимость не совпадает с ценой × объёмом × количеством.")
     except WorkListImportError as exc:
         problem = str(exc)
+    except DecimalException:
+        problem = "Результат расчёта превышает допустимый числовой диапазон."
     return Candidate(
         item_id=str(item["id"]), code=str(item.get("work_code") or ""),
         name=name, unit=unit, unit_price=price,
@@ -219,7 +224,7 @@ def read_preview(report_id: int) -> Preview:
                 "Дом не связан с ГИС ЖКХ Ассистентом. Выберите связанный дом."
             )
         year = int(report["year"])
-        if str(report["status"] or "") in ("Размещен", "Архив"):
+        if str(report["status"] or "") in ("Размещен", "Размещён", "Архив"):
             raise WorkListImportError(
                 "Перечень нельзя импортировать в размещённый или архивный отчёт. "
                 "Используйте черновик для изменения данных."
@@ -299,7 +304,7 @@ def apply_selected(preview: Preview, selections: dict[str, tuple[str, str]]) -> 
             "SELECT assistant_source_id FROM houses WHERE id=?", (report["house_id"],)
         ).fetchone()
         if (before != preview.report_digest or int(report["year"]) != preview.year
-                or str(report["status"] or "") in ("Размещен", "Архив")
+                or str(report["status"] or "") in ("Размещен", "Размещён", "Архив")
                 or not house or house["assistant_source_id"] != preview.house_source_id):
             raise WorkListImportError(
                 "Отчёт изменился после предварительного просмотра. "
@@ -314,7 +319,8 @@ def apply_selected(preview: Preview, selections: dict[str, tuple[str, str]]) -> 
             ).fetchall()
             current[section] = (
                 {str(r["source"]) for r in rows},
-                {str(r["name"] or "").strip().casefold() for r in rows},
+                {str(r["name"] or "").strip().casefold() for r in rows
+                 if not str(r["source"] or "").startswith(SOURCE_PREFIX)},
             )
         existing_sources = current[CONTENT][0] | current[REPAIR][0]
         selected = []
@@ -327,7 +333,8 @@ def apply_selected(preview: Preview, selections: dict[str, tuple[str, str]]) -> 
                 continue
             selected.append((candidate, section, unit, marker))
             existing_sources.add(marker)
-            names.add(candidate.name.casefold())
+            # Different source IDs may legitimately have the same name.
+            # Preserve the conservative name check only for local rows.
     if not selected:
         return ImportResult(skipped=skipped)
 
