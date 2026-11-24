@@ -29,12 +29,18 @@ def _number(value: Any) -> float:
         return 0.0
 
 
-def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
-    """Return {errors,warnings,counts,report_id} from persisted report data."""
-    report = bundle.get("report") or {}
-    company = bundle.get("company") or {}
-    house = bundle.get("house") or {}
-    errors, warnings = [], []
+def _valid_numbers(item, fields):
+    for field in fields:
+        try:
+            valid = isfinite(float(item.get(field) or 0))
+        except (ValueError, TypeError, OverflowError):
+            valid = False
+        if not valid:
+            return False
+    return True
+
+
+def _check_identity(report, company, house, errors, warnings):
     rid = report.get("id")
     if not rid:
         errors.append("Отчет не выбран или не найден.")
@@ -57,6 +63,9 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
             warnings.append(f"Не заполнены сведения: {description}.")
     if not str(report.get("publish_date") or "").strip():
         warnings.append("Не заполнена дата размещения отчёта.")
+
+
+def _check_period(report, errors, warnings):
     try:
         year = int(report.get("year") or 0)
     except (ValueError, TypeError, OverflowError):
@@ -85,6 +94,10 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
     if report.get("publish_date") and not _date(report["publish_date"]):
         errors.append("Неверный формат даты размещения отчета.")
 
+    return year, start
+
+
+def _check_previous(bundle, report, start, warnings):
     previous = bundle.get("previous_report") or {}
     if previous:
         previous_end = _date(previous.get("period_end"))
@@ -99,6 +112,8 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
                 "Сверьте начальные остатки и задолженность с учетными данными."
             )
 
+
+def _check_numbers(bundle, report, house, errors):
     numeric_groups = (
         ("Площадь", [house], ("total_area",)),
         ("Общие сведения", [report], ("management_cost", "repair_start_balance",
@@ -113,15 +128,30 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
     )
     for section, entries, fields in numeric_groups:
         for index, item in enumerate(entries, 1):
-            for field in fields:
-                try:
-                    valid = isfinite(float(item.get(field) or 0))
-                except (ValueError, TypeError, OverflowError):
-                    valid = False
-                if not valid:
-                    errors.append(f"{section}: строка {index} содержит некорректное число.")
-                    break
+            if not _valid_numbers(item, fields):
+                errors.append(f"{section}: строка {index} содержит некорректное число.")
 
+
+def _check_section_rows(section, key, entries, errors):
+    for index, item in enumerate(entries, 1):
+        if key == "financials" and item.get("payer_type") not in ("Собственники", "Наниматели"):
+            errors.append(
+                f"Начисления: строка {index} имеет неизвестный вид плательщика."
+            )
+        if key in ("content", "repair", "management") and not str(item.get("name") or "").strip():
+            errors.append(f"{section}: строка {index} не имеет наименования.")
+        if (key == "repair" and str(item.get("source") or "").startswith("assistant-work-list:")
+                and (not str(item.get("basis") or "").strip()
+                     or not str(item.get("volume") or "").strip()
+                     or _number(item.get("cost")) <= 0)):
+            errors.append(
+                f"Текущий ремонт: строка {index} перенесена из перечня "
+                "как черновик. Укажите подтверждённые основание, объём и "
+                "стоимость выполненной работы либо удалите строку."
+            )
+
+
+def _check_sections(bundle, errors, warnings):
     counts = {}
     for section, key in (
         ("Содержание", "content"),
@@ -135,23 +165,11 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
             warnings.append("В разделе 1 «Содержание» нет работ или услуг.")
         if key == "financials" and not entries:
             warnings.append("Не заполнены строки начислений и поступлений.")
-        for index, item in enumerate(entries, 1):
-            if key == "financials" and item.get("payer_type") not in ("Собственники", "Наниматели"):
-                errors.append(
-                    f"Начисления: строка {index} имеет неизвестный вид плательщика."
-                )
-            if key in ("content", "repair", "management") and not str(item.get("name") or "").strip():
-                errors.append(f"{section}: строка {index} не имеет наименования.")
-            if (key == "repair" and str(item.get("source") or "").startswith("assistant-work-list:")
-                    and (not str(item.get("basis") or "").strip()
-                         or not str(item.get("volume") or "").strip()
-                         or _number(item.get("cost")) <= 0)):
-                errors.append(
-                    f"Текущий ремонт: строка {index} перенесена из перечня "
-                    "как черновик. Укажите подтверждённые основание, объём и "
-                    "стоимость выполненной работы либо удалите строку."
-                )
+        _check_section_rows(section, key, entries, errors)
+    return counts
 
+
+def _check_imported_work(bundle, warnings):
     # An annual work-list is a plan, not evidence that the services were
     # actually performed. Imported zeroes are unknown until the user checks
     # and completes the performed quantity/cost columns.
@@ -169,6 +187,8 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
             "или подтвердите обоснованность нулевых значений перед выгрузкой."
         )
 
+
+def _check_management(bundle, report, counts, warnings):
     management_total = _number(report.get("management_cost"))
     if counts["management"]:
         inner_total = sum(_number(row.get("cost")) for row in bundle["management"])
@@ -179,6 +199,22 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
             )
     elif management_total == 0:
         warnings.append("В разделе 3 «Управление» итоговая сумма равна нулю.")
+
+
+def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Return {errors,warnings,counts,report_id} from persisted report data."""
+    report = bundle.get("report") or {}
+    company = bundle.get("company") or {}
+    house = bundle.get("house") or {}
+    errors, warnings = [], []
+    rid = report.get("id")
+    _check_identity(report, company, house, errors, warnings)
+    year, start = _check_period(report, errors, warnings)
+    _check_previous(bundle, report, start, warnings)
+    _check_numbers(bundle, report, house, errors)
+    counts = _check_sections(bundle, errors, warnings)
+    _check_imported_work(bundle, warnings)
+    _check_management(bundle, report, counts, warnings)
 
     return {
         "report_id": rid,
