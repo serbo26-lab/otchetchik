@@ -113,7 +113,8 @@ def make_backup(reason: str = "auto") -> Path | None:
     temporary = out.with_suffix(".tmp")
     try:
         # Close actual handles before renaming: Windows locks open SQLite files.
-        with (closing(sqlite3.connect(str(src), timeout=30)) as source,
+        with (closing(sqlite3.connect(src.resolve().as_uri() + "?mode=ro",
+                                       uri=True, timeout=30)) as source,
               closing(sqlite3.connect(str(temporary), timeout=30)) as destination):
             source.backup(destination)
             if destination.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
