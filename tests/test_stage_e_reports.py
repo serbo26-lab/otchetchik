@@ -65,20 +65,20 @@ class ReportWorkflowTests(TestCase):
         self.page.period_end.setText("2025-01-01")
         result = self.page.run_review()
         self.assertTrue(any("дата начала позже" in x for x in result["errors"]))
-        with patch("src.uk728.app.export_docx") as exporter:
+        with patch("src.uk728.reports_ui.export_docx") as exporter:
             self.page.export("docx")
         exporter.assert_not_called()
         self.assertIn("заблокирован", self.page.review_status.text())
 
     def test_cannot_export_without_review_or_after_new_edit(self):
-        with patch("src.uk728.app.export_xlsx") as exporter:
+        with patch("src.uk728.reports_ui.export_xlsx") as exporter:
             self.page.export("xlsx")
         exporter.assert_not_called()
         self.assertIn("Сначала", self.page.review_status.text())
         self.page.run_review()
         self.page.notes.setPlainText("Новое примечание после проверки")
         self.assertTrue(self.page._review_dirty)
-        with patch("src.uk728.app.export_xlsx") as exporter:
+        with patch("src.uk728.reports_ui.export_xlsx") as exporter:
             self.page.export("xlsx")
         exporter.assert_not_called()
         self.assertTrue(self.page._review_dirty)
@@ -86,7 +86,7 @@ class ReportWorkflowTests(TestCase):
     def test_external_database_change_invalidates_export(self):
         self.page.run_review()
         db.execute("UPDATE reports SET notes=? WHERE id=?", ("Изменено извне", self.report_id))
-        with patch("src.uk728.app.export_xlsx") as exporter:
+        with patch("src.uk728.reports_ui.export_xlsx") as exporter:
             self.page.export("xlsx")
         exporter.assert_not_called()
         self.assertTrue(self.page._review_dirty)
@@ -98,8 +98,8 @@ class ReportWorkflowTests(TestCase):
         with (
             patch.object(QMessageBox, "question", return_value=QMessageBox.Yes) as confirm,
             patch.object(QMessageBox, "exec", return_value=0),
-            patch("src.uk728.app.make_backup", return_value=Path(self.tmp.name) / "backup.db"),
-            patch("src.uk728.app.export_xlsx", return_value=expected_path) as exporter,
+            patch("src.uk728.reports_ui.make_backup", return_value=Path(self.tmp.name) / "backup.db"),
+            patch("src.uk728.reports_ui.export_xlsx", return_value=expected_path) as exporter,
         ):
             self.page.export("xlsx")
         confirm.assert_called_once()

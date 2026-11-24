@@ -138,7 +138,7 @@ class ShellTests(unittest.TestCase):
         self.assertEqual(page.current_id, rid)
         page.period_start.setText("2025-02-01")
         self.assertTrue(page._dirty_report)
-        with patch("src.uk728.app.connect", side_effect=OSError("readonly database")):
+        with patch("src.uk728.reports_ui.connect", side_effect=OSError("readonly database")):
             self.window.navigate(0)
         self.assertEqual(self.window.tabs.currentIndex(), 6)
         self.assertEqual(self.window.sidebar.navigation.currentRow(), 6)
