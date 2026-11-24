@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QRect, QSize, Qt, Signal
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QListWidget,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QListWidget,
     QListWidgetItem, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
@@ -100,9 +100,8 @@ class ActionFlowLayout(QLayout):
 class NavigationSidebar(QFrame):
     navigateRequested = Signal(int)
     themeRequested = Signal()
-    scaleRequested = Signal(int)
 
-    def __init__(self, theme: str, scale: int, parent=None):
+    def __init__(self, theme: str, parent=None):
         super().__init__(parent)
         self.setObjectName("Sidebar")
         # The previous 245px width truncated "Управляющие организации"
@@ -144,20 +143,9 @@ class NavigationSidebar(QFrame):
         self.theme_button.clicked.connect(self.themeRequested.emit)
         layout.addWidget(self.theme_button)
 
-        # An API-compatible but hidden 100%-only selector.
-        self.scale_combo = QComboBox(self)
-        self.scale_combo.addItem("100%", 100)
-        self.scale_combo.setEnabled(False)
-        self.scale_combo.hide()
         self.refresh_theme(theme)
 
-    def _scale_changed(self, _index):
-        value = self.scale_combo.currentData()
-        if value:
-            self.scaleRequested.emit(int(value))
-
     def refresh_theme(self, theme: str):
-        self._theme = theme
         self.theme_button.setText("☀ Светлая тема" if theme == "dark" else "☾ Темная тема")
         for index, (_title, glyph, _subtitle, _help) in enumerate(PAGES):
             self.navigation.item(index).setIcon(svg_icon(glyph, theme))

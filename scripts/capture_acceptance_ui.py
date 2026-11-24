@@ -138,8 +138,8 @@ def main():
                             "width": image.width(), "height": image.height(),
                             "filename": destination.name,
                         })
-                if window._scale != 100 or window.sidebar.scale_combo.count() != 1:
-                    raise RuntimeError("Experimental 125%/150% scale became visible.")
+                if hasattr(window, "set_scale") or hasattr(window.sidebar, "scale_combo"):
+                    raise RuntimeError("Obsolete internal scaling controls are present.")
             finally:
                 window.close()
                 app.processEvents()

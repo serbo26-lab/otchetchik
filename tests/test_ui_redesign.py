@@ -41,16 +41,28 @@ class ShellTests(unittest.TestCase):
             self.assertEqual(self.window._last_tab, index)
         self.assertEqual(self.window.sidebar.navigation.currentRow(), 0)
 
-    def test_change_theme_and_scale(self):
+    def test_change_theme_without_internal_scaling(self):
         old_theme = self.window._theme
         self.window.switch_theme()
         self.assertNotEqual(self.window._theme, old_theme)
-        self.assertTrue(self.window.sidebar.scale_combo.isHidden())
-        self.assertEqual(self.window.sidebar.scale_combo.count(), 1)
-        self.window.set_scale(125)
-        self.assertEqual(self.window._scale, 100)
+        self.assertFalse(hasattr(self.window.sidebar, "scale_combo"))
+        self.assertFalse(hasattr(self.window.sidebar, "scaleRequested"))
+        self.assertFalse(hasattr(self.window, "set_scale"))
+        self.assertFalse(hasattr(self.window, "_scale"))
         self.assertEqual(self.window.sidebar.width(), 278)
         self.window.switch_theme()
+
+    def test_only_real_editors_participate_in_generic_autosave(self):
+        for page in (self.window.mass_tab, self.window.backups_tab, self.window.reports_tab):
+            self.assertFalse(self.window._can_autosave_tab(page))
+            with patch.object(page, "save", side_effect=AssertionError("Unexpected generic save")):
+                if page is not self.window.reports_tab:
+                    self.window.navigate(self.window.tabs.indexOf(page))
+                    self.window.auto_backup()
+                    self.window.navigate(0)
+        self.assertTrue(self.window._can_autosave_tab(self.window.works_tab))
+        self.window.company_tab.add_company()
+        self.assertTrue(self.window._can_autosave_tab(self.window.company_tab))
 
     def test_data_folder_is_external_and_survives_page_changes(self):
         database = Path(self.temp.name) / "data" / "reporting_728.db"

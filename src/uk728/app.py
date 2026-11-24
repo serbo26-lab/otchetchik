@@ -427,7 +427,7 @@ class BaseTab(QWidget):
         snapshot = getattr(self, "_form_snapshot", None)
         return snapshot is not None and self._form_signature() != snapshot
 
-    def _commit_form_before_load(self, new_id):
+    def _commit_form_before_load(self):
         """Persist the *previous* record before selection, refresh or reload replaces it."""
         old_id = getattr(self, "_loaded_form_id", None)
         if old_id is None or self._form_signature() == getattr(self, "_form_snapshot", None):
@@ -721,7 +721,7 @@ class CompaniesTab(BaseTab):
     def _load_current(self):
         item = self.list.currentItem()
         next_id = item.data(Qt.UserRole) if item else None
-        if not self._commit_form_before_load(next_id):
+        if not self._commit_form_before_load():
             return
         self.current_id = next_id
         r = db.row("SELECT * FROM companies WHERE id=?", (self.current_id,)) if self.current_id else None
@@ -1119,7 +1119,7 @@ class HousesTab(BaseTab):
 
     def _on_company_filter_changed(self):
         previous = getattr(self, "_selected_company_filter_id", None)
-        if not self._commit_form_before_load(None):
+        if not self._commit_form_before_load():
             self.company_filter.blockSignals(True)
             self.company_filter.setCurrentIndex(max(0, self.company_filter.findData(previous)))
             self.company_filter.blockSignals(False)
@@ -1194,7 +1194,7 @@ class HousesTab(BaseTab):
     def _load_current(self):
         item = self.list.currentItem()
         next_id = item.data(Qt.UserRole) if item else None
-        if not self._commit_form_before_load(next_id):
+        if not self._commit_form_before_load():
             return
         self.current_id = next_id
         r = db.row("SELECT * FROM houses WHERE id=?", (self.current_id,)) if self.current_id else None
@@ -1480,7 +1480,7 @@ class CategoriesTab(BaseTab):
     def _load_current(self):
         item = self.list.currentItem()
         next_id = item.data(Qt.UserRole) if item else None
-        if not self._commit_form_before_load(next_id):
+        if not self._commit_form_before_load():
             return
         self.current_id = next_id
         r = db.row("SELECT * FROM work_categories WHERE id=?", (self.current_id,)) if self.current_id else None
@@ -1955,7 +1955,7 @@ class TemplatesTab(BaseTab):
     def _load_current(self):
         item = self.list.currentItem()
         next_id = item.data(Qt.UserRole) if item else None
-        if not self._commit_form_before_load(next_id):
+        if not self._commit_form_before_load():
             return
         self.current_id = next_id
         r = db.row("SELECT * FROM templates WHERE id=?", (self.current_id,)) if self.current_id else None
@@ -4068,21 +4068,15 @@ class MainWindow(QMainWindow):
         self._theme = str(self.settings.value("ui/theme", "light"))
         if self._theme not in ("light", "dark"):
             self._theme = "light"
-        try:
-            self._scale = int(self.settings.value("ui/scale", 100))
-        except (TypeError, ValueError):
-            self._scale = 100
-        # Non-100 UI scaling was experimental in the reference application.
-        self._scale = 100
-
-        apply_theme(QApplication.instance(), self._theme, self._scale)
+        # Qt handles monitor DPI; no separate application scaling setting.
+        apply_theme(QApplication.instance(), self._theme)
         central = QWidget(self)
         central.setObjectName("ContentPane")
         root = QHBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         self.setCentralWidget(central)
-        self.sidebar = NavigationSidebar(self._theme, self._scale, self)
+        self.sidebar = NavigationSidebar(self._theme, self)
         root.addWidget(self.sidebar)
 
         workspace = QWidget()
@@ -4125,7 +4119,6 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self.on_tab_changed)
         self.sidebar.navigateRequested.connect(self.navigate)
         self.sidebar.themeRequested.connect(self.switch_theme)
-        self.sidebar.scaleRequested.connect(self.set_scale)
         self.sidebar.select(0)
         self.page_header.show_page(0)
         self._decorate_buttons()
@@ -4181,11 +4174,13 @@ class MainWindow(QMainWindow):
                 button.setObjectName("DangerAction")
 
     def _can_autosave_tab(self, tab) -> bool:
-        if not isinstance(tab, BaseTab):
-            return False
-        if hasattr(tab, "current_id"):
-            return getattr(tab, "current_id") is not None
-        return True
+        # Only forms with a genuine save implementation participate here.
+        # Reports use flush_autosave(); mass fill and backups have explicit actions.
+        if isinstance(tab, WorksTab):
+            return True
+        if isinstance(tab, (CompaniesTab, HousesTab, CategoriesTab, TemplatesTab)):
+            return tab.current_id is not None
+        return False
 
     def set_save_status(self, state: str, message: str | None = None):
         self.page_header.set_save_status(state, message)
@@ -4329,13 +4324,8 @@ class MainWindow(QMainWindow):
     def switch_theme(self):
         self._theme = "dark" if self._theme == "light" else "light"
         self.settings.setValue("ui/theme", self._theme)
-        apply_theme(QApplication.instance(), self._theme, self._scale)
+        apply_theme(QApplication.instance(), self._theme)
         self.sidebar.refresh_theme(self._theme)
-
-    def set_scale(self, scale: int):
-        # Intentionally locked until each size has a verified layout.
-        self._scale = 100
-        self.settings.setValue("ui/scale", 100)
 
     def save_before_assistant_sync(self) -> bool:
         """Do not replace form values while there are unsaved local edits."""
