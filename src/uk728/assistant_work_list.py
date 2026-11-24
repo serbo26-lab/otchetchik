@@ -259,13 +259,7 @@ def read_preview(report_id: int) -> Preview:
     )
 
 
-def apply_selected(preview: Preview, selections: dict[str, tuple[str, str]]) -> ImportResult:
-    """Atomically add explicitly selected rows; never overwrite a report row.
-
-    Selections map Assistant item UUID -> (skip/content/repair, unit name).
-    A repair selection creates an incomplete DRAFT: no performed work figures
-    or signed act are fabricated. The report review rejects unfinished drafts.
-    """
+def _requested_rows(preview, selections):
     candidates = {c.item_id: c for c in preview.items}
     if set(selections) - set(candidates):
         raise WorkListImportError("В выборе обнаружены посторонние позиции.")
@@ -286,9 +280,10 @@ def apply_selected(preview: Preview, selections: dict[str, tuple[str, str]]) -> 
                 "Укажите единицу измерения для каждой выбранной работы содержания."
             )
         requested.append((candidate, section, str(unit).strip()))
-    if not requested:
-        return ImportResult()
+    return requested
 
+
+def _verify_source(preview):
     # A source may change while the user is reviewing the preview.
     list_id, _, digest, _ = _source_snapshot(
         preview.source_path, preview.house_source_id, preview.year
@@ -298,43 +293,106 @@ def apply_selected(preview: Preview, selections: dict[str, tuple[str, str]]) -> 
             "Перечень в Ассистенте изменён после предварительного просмотра. "
             "Откройте импорт заново."
         )
+
+
+def _verify_target(conn, preview):
+    before, report = _report_digest(conn, preview.report_id)
+    house = conn.execute(
+        "SELECT assistant_source_id FROM houses WHERE id=?", (report["house_id"],)
+    ).fetchone()
+    if (before != preview.report_digest or int(report["year"]) != preview.year
+            or str(report["status"] or "") in ("Размещен", "Размещён", "Архив")
+            or not house or house["assistant_source_id"] != preview.house_source_id):
+        raise WorkListImportError(
+            "Отчёт изменился после предварительного просмотра. "
+            "Откройте импорт заново."
+        )
+
+
+def _select_new_rows(conn, preview, requested):
+    current = {}
+    for section, table in (
+        (CONTENT, "report_content_items"), (REPAIR, "report_repair_items")
+    ):
+        rows = conn.execute(
+            f"SELECT source,name FROM {table} WHERE report_id=?", (preview.report_id,)
+        ).fetchall()
+        current[section] = (
+            {str(r["source"]) for r in rows},
+            {str(r["name"] or "").strip().casefold() for r in rows
+             if not str(r["source"] or "").startswith(SOURCE_PREFIX)},
+        )
+    existing_sources = current[CONTENT][0] | current[REPAIR][0]
+    selected = []
+    skipped = 0
+    for candidate, section, unit in requested:
+        marker = SOURCE_PREFIX + candidate.item_id
+        names = current[section][1]
+        if (marker in existing_sources or candidate.name.casefold() in names):
+            skipped += 1
+            continue
+        selected.append((candidate, section, unit, marker))
+        existing_sources.add(marker)
+        # Different source IDs may legitimately have the same name.
+        # Preserve the conservative name check only for local rows.
+    return selected, skipped
+
+
+def _write_selected_rows(conn, preview, selected):
+    positions = {}
+    for section, table in (
+        (CONTENT, "report_content_items"), (REPAIR, "report_repair_items")
+    ):
+        positions[section] = int(conn.execute(
+            f"SELECT COALESCE(MAX(position),0) FROM {table} WHERE report_id=?",
+            (preview.report_id,),
+        ).fetchone()[0])
+    added_content = added_repair = 0
+    for candidate, section, unit, marker in selected:
+        positions[section] += 1
+        if section == CONTENT:
+            conn.execute(
+                "INSERT INTO report_content_items("
+                "report_id,name,unit,unit_price,plan_qty,plan_cost,"
+                "actual_qty,actual_cost,source,is_manual,position)"
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    preview.report_id, candidate.name, unit,
+                    float(candidate.unit_price), float(candidate.plan_qty),
+                    float(candidate.plan_cost), 0, 0, marker, 0,
+                    positions[section],
+                ),
+            )
+            added_content += 1
+        else:
+            conn.execute(
+                "INSERT INTO report_repair_items("
+                "report_id,name,basis,cost,volume,act_details,source,is_manual,position)"
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    preview.report_id, candidate.name, "", 0, "", "",
+                    marker, 0, positions[section],
+                ),
+            )
+            added_repair += 1
+    return added_content, added_repair
+
+
+def apply_selected(preview: Preview, selections: dict[str, tuple[str, str]]) -> ImportResult:
+    """Atomically add explicitly selected rows; never overwrite a report row.
+
+    Selections map Assistant item UUID -> (skip/content/repair, unit name).
+    A repair selection creates an incomplete DRAFT: no performed work figures
+    or signed act are fabricated. The report review rejects unfinished drafts.
+    """
+    requested = _requested_rows(preview, selections)
+    if not requested:
+        return ImportResult()
+
+    _verify_source(preview)
     with closing(db.connect()) as conn:
-        before, report = _report_digest(conn, preview.report_id)
-        house = conn.execute(
-            "SELECT assistant_source_id FROM houses WHERE id=?", (report["house_id"],)
-        ).fetchone()
-        if (before != preview.report_digest or int(report["year"]) != preview.year
-                or str(report["status"] or "") in ("Размещен", "Размещён", "Архив")
-                or not house or house["assistant_source_id"] != preview.house_source_id):
-            raise WorkListImportError(
-                "Отчёт изменился после предварительного просмотра. "
-                "Откройте импорт заново."
-            )
-        current = {}
-        for section, table in (
-            (CONTENT, "report_content_items"), (REPAIR, "report_repair_items")
-        ):
-            rows = conn.execute(
-                f"SELECT source,name FROM {table} WHERE report_id=?", (preview.report_id,)
-            ).fetchall()
-            current[section] = (
-                {str(r["source"]) for r in rows},
-                {str(r["name"] or "").strip().casefold() for r in rows
-                 if not str(r["source"] or "").startswith(SOURCE_PREFIX)},
-            )
-        existing_sources = current[CONTENT][0] | current[REPAIR][0]
-        selected = []
-        skipped = 0
-        for candidate, section, unit in requested:
-            marker = SOURCE_PREFIX + candidate.item_id
-            names = current[section][1]
-            if (marker in existing_sources or candidate.name.casefold() in names):
-                skipped += 1
-                continue
-            selected.append((candidate, section, unit, marker))
-            existing_sources.add(marker)
-            # Different source IDs may legitimately have the same name.
-            # Preserve the conservative name check only for local rows.
+        _verify_target(conn, preview)
+        selected, skipped = _select_new_rows(conn, preview, requested)
     if not selected:
         return ImportResult(skipped=skipped)
 
@@ -345,47 +403,12 @@ def apply_selected(preview: Preview, selections: dict[str, tuple[str, str]]) -> 
 
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        fresh, report = _report_digest(conn, preview.report_id)
+        fresh, _ = _report_digest(conn, preview.report_id)
         if fresh != preview.report_digest:
             raise WorkListImportError(
                 "Отчёт изменился перед сохранением. Импорт отменён."
             )
-        positions = {}
-        for section, table in (
-            (CONTENT, "report_content_items"), (REPAIR, "report_repair_items")
-        ):
-            positions[section] = int(conn.execute(
-                f"SELECT COALESCE(MAX(position),0) FROM {table} WHERE report_id=?",
-                (preview.report_id,),
-            ).fetchone()[0])
-        added_content = added_repair = 0
-        for candidate, section, unit, marker in selected:
-            positions[section] += 1
-            if section == CONTENT:
-                conn.execute(
-                    "INSERT INTO report_content_items("
-                    "report_id,name,unit,unit_price,plan_qty,plan_cost,"
-                    "actual_qty,actual_cost,source,is_manual,position)"
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        preview.report_id, candidate.name, unit,
-                        float(candidate.unit_price), float(candidate.plan_qty),
-                        float(candidate.plan_cost), 0, 0, marker, 0,
-                        positions[section],
-                    ),
-                )
-                added_content += 1
-            else:
-                conn.execute(
-                    "INSERT INTO report_repair_items("
-                    "report_id,name,basis,cost,volume,act_details,source,is_manual,position)"
-                    "VALUES(?,?,?,?,?,?,?,?,?)",
-                    (
-                        preview.report_id, candidate.name, "", 0, "", "",
-                        marker, 0, positions[section],
-                    ),
-                )
-                added_repair += 1
+        added_content, added_repair = _write_selected_rows(conn, preview, selected)
         # Any newly imported information invalidates a previously checked
         # report. Never retain "Проверен" for data not yet reviewed.
         conn.execute(
