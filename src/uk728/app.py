@@ -198,7 +198,7 @@ class CompaniesTab(BaseTab):
         self.list.blockSignals(True)
         self.list.clear()
         select_row = -1
-        for r in db.rows("SELECT * FROM companies ORDER BY name, id"):
+        for r in db.named_rows("SELECT * FROM companies ORDER BY name, id"):
             linked = bool(r["assistant_source_id"])
             item = QListWidgetItem(
                 ("Ассистент · " if linked else "") + (r["name"] or "Без названия")
@@ -629,7 +629,7 @@ class HousesTab(BaseTab):
 
     def reload_companies(self):
         old_filter = self.company_filter.currentData()
-        companies = db.rows("SELECT id, name FROM companies ORDER BY name")
+        companies = db.named_rows("SELECT id, name FROM companies ORDER BY name")
         self.company_filter.blockSignals(True)
         self.company_filter.clear()
         if len(companies) == 1:
@@ -964,7 +964,7 @@ class CategoriesTab(BaseTab):
         self.list.blockSignals(True)
         self.list.clear()
         select_row = -1
-        for r in db.rows("SELECT * FROM work_categories WHERE parent_id IS NULL AND is_active=1 ORDER BY name"):
+        for r in db.named_rows("SELECT * FROM work_categories WHERE parent_id IS NULL AND is_active=1 ORDER BY name"):
             item = QListWidgetItem(r["name"] or "Без названия")
             item.setData(Qt.UserRole, r["id"])
             self.list.addItem(item)
@@ -991,7 +991,7 @@ class CategoriesTab(BaseTab):
         self.name.setText(r["name"]); self.section.setCurrentText(r["section"] or "Не выбрано"); self.unit.setCurrentText(r["unit"] or "Не выбрано")
         self.price.setText(str(r["default_price"] or "")); self.notes.setPlainText(r["notes"])
         self.sub_table.setRowCount(0)
-        for sub in db.rows("SELECT * FROM work_categories WHERE parent_id=? AND is_active=1 ORDER BY name", (self.current_id,)):
+        for sub in db.named_rows("SELECT * FROM work_categories WHERE parent_id=? AND is_active=1 ORDER BY name", (self.current_id,)):
             row = self.sub_table.rowCount(); self.sub_table.insertRow(row)
             vals = [sub["id"], sub["name"], sub["section"], sub["unit"], sub["default_price"], sub["notes"]]
             for c, val in enumerate(vals): self.sub_table.set_value(row, c, val)
@@ -1177,7 +1177,7 @@ class WorksTab(BaseTab):
         old_data = self.category_combo.currentData(); old_text = self.category_combo.currentText()
         self.category_combo.blockSignals(True)
         self.category_combo.clear(); self.category_combo.addItem("Не выбрано", None)
-        for r in db.rows("SELECT * FROM work_categories WHERE parent_id IS NULL AND is_active=1 ORDER BY name"):
+        for r in db.named_rows("SELECT * FROM work_categories WHERE parent_id IS NULL AND is_active=1 ORDER BY name"):
             self.category_combo.addItem(r["name"], r["id"])
         restore_combo_selection(self.category_combo, old_data, old_text)
         self.category_combo.blockSignals(False)
@@ -1217,7 +1217,7 @@ class WorksTab(BaseTab):
 
     def refresh(self):
         self.table.setRowCount(0)
-        for r in db.rows("SELECT * FROM work_items WHERE is_active=1 ORDER BY group_name, subgroup_name, category, name"):
+        for r in db.named_rows("SELECT * FROM work_items WHERE is_active=1 ORDER BY group_name, subgroup_name, category, name"):
             row = self.table.rowCount(); self.table.insertRow(row)
             vals = [r["id"], r["group_name"], r["subgroup_name"], r["name"], r["category"], r["unit"], r["default_price"], r["notes"]]
             for col, val in enumerate(vals):
@@ -1416,7 +1416,7 @@ class TemplatesTab(BaseTab):
         self.work_combo.blockSignals(True)
         self.work_combo.clear()
         section = normalize_section(self.category.currentText(), "")
-        rows_ = db.rows("SELECT * FROM work_items WHERE is_active=1 ORDER BY group_name, subgroup_name, category, name")
+        rows_ = db.named_rows("SELECT * FROM work_items WHERE is_active=1 ORDER BY group_name, subgroup_name, category, name")
         for r in rows_:
             if section and normalize_section(row_get(r, "category", ""), "") != section:
                 continue
@@ -1439,7 +1439,7 @@ class TemplatesTab(BaseTab):
         self.list.blockSignals(True)
         self.list.clear()
         select_row = -1
-        for r in db.rows("SELECT * FROM templates ORDER BY name"):
+        for r in db.named_rows("SELECT * FROM templates ORDER BY name"):
             item = QListWidgetItem(f"{r['name']} · {r['category']}")
             item.setData(Qt.UserRole, r["id"])
             self.list.addItem(item)
@@ -1466,7 +1466,7 @@ class TemplatesTab(BaseTab):
         self.name.setText(r["name"]); self.category.setCurrentText(r["category"]); self.notes.setPlainText(r["notes"])
         self.reload_work_combo()
         self.table.setRowCount(0)
-        for it in db.rows("SELECT * FROM template_items WHERE template_id=? ORDER BY position,id", (self.current_id,)):
+        for it in db.named_rows("SELECT * FROM template_items WHERE template_id=? ORDER BY position,id", (self.current_id,)):
             row = self.table.rowCount(); self.table.insertRow(row)
             vals = [it["id"], it["work_item_id"] or "", it["name"], it["unit"], it["unit_price"], it["plan_qty"]]
             for c, val in enumerate(vals): self.table.set_value(row, c, val)
@@ -1582,7 +1582,7 @@ class AddFromReferenceDialog(QDialog):
         layout = QVBoxLayout(self)
         self.combo = ClickComboBox()
         target = normalize_section(category, category)
-        for r in db.rows("SELECT * FROM work_items WHERE is_active=1 ORDER BY group_name, subgroup_name, name"):
+        for r in db.named_rows("SELECT * FROM work_items WHERE is_active=1 ORDER BY group_name, subgroup_name, name"):
             if normalize_section(row_get(r, "category", ""), "") != target:
                 continue
             self.combo.addItem(work_display(r), r["id"])
@@ -2191,7 +2191,7 @@ class ReportsTab(BaseTab):
         combo.blockSignals(True)
         combo.clear()
         target = normalize_section(section, section)
-        for r in db.rows("SELECT * FROM templates ORDER BY name"):
+        for r in db.named_rows("SELECT * FROM templates ORDER BY name"):
             r_section = normalize_section(row_get(r, "category", ""), "")
             if r_section != target:
                 continue
@@ -2234,7 +2234,7 @@ class ReportsTab(BaseTab):
         params.extend((self.company_filter.currentData(), self.house_filter.currentData()))
         sql += " ORDER BY h.address, r.period_start"
         select_row = -1
-        for r in db.rows(sql, tuple(params)):
+        for r in db.named_rows(sql, tuple(params)):
             start = r["period_start"] or "начало не указано"
             end = r["period_end"] or "конец не указан"
             item = QListWidgetItem(
@@ -2554,7 +2554,7 @@ class ReportsTab(BaseTab):
                      for row in range(target_table.rowCount()) if target_table.value(row, 1)}
         known_names = {target_table.value(row, 2).strip().casefold()
                        for row in range(target_table.rowCount()) if target_table.value(row, 2).strip()}
-        for it in db.rows("SELECT * FROM template_items WHERE template_id=? ORDER BY position,id", (tid,)):
+        for it in db.named_rows("SELECT * FROM template_items WHERE template_id=? ORDER BY position,id", (tid,)):
             item_section = self._template_item_section(it, template_section)
             if item_section != target_section:
                 skipped += 1
@@ -3070,7 +3070,7 @@ class MassApplyTab(BaseTab):
         self.house_list.blockSignals(True)
         self.house_list.clear()
         if cid is not None:
-            houses = db.rows(
+            houses = db.named_rows(
                 "SELECT id,address,total_area FROM houses WHERE company_id=? AND status!='Архив' ORDER BY address,id",
                 (cid,),
             )
@@ -3163,7 +3163,7 @@ class MassApplyTab(BaseTab):
         self.work.blockSignals(True)
         self.work.clear()
         self.work.addItem("Выберите работу / услугу", None)
-        for item in db.rows(
+        for item in db.named_rows(
             "SELECT * FROM work_items WHERE is_active=1 ORDER BY group_name,subgroup_name,category,name"
         ):
             self.work.addItem(work_display(item), item["id"])
