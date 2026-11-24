@@ -144,6 +144,34 @@ def _word_table(doc, headers, rows):
             row[i].text = str(value)
 
 
+def _write_xlsx_table(ws, r, headers, data, widths_count, styles):
+    from openpyxl.styles import Alignment
+
+    bold, header_fill, border, normal = styles
+    start = r
+    for c, h in enumerate(headers, 1):
+        cell = ws.cell(r, c, h)
+        cell.font = bold
+        cell.fill = header_fill
+        cell.border = border
+        cell.alignment = Alignment(wrap_text=True, horizontal="center", vertical="center")
+    r += 1
+    for row_data in data:
+        for c, value in enumerate(row_data, 1):
+            cell = ws.cell(r, c, value)
+            cell.font = normal
+            cell.border = border
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+        r += 1
+    if not data:
+        for c in range(1, widths_count + 1):
+            cell = ws.cell(r, c, "")
+            cell.border = border
+        r += 1
+    ws.row_dimensions[start].height = 42
+    return r
+
+
 def export_xlsx(report_id: int) -> Path:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -198,27 +226,7 @@ def export_xlsx(report_id: int) -> Path:
 
     def table(headers: list[str], data: list[list[Any]], widths_count: int):
         nonlocal r
-        start = r
-        for c, h in enumerate(headers, 1):
-            cell = ws.cell(r, c, h)
-            cell.font = bold
-            cell.fill = header_fill
-            cell.border = border
-            cell.alignment = Alignment(wrap_text=True, horizontal="center", vertical="center")
-        r += 1
-        for row_data in data:
-            for c, value in enumerate(row_data, 1):
-                cell = ws.cell(r, c, value)
-                cell.font = normal
-                cell.border = border
-                cell.alignment = Alignment(wrap_text=True, vertical="top")
-            r += 1
-        if not data:
-            for c in range(1, widths_count + 1):
-                cell = ws.cell(r, c, "")
-                cell.border = border
-            r += 1
-        ws.row_dimensions[start].height = 42
+        r = _write_xlsx_table(ws, r, headers, data, widths_count, (bold, header_fill, border, normal))
 
     merge_text(REPORT_TITLE, 14, True)
     merge_text(REPORT_SUBTITLE, 12, True)
