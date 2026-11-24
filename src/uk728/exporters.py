@@ -1,11 +1,38 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from .db import load_report_bundle
 from .paths import export_dir, safe_filename
 from .utils import balance_text, format_date, is_full_year, money, to_float
+
+
+@contextmanager
+def _new_export_path(base: Path):
+    """Reserve a new name atomically; never overwrite an earlier export.
+
+    Reserve only when ready to write. If generation fails, remove only the
+    file reserved by this operation, leaving every previous export intact.
+    """
+    index = 1
+    while True:
+        candidate = base if index == 1 else base.with_name(
+            f"{base.stem}_{index}{base.suffix}"
+        )
+        try:
+            with candidate.open("xb"):
+                pass
+        except FileExistsError:
+            index += 1
+            continue
+        break
+    try:
+        yield candidate
+    except BaseException:
+        candidate.unlink(missing_ok=True)
+        raise
 
 
 def _period_line(report: dict[str, Any]) -> str:
@@ -58,7 +85,7 @@ def export_xlsx(report_id: int) -> Path:
     company = bundle["company"]
     house = bundle["house"]
     out_dir = export_dir(company.get("name", "УО"), report.get("year", "год"), house.get("address", "дом"))
-    out_path = out_dir / f"Отчет_728_{safe_filename(str(house.get('address','дом')), 'дом', 55)}_{report.get('year')}.xlsx"
+    out_path = out_dir / f"Отчет_728_{safe_filename(str(house.get('address','дом')), 'дом', 55)}_{report.get('year')}_отчет-{report_id}.xlsx"
 
     wb = Workbook()
     ws = wb.active
@@ -192,8 +219,9 @@ def export_xlsx(report_id: int) -> Path:
     for row in ws.iter_rows():
         for cell in row:
             cell.alignment = cell.alignment.copy(wrap_text=True, vertical="top")
-    wb.save(out_path)
-    return out_path
+    with _new_export_path(out_path) as target:
+        wb.save(target)
+    return target
 
 
 def export_docx(report_id: int) -> Path:
@@ -206,7 +234,7 @@ def export_docx(report_id: int) -> Path:
     company = bundle["company"]
     house = bundle["house"]
     out_dir = export_dir(company.get("name", "УО"), report.get("year", "год"), house.get("address", "дом"))
-    out_path = out_dir / f"Отчет_728_{safe_filename(str(house.get('address','дом')), 'дом', 55)}_{report.get('year')}.docx"
+    out_path = out_dir / f"Отчет_728_{safe_filename(str(house.get('address','дом')), 'дом', 55)}_{report.get('year')}_отчет-{report_id}.docx"
 
     doc = Document()
     style = doc.styles["Normal"]
@@ -307,8 +335,9 @@ def export_docx(report_id: int) -> Path:
     row[3].text = money(total["accrued"])
     row[4].text = money(total["paid"])
     row[5].text = money(total["debt_end"])
-    doc.save(out_path)
-    return out_path
+    with _new_export_path(out_path) as target:
+        doc.save(target)
+    return target
 
 
 def export_pdf(report_id: int) -> Path:
@@ -333,7 +362,7 @@ def export_pdf(report_id: int) -> Path:
     company = bundle["company"]
     house = bundle["house"]
     out_dir = export_dir(company.get("name", "УО"), report.get("year", "год"), house.get("address", "дом"))
-    out_path = out_dir / f"Отчет_728_{safe_filename(str(house.get('address','дом')), 'дом', 55)}_{report.get('year')}.pdf"
+    out_path = out_dir / f"Отчет_728_{safe_filename(str(house.get('address','дом')), 'дом', 55)}_{report.get('year')}_отчет-{report_id}.pdf"
 
     doc = SimpleDocTemplate(str(out_path), pagesize=A4, leftMargin=12*mm, rightMargin=12*mm, topMargin=12*mm, bottomMargin=12*mm)
     styles = getSampleStyleSheet()
@@ -402,5 +431,7 @@ def export_pdf(report_id: int) -> Path:
         data.append([idx, name, money(fin.get("debt_start")), money(fin.get("accrued")), money(fin.get("paid")), money(fin.get("debt_end"))])
     data.append(["ИТОГО", "", money(total["debt_start"]), money(total["accrued"]), money(total["paid"]), money(total["debt_end"])])
     add_table(data, [10*mm, 62*mm, 30*mm, 28*mm, 28*mm, 28*mm])
-    doc.build(elems)
-    return out_path
+    with _new_export_path(out_path) as target:
+        doc.filename = str(target)
+        doc.build(elems)
+    return target
