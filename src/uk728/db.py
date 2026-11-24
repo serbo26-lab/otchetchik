@@ -10,6 +10,17 @@ from .utils import full_year_period
 
 SCHEMA_VERSION = 12
 
+TEXT_DEFAULT_EMPTY = "TEXT NOT NULL DEFAULT ''"
+INTEGER_DEFAULT_ZERO = "INTEGER NOT NULL DEFAULT 0"
+REPAIR_CATEGORY = "Текущий ремонт"
+ROOF_REPAIR_NAME = "Ремонт кровельного покрытия"
+SANITARY_GROUP = "Санитарное содержание"
+CONTENT_CATEGORY = "Содержание"
+DERATIZATION_NAME = "Дератизация"
+DISINSECTION_NAME = "Дезинсекция"
+MANAGEMENT_CATEGORY = "Управление"
+MANAGEMENT_WORK_NAME = "Услуги управления МКД"
+
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(path or db_path(), timeout=30.0)
@@ -241,25 +252,25 @@ def init_db() -> None:
         )
         # Миграции для существующих тестовых баз: старые лишние колонки не используются,
         # но оставляются в базе, чтобы не рисковать пользовательскими данными.
-        _ensure_column(conn, "work_items", "group_name", "TEXT NOT NULL DEFAULT ''")
-        _ensure_column(conn, "work_items", "subgroup_name", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "work_items", "group_name", TEXT_DEFAULT_EMPTY)
+        _ensure_column(conn, "work_items", "subgroup_name", TEXT_DEFAULT_EMPTY)
         # Stable source UUIDs from GIS JKH Assistant. The original SQLite
         # remains entirely separate and is never attached as a writable DB.
         _ensure_column(conn, "companies", "assistant_source_id", "TEXT")
         _ensure_column(conn, "houses", "assistant_source_id", "TEXT")
-        _ensure_column(conn, "houses", "assistant_area_missing", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "houses", "assistant_area_missing", INTEGER_DEFAULT_ZERO)
         # Nullable components distinguish unknown area from a genuine zero.
         # Preserve total_area in old user databases; never infer component
         # areas by splitting or copying the old total.
         for column, declaration in (
             ("residential_area", "REAL"),
             ("non_residential_area", "REAL"),
-            ("assistant_residential_missing", "INTEGER NOT NULL DEFAULT 0"),
-            ("assistant_non_residential_missing", "INTEGER NOT NULL DEFAULT 0"),
-            ("management_agreement_number", "TEXT NOT NULL DEFAULT ''"),
-            ("management_agreement_date", "TEXT NOT NULL DEFAULT ''"),
-            ("agreement_valid_from", "TEXT NOT NULL DEFAULT ''"),
-            ("agreement_valid_to", "TEXT NOT NULL DEFAULT ''"),
+            ("assistant_residential_missing", INTEGER_DEFAULT_ZERO),
+            ("assistant_non_residential_missing", INTEGER_DEFAULT_ZERO),
+            ("management_agreement_number", TEXT_DEFAULT_EMPTY),
+            ("management_agreement_date", TEXT_DEFAULT_EMPTY),
+            ("agreement_valid_from", TEXT_DEFAULT_EMPTY),
+            ("agreement_valid_to", TEXT_DEFAULT_EMPTY),
         ):
             _ensure_column(conn, "houses", column, declaration)
         # Signatories belong either to a UO or a house, never both. Imported
@@ -334,31 +345,31 @@ def _insert_category(conn: sqlite3.Connection, name: str, section: str, unit: st
 
 def seed_defaults(conn: sqlite3.Connection) -> None:
     if conn.execute("SELECT COUNT(*) FROM work_categories").fetchone()[0] == 0:
-        roof = _insert_category(conn, "Ремонт крыши", "Текущий ремонт", "работа", 0, "Категория для быстрого выбора работ по кровле")
-        _insert_category(conn, "Ремонт кровельного покрытия", "Текущий ремонт", "м²", 0, parent_id=roof)
-        _insert_category(conn, "Ремонт козырька балкона", "Текущий ремонт", "работа", 0, parent_id=roof)
-        sanit = _insert_category(conn, "Санитарное содержание", "Содержание", "усл.", 0)
-        _insert_category(conn, "Дератизация", "Содержание", "усл.", 0, parent_id=sanit)
-        _insert_category(conn, "Дезинсекция", "Содержание", "усл.", 0, parent_id=sanit)
-        adm = _insert_category(conn, "Управление МКД", "Управление", "м²", 0)
-        _insert_category(conn, "Услуги управления МКД", "Управление", "м²", 0, "", parent_id=adm)
+        roof = _insert_category(conn, "Ремонт крыши", REPAIR_CATEGORY, "работа", 0, "Категория для быстрого выбора работ по кровле")
+        _insert_category(conn, ROOF_REPAIR_NAME, REPAIR_CATEGORY, "м²", 0, parent_id=roof)
+        _insert_category(conn, "Ремонт козырька балкона", REPAIR_CATEGORY, "работа", 0, parent_id=roof)
+        sanit = _insert_category(conn, SANITARY_GROUP, CONTENT_CATEGORY, "усл.", 0)
+        _insert_category(conn, DERATIZATION_NAME, CONTENT_CATEGORY, "усл.", 0, parent_id=sanit)
+        _insert_category(conn, DISINSECTION_NAME, CONTENT_CATEGORY, "усл.", 0, parent_id=sanit)
+        adm = _insert_category(conn, "Управление МКД", MANAGEMENT_CATEGORY, "м²", 0)
+        _insert_category(conn, MANAGEMENT_WORK_NAME, MANAGEMENT_CATEGORY, "м²", 0, "", parent_id=adm)
 
     if conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == 0:
         rows = [
-            ("Санитарное содержание", "Дератизация", "Дератизация", "Содержание", "усл.", 0, ""),
-            ("Санитарное содержание", "Дезинсекция", "Дезинсекция", "Содержание", "усл.", 0, ""),
-            ("", "", "Уборка подъездов", "Содержание", "мес.", 0, ""),
-            ("", "", "Аварийно-диспетчерское обслуживание", "Содержание", "м²", 0, ""),
-            ("Управление МКД", "Услуги управления МКД", "Услуги управления МКД", "Управление", "м²", 0, ""),
-            ("Ремонт крыши", "Ремонт кровельного покрытия", "Ремонт кровельного покрытия", "Текущий ремонт", "м²", 0, ""),
-            ("", "", "Ремонт подъезда", "Текущий ремонт", "м²", 0, ""),
+            (SANITARY_GROUP, DERATIZATION_NAME, DERATIZATION_NAME, CONTENT_CATEGORY, "усл.", 0, ""),
+            (SANITARY_GROUP, DISINSECTION_NAME, DISINSECTION_NAME, CONTENT_CATEGORY, "усл.", 0, ""),
+            ("", "", "Уборка подъездов", CONTENT_CATEGORY, "мес.", 0, ""),
+            ("", "", "Аварийно-диспетчерское обслуживание", CONTENT_CATEGORY, "м²", 0, ""),
+            ("Управление МКД", MANAGEMENT_WORK_NAME, MANAGEMENT_WORK_NAME, MANAGEMENT_CATEGORY, "м²", 0, ""),
+            ("Ремонт крыши", ROOF_REPAIR_NAME, ROOF_REPAIR_NAME, REPAIR_CATEGORY, "м²", 0, ""),
+            ("", "", "Ремонт подъезда", REPAIR_CATEGORY, "м²", 0, ""),
         ]
         conn.executemany(
             "INSERT INTO work_items(group_name, subgroup_name, name, category, unit, default_price, notes) VALUES(?,?,?,?,?,?,?)",
             rows,
         )
     if conn.execute("SELECT COUNT(*) FROM templates").fetchone()[0] == 0:
-        conn.execute("INSERT INTO templates(name, category, notes) VALUES(?,?,?)", ("Базовый шаблон содержания", "Содержание", "Можно изменить под вашу организацию"))
+        conn.execute("INSERT INTO templates(name, category, notes) VALUES(?,?,?)", ("Базовый шаблон содержания", CONTENT_CATEGORY, "Можно изменить под вашу организацию"))
         template_id = conn.execute("SELECT id FROM templates WHERE name=?", ("Базовый шаблон содержания",)).fetchone()[0]
         items = conn.execute("SELECT id, name, unit, default_price FROM work_items WHERE category='Содержание' ORDER BY id").fetchall()
         for pos, item in enumerate(items, 1):

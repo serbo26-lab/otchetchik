@@ -28,6 +28,8 @@ PERSON_FIELDS = (
 )
 DATE_FIELDS = ("basis_date", "valid_from", "valid_to")
 
+UNSPECIFIED_LABEL = "Не указано"
+
 
 def _normalize(values: dict, *, organization: bool) -> dict:
     fields = {key: str(values.get(key) or "").strip() for key in PERSON_FIELDS}
@@ -203,15 +205,15 @@ class PersonEditor(QDialog):
         if not organization:
             form.addRow("Квартира / помещение", premises)
         self.gender = QComboBox()
-        self.gender.addItems(["Не указано", "Мужской", "Женский"])
+        self.gender.addItems([UNSPECIFIED_LABEL, "Мужской", "Женский"])
         self.gender.setCurrentIndex({"male": 1, "female": 2}.get(
             str(self.original.get("gender") or ""), 0,
         ))
         form.addRow("Род для склонения", self.gender)
         self.basis = QComboBox()
         self.basis.addItems(
-            ["Не указано", "Устав", "Доверенность", "Иное"]
-            if organization else ["Не указано", "Решение ОСС", "Доверенность", "Иное"]
+            [UNSPECIFIED_LABEL, "Устав", "Доверенность", "Иное"]
+            if organization else [UNSPECIFIED_LABEL, "Решение ОСС", "Доверенность", "Иное"]
         )
         basis = str(self.original.get("basis_kind") or "")
         if basis and self.basis.findText(basis) < 0:

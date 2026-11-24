@@ -24,7 +24,27 @@ from src.uk728.exporters import (
 from src.uk728.paths import db_path
 
 
+# Independent expected values, not imported from the exporter.
+EXPECTED_SECTION_HEADINGS = (
+    "1. За отчетный период выполнены следующие работы (оказаны следующие услуги) "
+    "по содержанию общего имущества собственников помещений в многоквартирном доме:",
+    "2. За отчетный период выполнены следующие работы по текущему ремонту "
+    "общего имущества собственников помещений в многоквартирном доме:",
+    "3. Стоимость услуг по управлению многоквартирным домом, оказанных за отчетный период:",
+    "4. Сведения о претензионно-исковой работе:",
+    "5. Сведения о начислениях и поступлении средств за отчетный период:",
+)
+
+
 class AcceptanceStageTests(unittest.TestCase):
+    def assert_section_headings_preserved(self, text):
+        normalized = " ".join(text.split())
+        positions = []
+        for heading in EXPECTED_SECTION_HEADINGS:
+            self.assertIn(heading, normalized)
+            positions.append(normalized.index(heading))
+        self.assertEqual(positions, sorted(positions))
+
     @classmethod
     def setUpClass(cls):
         cls.application = QApplication.instance() or QApplication([])
@@ -142,8 +162,7 @@ class AcceptanceStageTests(unittest.TestCase):
         flattened = "\n".join(str(cell) for row in rows for cell in row if cell is not None)
         self.assertIn("УК Приёмка", flattened)
         self.assertIn("ул. Кленовая, д. 5", flattened)
-        for number in range(1, 6):
-            self.assertIn(f"{number}.", flattened)
+        self.assert_section_headings_preserved(flattened)
         item = next(row for row in rows if len(row) >= 8 and row[1] == "Содержание лестничных клеток")
         self.assertEqual(item[5], "676")
         self.assertEqual(item[6], "0")
@@ -184,8 +203,7 @@ class AcceptanceStageTests(unittest.TestCase):
         self.assertIn("ул. Кленовая, д. 5", text)
         self.assertIn("1 200,25 м²", text)
         self.assertIn("26.02.2026", text)
-        for number in range(1, 6):
-            self.assertIn(f"{number}.", text)
+        self.assert_section_headings_preserved(text)
         self.assertNotIn("Внутренний расчет управления", text)
         mgmt_section = next(i for i, p in enumerate(document.paragraphs)
                             if p.text.startswith("3. Стоимость услуг"))
@@ -199,9 +217,7 @@ class AcceptanceStageTests(unittest.TestCase):
         reader = PdfReader(str(path))
         self.assertGreaterEqual(len(reader.pages), 1)
         text = "\n".join((page.extract_text() or "") for page in reader.pages)
-        self.assertIn("содержанию", text.lower())
-        self.assertIn("текущему ремонту", text.lower())
-        self.assertIn("управлению", text.lower())
+        self.assert_section_headings_preserved(text)
         self.assertNotIn("Внутренний расчет управления", text)
 
     def test_exports_are_separated_by_house_and_year(self):

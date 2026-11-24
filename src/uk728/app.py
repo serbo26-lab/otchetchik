@@ -75,6 +75,33 @@ from .ui_editors import (
 
 APP_TITLE = "Отчетность УК по приказу № 728/пр"
 
+CREATE_TITLE = "Создание"
+NOTES_LABEL = "Примечание"
+UNNAMED_LABEL = "Без названия"
+SELECT_COMPANY_MESSAGE = "Сначала выберите управляющую организацию."
+DELETE_QUESTION = "Удалить?"
+DELETE_CANCELLED = "Удаление отменено"
+HOUSE_COMPANY_SQL = "SELECT company_id FROM houses WHERE id=?"
+COMPANY_LIST_SQL = "SELECT id, name FROM companies ORDER BY name"
+NOT_SELECTED = "Не выбрано"
+SECTION_LABEL = "Раздел формы"
+UNIT_LABEL = "Ед. изм."
+CATEGORY_BY_ID_SQL = "SELECT * FROM work_categories WHERE id=?"
+WORK_ID_LABEL = "Работа ID"
+QUANTITY_LABEL = "Количество"
+ADD_REFERENCE_TEXT = "Добавить из справочника"
+DATE_FORMAT_HINT = "дд.мм.гггг или гггг-мм-дд"
+REPORT_YEAR_LABEL = "Отчетный год"
+TEMPLATE_LABEL = "Шаблон:"
+APPLY_TEMPLATE_TEXT = "Применить шаблон"
+SECTION_CONTENT_LABEL = "Наполнение раздела"
+COST_LABEL = "Стоимость"
+MANUAL_SOURCE = "ручной ввод/редактирование"
+TEMPLATE_SOURCE = "шаблон"
+MASS_SOURCE = "массовое применение"
+REFERENCE_SOURCE = "справочник"
+NEXT_REPORTS_TEXT = "Далее: отчеты →"
+
 
 class CompaniesTab(BaseTab):
     def __init__(self):
@@ -92,7 +119,7 @@ class CompaniesTab(BaseTab):
         selector.add_widget(self.list, 1)
         self.add_button = QPushButton("Добавить организацию")
         self.add_button.clicked.connect(self.add_company)
-        selector.add_widget(action_panel("Создание", self.add_button, primary=self.add_button))
+        selector.add_widget(action_panel(CREATE_TITLE, self.add_button, primary=self.add_button))
         left_l.addWidget(selector, 1)
         self.delete_button = QPushButton("Удалить организацию")
         self.delete_button.clicked.connect(self.delete_company)
@@ -150,7 +177,7 @@ class CompaniesTab(BaseTab):
 
         extra = ContentCard("5. Примечания")
         extra_form = QFormLayout()
-        extra_form.addRow(selectable_label("Примечание"), self.notes)
+        extra_form.addRow(selectable_label(NOTES_LABEL), self.notes)
         polish_form(extra_form)
         extra.add_layout(extra_form)
         form_layout.addWidget(extra)
@@ -201,7 +228,7 @@ class CompaniesTab(BaseTab):
         for r in db.named_rows("SELECT * FROM companies ORDER BY name, id"):
             linked = bool(r["assistant_source_id"])
             item = QListWidgetItem(
-                ("Ассистент · " if linked else "") + (r["name"] or "Без названия")
+                ("Ассистент · " if linked else "") + (r["name"] or UNNAMED_LABEL)
             )
             item.setToolTip(
                 "Данные УО из общей базы (только чтение)" if linked
@@ -242,7 +269,7 @@ class CompaniesTab(BaseTab):
         self.sign_summary.setText(
             f"Записей о подписантах УО: {amount}. "
             "Запись лица не означает подписания отчёта."
-            if self.current_id else "Сначала выберите управляющую организацию."
+            if self.current_id else SELECT_COMPANY_MESSAGE
         )
 
     def open_signatories(self):
@@ -283,12 +310,12 @@ class CompaniesTab(BaseTab):
                 "в другую УО или удалите их отдельно. Связи не будут потеряны.",
             )
             return
-        if QMessageBox.question(self, "Удалить?", "Удалить выбранную организацию без связанных домов и отчетов?") == QMessageBox.Yes:
+        if QMessageBox.question(self, DELETE_QUESTION, "Удалить выбранную организацию без связанных домов и отчетов?") == QMessageBox.Yes:
             try:
                 make_backup("before_delete_company")
                 db.execute("DELETE FROM companies WHERE id=?", (self.current_id,))
             except Exception as exc:
-                QMessageBox.warning(self, "Удаление отменено", f"Не удалось сохранить резервную копию или удалить УО: {exc}")
+                QMessageBox.warning(self, DELETE_CANCELLED, f"Не удалось сохранить резервную копию или удалить УО: {exc}")
                 return
             self.current_id = None
             self.refresh()
@@ -345,7 +372,7 @@ class HousesTab(BaseTab):
         houses.add_widget(self.list, 1)
         self.add_button = QPushButton("Добавить дом")
         self.add_button.clicked.connect(self.add_house)
-        houses.add_widget(action_panel("Создание", self.add_button, primary=self.add_button))
+        houses.add_widget(action_panel(CREATE_TITLE, self.add_button, primary=self.add_button))
         left_l.addWidget(houses, 1)
         self.delete_button = QPushButton("Удалить дом")
         self.delete_button.clicked.connect(self.delete_house)
@@ -451,7 +478,7 @@ class HousesTab(BaseTab):
 
         other = ContentCard("7. Дополнительно")
         extra_form = QFormLayout()
-        extra_form.addRow(selectable_label("Примечание"), self.notes)
+        extra_form.addRow(selectable_label(NOTES_LABEL), self.notes)
         polish_form(extra_form)
         other.add_layout(extra_form)
         form_l.addWidget(other)
@@ -529,7 +556,7 @@ class HousesTab(BaseTab):
             self.org_sign_summary.setText("Сначала выберите дом.")
             self.house_sign_summary.setText("Сначала выберите дом.")
             return
-        house = db.row("SELECT company_id FROM houses WHERE id=?", (self.current_id,))
+        house = db.row(HOUSE_COMPANY_SQL, (self.current_id,))
         cid = house["company_id"] if house else None
         org_count = count_signatories(company_id=cid)
         home_count = count_signatories(house_id=self.current_id)
@@ -540,7 +567,7 @@ class HousesTab(BaseTab):
     def open_org_signatories(self):
         if not self.current_id or self.save(refresh_after=False) is False:
             return
-        house = db.row("SELECT company_id FROM houses WHERE id=?", (self.current_id,))
+        house = db.row(HOUSE_COMPANY_SQL, (self.current_id,))
         if not house or house["company_id"] is None:
             return
         SignatoryListDialog(company_id=house["company_id"], parent=self).exec()
@@ -629,24 +656,24 @@ class HousesTab(BaseTab):
 
     def reload_companies(self):
         old_filter = self.company_filter.currentData()
-        companies = db.named_rows("SELECT id, name FROM companies ORDER BY name")
+        companies = db.named_rows(COMPANY_LIST_SQL)
         self.company_filter.blockSignals(True)
         self.company_filter.clear()
         if len(companies) == 1:
             r = companies[0]
-            self.company_filter.addItem(str(r["name"] or "Без названия"), r["id"])
+            self.company_filter.addItem(str(r["name"] or UNNAMED_LABEL), r["id"])
             self.company_filter.setCurrentIndex(0)
         else:
             self.company_filter.addItem("Выберите организацию", None)
             for r in companies:
-                self.company_filter.addItem(str(r["name"] or "Без названия"), r["id"])
+                self.company_filter.addItem(str(r["name"] or UNNAMED_LABEL), r["id"])
             if old_filter is not None:
                 idx = self.company_filter.findData(old_filter)
                 if idx >= 0:
                     self.company_filter.setCurrentIndex(idx)
         self.company_filter.blockSignals(False)
         self._selected_company_filter_id = self.company_filter.currentData()
-        fill_combo(self.company, "SELECT id, name FROM companies ORDER BY name", empty="Не выбрано")
+        fill_combo(self.company, COMPANY_LIST_SQL, empty=NOT_SELECTED)
         if hasattr(self, "add_button"):
             self.add_button.setEnabled(self.company_filter.currentData() is not None)
 
@@ -756,12 +783,12 @@ class HousesTab(BaseTab):
                 "Если дом выбыл из управления, установите соответствующий статус.",
             )
             return
-        if QMessageBox.question(self, "Удалить?", "Удалить выбранный дом без отчетов?") == QMessageBox.Yes:
+        if QMessageBox.question(self, DELETE_QUESTION, "Удалить выбранный дом без отчетов?") == QMessageBox.Yes:
             try:
                 make_backup("before_delete_house")
                 db.execute("DELETE FROM houses WHERE id=?", (self.current_id,))
             except Exception as exc:
-                QMessageBox.warning(self, "Удаление отменено", f"Не удалось сохранить резервную копию или удалить дом: {exc}")
+                QMessageBox.warning(self, DELETE_CANCELLED, f"Не удалось сохранить резервную копию или удалить дом: {exc}")
                 return
             self.current_id = None
             self.refresh()
@@ -909,27 +936,27 @@ class CategoriesTab(BaseTab):
         form = QFormLayout()
         self.editor_form = form
         self.name = QLineEdit()
-        self.section = ClickComboBox(); self.section.setEditable(True); self.section.addItems(["Не выбрано", *COMMON_SECTIONS])
-        self.unit = ClickComboBox(); self.unit.setEditable(True); self.unit.addItems(["Не выбрано", *COMMON_UNITS])
+        self.section = ClickComboBox(); self.section.setEditable(True); self.section.addItems([NOT_SELECTED, *COMMON_SECTIONS])
+        self.unit = ClickComboBox(); self.unit.setEditable(True); self.unit.addItems([NOT_SELECTED, *COMMON_UNITS])
         self.price = QLineEdit()
         self.notes = QTextEdit(); self.notes.setFixedHeight(55)
         form.addRow(selectable_label("Название категории"), self.name)
-        form.addRow(selectable_label("Раздел формы"), self.section)
+        form.addRow(selectable_label(SECTION_LABEL), self.section)
         form.addRow(selectable_label("Единица измерения"), self.unit)
         form.addRow(selectable_label("Цена / ставка"), self.price)
-        form.addRow(selectable_label("Примечание"), self.notes)
+        form.addRow(selectable_label(NOTES_LABEL), self.notes)
         polish_form(form)
         details.add_layout(form)
         right_l.addWidget(details)
 
         # Добавление подкатегории относится к ее таблице, а не к категории в целом.
         self.sub_table = CopyPasteTable(0, 6)
-        self.sub_table.setHorizontalHeaderLabels(["ID", "Название подкатегории", "Раздел", "Ед. изм.", "Цена/ставка", "Примечание"])
+        self.sub_table.setHorizontalHeaderLabels(["ID", "Название подкатегории", "Раздел", UNIT_LABEL, "Цена/ставка", NOTES_LABEL])
         self.sub_table.setColumnHidden(0, True)
         fit_table_columns(self.sub_table, flex=(1, 5),
                           widths={2: 160, 3: 105, 4: 120})
-        self.sub_table.setItemDelegateForColumn(2, EditableComboDelegate(lambda: distinct_texts("work_categories", "section", ["Не выбрано", *COMMON_SECTIONS]), self.sub_table))
-        self.sub_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("work_categories", "unit", ["Не выбрано", *COMMON_UNITS]), self.sub_table))
+        self.sub_table.setItemDelegateForColumn(2, EditableComboDelegate(lambda: distinct_texts("work_categories", "section", [NOT_SELECTED, *COMMON_SECTIONS]), self.sub_table))
+        self.sub_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("work_categories", "unit", [NOT_SELECTED, *COMMON_UNITS]), self.sub_table))
         self.sub_table.context_add_handler = self.add_subcategory
         self.sub_table.allow_paste_append = True
         subcategories = table_card("3. Подкатегории", self.sub_table,
@@ -957,7 +984,7 @@ class CategoriesTab(BaseTab):
         self.delete_button.setEnabled(has_record)
         if not has_record:
             self.name.clear(); self.price.clear(); self.notes.clear(); self.sub_table.setRowCount(0)
-            self.section.setCurrentText("Не выбрано"); self.unit.setCurrentText("Не выбрано")
+            self.section.setCurrentText(NOT_SELECTED); self.unit.setCurrentText(NOT_SELECTED)
 
     def refresh(self):
         target_id = self.current_id
@@ -965,7 +992,7 @@ class CategoriesTab(BaseTab):
         self.list.clear()
         select_row = -1
         for r in db.named_rows("SELECT * FROM work_categories WHERE parent_id IS NULL AND is_active=1 ORDER BY name"):
-            item = QListWidgetItem(r["name"] or "Без названия")
+            item = QListWidgetItem(r["name"] or UNNAMED_LABEL)
             item.setData(Qt.UserRole, r["id"])
             self.list.addItem(item)
             if target_id is not None and r["id"] == target_id:
@@ -982,13 +1009,13 @@ class CategoriesTab(BaseTab):
         if not self._commit_form_before_load():
             return
         self.current_id = next_id
-        r = db.row("SELECT * FROM work_categories WHERE id=?", (self.current_id,)) if self.current_id else None
+        r = db.row(CATEGORY_BY_ID_SQL, (self.current_id,)) if self.current_id else None
         if not r:
             self.update_form_state()
             self._remember_form_state()
             return
         self.update_form_state()
-        self.name.setText(r["name"]); self.section.setCurrentText(r["section"] or "Не выбрано"); self.unit.setCurrentText(r["unit"] or "Не выбрано")
+        self.name.setText(r["name"]); self.section.setCurrentText(r["section"] or NOT_SELECTED); self.unit.setCurrentText(r["unit"] or NOT_SELECTED)
         self.price.setText(str(r["default_price"] or "")); self.notes.setPlainText(r["notes"])
         self.sub_table.setRowCount(0)
         for sub in db.named_rows("SELECT * FROM work_categories WHERE parent_id=? AND is_active=1 ORDER BY name", (self.current_id,)):
@@ -1015,13 +1042,13 @@ class CategoriesTab(BaseTab):
     def delete_category(self):
         if not self.current_id:
             return
-        if QMessageBox.question(self, "Удалить?", "Удалить категорию и ее подкатегории? Справочник работ не будет удален.") == QMessageBox.Yes:
+        if QMessageBox.question(self, DELETE_QUESTION, "Удалить категорию и ее подкатегории? Справочник работ не будет удален.") == QMessageBox.Yes:
             try:
                 if make_backup("before_category_deletion") is None:
                     raise RuntimeError("Не удалось создать резервную копию.")
                 db.execute("UPDATE work_categories SET is_active=0 WHERE id=? OR parent_id=?", (self.current_id, self.current_id))
             except Exception as exc:
-                QMessageBox.warning(self, "Удаление отменено", str(exc))
+                QMessageBox.warning(self, DELETE_CANCELLED, str(exc))
                 return
             self.current_id = None
             self.refresh(); self.sub_table.setRowCount(0); self.update_form_state()
@@ -1031,8 +1058,8 @@ class CategoriesTab(BaseTab):
             self.msg("Сначала выберите или создайте категорию.")
             return
         row = self.sub_table.rowCount(); self.sub_table.insertRow(row)
-        section = "" if self.section.currentText() == "Не выбрано" else self.section.currentText()
-        unit = "" if self.unit.currentText() == "Не выбрано" else self.unit.currentText()
+        section = "" if self.section.currentText() == NOT_SELECTED else self.section.currentText()
+        unit = "" if self.unit.currentText() == NOT_SELECTED else self.unit.currentText()
         vals = ["", "Новая подкатегория", section, unit, self.price.text() or "0", ""]
         for c, val in enumerate(vals): self.sub_table.set_value(row, c, val)
 
@@ -1042,10 +1069,10 @@ class CategoriesTab(BaseTab):
             return
         if not self.has_unsaved_changes():
             return True
-        section = "" if self.section.currentText() == "Не выбрано" else self.section.currentText()
-        unit = "" if self.unit.currentText() == "Не выбрано" else self.unit.currentText()
+        section = "" if self.section.currentText() == NOT_SELECTED else self.section.currentText()
+        unit = "" if self.unit.currentText() == NOT_SELECTED else self.unit.currentText()
         if normalize_section(section, "") not in COMMON_SECTIONS:
-            QMessageBox.warning(self, "Раздел формы",
+            QMessageBox.warning(self, SECTION_LABEL,
                 "Выберите раздел формы: Содержание, Текущий ремонт или Управление.")
             return False
         problem = numeric_error(self.price.text(), "Цена / ставка категории")
@@ -1081,8 +1108,8 @@ class CategoriesTab(BaseTab):
                 sub_id = self.sub_table.value(r, 0)
                 sub_section = self.sub_table.value(r, 2)
                 sub_unit = self.sub_table.value(r, 3)
-                if sub_section == "Не выбрано": sub_section = ""
-                if sub_unit == "Не выбрано": sub_unit = ""
+                if sub_section == NOT_SELECTED: sub_section = ""
+                if sub_unit == NOT_SELECTED: sub_unit = ""
                 vals = (self.current_id, name, sub_section or section, sub_unit or unit, to_float(self.sub_table.value(r, 4)), self.sub_table.value(r, 5))
                 if sub_id:
                     conn.execute("UPDATE work_categories SET parent_id=?, name=?, section=?, unit=?, default_price=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (*vals, int(sub_id)))
@@ -1127,7 +1154,7 @@ class WorksTab(BaseTab):
         root.addWidget(sources)
 
         self.table = CopyPasteTable(0, 8)
-        self.table.setHorizontalHeaderLabels(["ID", "Категория", "Подкатегория", "Наименование", "Раздел формы", "Ед. изм.", "Цена/ставка", "Примечание"])
+        self.table.setHorizontalHeaderLabels(["ID", "Категория", "Подкатегория", "Наименование", SECTION_LABEL, UNIT_LABEL, "Цена/ставка", NOTES_LABEL])
         self.table.setColumnHidden(0, True)
         fit_table_columns(self.table, flex=(1, 3, 7),
                           widths={2: 180, 4: 145, 5: 100, 6: 125})
@@ -1176,7 +1203,7 @@ class WorksTab(BaseTab):
     def reload_category_combo(self):
         old_data = self.category_combo.currentData(); old_text = self.category_combo.currentText()
         self.category_combo.blockSignals(True)
-        self.category_combo.clear(); self.category_combo.addItem("Не выбрано", None)
+        self.category_combo.clear(); self.category_combo.addItem(NOT_SELECTED, None)
         for r in db.named_rows("SELECT * FROM work_categories WHERE parent_id IS NULL AND is_active=1 ORDER BY name"):
             self.category_combo.addItem(r["name"], r["id"])
         restore_combo_selection(self.category_combo, old_data, old_text)
@@ -1186,7 +1213,7 @@ class WorksTab(BaseTab):
     def reload_subcategory_combo(self):
         old_data = self.subcategory_combo.currentData(); old_text = self.subcategory_combo.currentText()
         self.subcategory_combo.blockSignals(True)
-        self.subcategory_combo.clear(); self.subcategory_combo.addItem("Не выбрано", None)
+        self.subcategory_combo.clear(); self.subcategory_combo.addItem(NOT_SELECTED, None)
         cid = self.category_combo.currentData()
         if cid:
             data = db.rows("SELECT * FROM work_categories WHERE parent_id=? AND is_active=1 ORDER BY name", (cid,))
@@ -1244,8 +1271,8 @@ class WorksTab(BaseTab):
         sid = self.subcategory_combo.currentData()
         if not cid and not sid:
             self.add_row(); return
-        cat = db.row("SELECT * FROM work_categories WHERE id=?", (cid,)) if cid else None
-        sub = db.row("SELECT * FROM work_categories WHERE id=?", (sid,)) if sid else None
+        cat = db.row(CATEGORY_BY_ID_SQL, (cid,)) if cid else None
+        sub = db.row(CATEGORY_BY_ID_SQL, (sid,)) if sid else None
         source = sub or cat
         if not source:
             self.add_row(); return
@@ -1300,8 +1327,8 @@ class WorksTab(BaseTab):
                     self.table.value(r, 1),
                     self.table.value(r, 2),
                     self.table.value(r, 3),
-                    "" if self.table.value(r, 4) == "Не выбрано" else self.table.value(r, 4),
-                    "" if self.table.value(r, 5) == "Не выбрано" else (self.table.value(r, 5) or "усл."),
+                    "" if self.table.value(r, 4) == NOT_SELECTED else self.table.value(r, 4),
+                    "" if self.table.value(r, 5) == NOT_SELECTED else (self.table.value(r, 5) or "усл."),
                     to_float(self.table.value(r, 6)),
                     self.table.value(r, 7),
                 )
@@ -1339,7 +1366,7 @@ class TemplatesTab(BaseTab):
         selection.add_widget(self.list, 1)
         add = QPushButton("Добавить шаблон")
         add.clicked.connect(self.add_template)
-        selection.add_widget(action_panel("Создание", add, primary=add))
+        selection.add_widget(action_panel(CREATE_TITLE, add, primary=add))
         left_l.addWidget(selection, 1)
         self.delete_button = QPushButton("Удалить шаблон")
         self.delete_button.clicked.connect(self.delete_template)
@@ -1354,7 +1381,7 @@ class TemplatesTab(BaseTab):
         self.notes = QTextEdit(); self.notes.setFixedHeight(55)
         form.addRow(selectable_label("Название шаблона"), self.name)
         form.addRow(selectable_label("Раздел"), self.category)
-        form.addRow(selectable_label("Примечание"), self.notes)
+        form.addRow(selectable_label(NOTES_LABEL), self.notes)
         self.form_widgets = [self.name, self.category, self.notes]
         polish_form(form)
         details.add_layout(form)
@@ -1371,7 +1398,7 @@ class TemplatesTab(BaseTab):
                                        primary=self.add_item_button))
         right_l.addWidget(source)
         self.table = CopyPasteTable(0, 6)
-        self.table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование", "Ед. изм.", "Цена", "Кол-во по перечню"])
+        self.table.setHorizontalHeaderLabels(["ID", WORK_ID_LABEL, "Наименование", UNIT_LABEL, "Цена", "Кол-во по перечню"])
         self.table.setColumnHidden(0, True); self.table.setColumnHidden(1, True)
         fit_table_columns(self.table, flex=(2,),
                           widths={3: 110, 4: 120, 5: 145})
@@ -1483,12 +1510,12 @@ class TemplatesTab(BaseTab):
                 self.list.setCurrentRow(i); break
 
     def delete_template(self):
-        if self.current_id and QMessageBox.question(self, "Удалить?", "Удалить шаблон?") == QMessageBox.Yes:
+        if self.current_id and QMessageBox.question(self, DELETE_QUESTION, "Удалить шаблон?") == QMessageBox.Yes:
             try:
                 make_backup("before_delete_template")
                 db.execute("DELETE FROM templates WHERE id=?", (self.current_id,))
             except Exception as exc:
-                QMessageBox.warning(self, "Удаление отменено", f"Не удалось сохранить резервную копию или удалить шаблон: {exc}")
+                QMessageBox.warning(self, DELETE_CANCELLED, f"Не удалось сохранить резервную копию или удалить шаблон: {exc}")
                 return
             self.current_id = None; self.refresh(); self.table.setRowCount(0); self.update_form_state()
 
@@ -1525,7 +1552,7 @@ class TemplatesTab(BaseTab):
             QMessageBox.warning(self, "Раздел шаблона", "Выберите официальный раздел формы.")
             return False
         for index in range(self.table.rowCount()):
-            for column, label in ((4, "Цена"), (5, "Количество")):
+            for column, label in ((4, "Цена"), (5, QUANTITY_LABEL)):
                 problem = numeric_error(
                     self.table.value(index, column), f"{label} шаблона, строка {index + 1}"
                 )
@@ -1577,7 +1604,7 @@ class TemplatesTab(BaseTab):
 class AddFromReferenceDialog(QDialog):
     def __init__(self, category: str, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Добавить из справочника")
+        self.setWindowTitle(ADD_REFERENCE_TEXT)
         self.selected_id = None
         layout = QVBoxLayout(self)
         self.combo = ClickComboBox()
@@ -1605,10 +1632,10 @@ class CreateReportDialog(QDialog):
         self.year = SafeSpinBox(); self.year.setRange(2000, 2100); self.year.setValue(int(default_year or 2026))
         self.year.valueChanged.connect(self.fill_full_year)
         self.period_start = QLineEdit(); self.period_end = QLineEdit()
-        self.period_start.setPlaceholderText("дд.мм.гггг или гггг-мм-дд")
-        self.period_end.setPlaceholderText("дд.мм.гггг или гггг-мм-дд")
+        self.period_start.setPlaceholderText(DATE_FORMAT_HINT)
+        self.period_end.setPlaceholderText(DATE_FORMAT_HINT)
         self.show_period = QCheckBox("Выводить строку фактического периода управления в отчете")
-        form.addRow(selectable_label("Отчетный год"), self.year)
+        form.addRow(selectable_label(REPORT_YEAR_LABEL), self.year)
         form.addRow(selectable_label("Период управления с"), self.period_start)
         form.addRow(selectable_label("Период управления по"), self.period_end)
         layout.addLayout(form)
@@ -1669,7 +1696,7 @@ class ReportsTab(BaseTab):
         reports_card.add_widget(self.list, 1)
         self.create_report_btn = QPushButton("Создать отчет за выбранный год")
         self.create_report_btn.clicked.connect(self.create_report)
-        reports_card.add_widget(action_panel("Создание", self.create_report_btn,
+        reports_card.add_widget(action_panel(CREATE_TITLE, self.create_report_btn,
                                              primary=self.create_report_btn))
         left_l.addWidget(reports_card, 1)
         self.delete_report_btn = QPushButton("Удалить выбранный отчет")
@@ -1690,7 +1717,7 @@ class ReportsTab(BaseTab):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
         )
         self.report_empty_hint = selectable_label(
-            "Сначала выберите управляющую организацию."
+            SELECT_COMPANY_MESSAGE
         )
         self.report_empty_card.add_widget(self.report_empty_hint)
         right_l.addWidget(self.report_empty_card)
@@ -1733,7 +1760,7 @@ class ReportsTab(BaseTab):
         self.save_panel.setVisible(has_report)
         if not has_report:
             if self.company_filter.currentData() is None:
-                instruction = "Сначала выберите управляющую организацию."
+                instruction = SELECT_COMPANY_MESSAGE
             elif self.house_filter.currentData() is None:
                 instruction = "Выберите дом выбранной организации."
             else:
@@ -1867,21 +1894,21 @@ class ReportsTab(BaseTab):
         card = ContentCard("Общие сведения", "Укажите отчетный год, фактический период управления и статус.")
         form = QFormLayout()
         self.year = SafeSpinBox(); self.year.setRange(2000, 2100); self.year.setValue(2026)
-        self.period_start = QLineEdit(); self.period_start.setPlaceholderText("дд.мм.гггг или гггг-мм-дд")
-        self.period_end = QLineEdit(); self.period_end.setPlaceholderText("дд.мм.гггг или гггг-мм-дд")
+        self.period_start = QLineEdit(); self.period_start.setPlaceholderText(DATE_FORMAT_HINT)
+        self.period_end = QLineEdit(); self.period_end.setPlaceholderText(DATE_FORMAT_HINT)
         fast = QPushButton("Заполнить полный год 01.01–31.12"); fast.clicked.connect(self.fill_full_year)
         self.show_period = QCheckBox("Выводить строку: Фактический период управления с ... по ...")
         self.publish = QLineEdit(); self.publish.setPlaceholderText("дд.мм.гггг")
         self.status = ClickComboBox(); self.status.addItems(["Черновик", "Проверен", "Размещен", "Архив"])
         self.notes = QTextEdit(); self.notes.setFixedHeight(80)
-        form.addRow(selectable_label("Отчетный год"), self.year)
+        form.addRow(selectable_label(REPORT_YEAR_LABEL), self.year)
         form.addRow(selectable_label("Период управления с"), self.period_start)
         form.addRow(selectable_label("Период управления по"), self.period_end)
         form.addRow(fast)
         form.addRow(self.show_period)
         form.addRow(selectable_label("Дата размещения отчета"), self.publish)
         form.addRow(selectable_label("Статус"), self.status)
-        form.addRow(selectable_label("Примечание"), self.notes)
+        form.addRow(selectable_label(NOTES_LABEL), self.notes)
         card.add_layout(form)
         layout.addWidget(card)
         self._next_report_action(layout, "Перейти к содержанию", 1)
@@ -1895,20 +1922,20 @@ class ReportsTab(BaseTab):
         template_row = QHBoxLayout()
         self.content_template_combo = ClickComboBox()
         self.content_template_combo.currentTextChanged.connect(self.content_template_combo.setToolTip)
-        template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.content_template_combo, 1)
+        template_row.addWidget(selectable_label(TEMPLATE_LABEL)); template_row.addWidget(self.content_template_combo, 1)
         layout.addLayout(template_row)
-        apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template(SECTION_CONTENT, self.content_template_combo))
-        add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference(SECTION_CONTENT))
+        apply = QPushButton(APPLY_TEMPLATE_TEXT); apply.clicked.connect(lambda: self.apply_template(SECTION_CONTENT, self.content_template_combo))
+        add_ref = QPushButton(ADD_REFERENCE_TEXT); add_ref.clicked.connect(lambda: self.add_from_reference(SECTION_CONTENT))
         add_empty = QPushButton(ADD_ROW_TEXT); add_empty.clicked.connect(lambda: self.add_blank_report_row(SECTION_CONTENT))
         from_assistant = QPushButton("Перенести перечень из Ассистента…")
         from_assistant.clicked.connect(self.import_assistant_work_list)
         # Keep the complete template title on its own wide row. Actions
         # can wrap below, instead of shrinking the selection field.
         layout.addWidget(action_panel(
-            "Наполнение раздела", apply, add_ref, add_empty, from_assistant, primary=from_assistant
+            SECTION_CONTENT_LABEL, apply, add_ref, add_empty, from_assistant, primary=from_assistant
         ))
         self.content_table = CopyPasteTable(0, 9)
-        self.content_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование работы/услуги", "Ед. изм.", "Цена единицы", "Кол-во по перечню", "Стоимость по перечню", "Выполнено кол-во", "Стоимость выполнено"])
+        self.content_table.setHorizontalHeaderLabels(["ID", WORK_ID_LABEL, "Наименование работы/услуги", UNIT_LABEL, "Цена единицы", "Кол-во по перечню", "Стоимость по перечню", "Выполнено кол-во", "Стоимость выполнено"])
         self.content_table.setColumnHidden(0, True); self.content_table.setColumnHidden(1, True)
         fit_table_columns(self.content_table, flex=(2,),
                           widths={3: 95, 4: 125, 5: 120, 6: 130, 7: 120, 8: 135})
@@ -1946,20 +1973,20 @@ class ReportsTab(BaseTab):
         template_row = QHBoxLayout()
         self.repair_template_combo = ClickComboBox()
         self.repair_template_combo.currentTextChanged.connect(self.repair_template_combo.setToolTip)
-        template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.repair_template_combo, 1)
+        template_row.addWidget(selectable_label(TEMPLATE_LABEL)); template_row.addWidget(self.repair_template_combo, 1)
         layout.addLayout(template_row)
-        apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template(SECTION_REPAIR, self.repair_template_combo))
-        add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference(SECTION_REPAIR))
+        apply = QPushButton(APPLY_TEMPLATE_TEXT); apply.clicked.connect(lambda: self.apply_template(SECTION_REPAIR, self.repair_template_combo))
+        add_ref = QPushButton(ADD_REFERENCE_TEXT); add_ref.clicked.connect(lambda: self.add_from_reference(SECTION_REPAIR))
         add_empty = QPushButton(ADD_ROW_TEXT); add_empty.clicked.connect(lambda: self.add_blank_report_row(SECTION_REPAIR))
         from_assistant_repair = QPushButton("Перенести перечень из Ассистента…")
         from_assistant_repair.clicked.connect(self.import_assistant_work_list)
         # Keep the complete template title on its own wide row. Actions
         # can wrap below, instead of shrinking the selection field.
         layout.addWidget(action_panel(
-            "Наполнение раздела", apply, add_ref, add_empty, from_assistant_repair, primary=from_assistant_repair
+            SECTION_CONTENT_LABEL, apply, add_ref, add_empty, from_assistant_repair, primary=from_assistant_repair
         ))
         self.repair_table = CopyPasteTable(0, 7)
-        self.repair_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование работы", "Основание", "Стоимость", "Объем", "Акт/ссылка"])
+        self.repair_table.setHorizontalHeaderLabels(["ID", WORK_ID_LABEL, "Наименование работы", "Основание", COST_LABEL, "Объем", "Акт/ссылка"])
         self.repair_table.setColumnHidden(0, True); self.repair_table.setColumnHidden(1, True)
         fit_table_columns(self.repair_table, flex=(2, 3, 6),
                           widths={4: 120, 5: 150})
@@ -2003,19 +2030,19 @@ class ReportsTab(BaseTab):
         template_row = QHBoxLayout()
         self.management_template_combo = ClickComboBox()
         self.management_template_combo.currentTextChanged.connect(self.management_template_combo.setToolTip)
-        template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.management_template_combo, 1)
+        template_row.addWidget(selectable_label(TEMPLATE_LABEL)); template_row.addWidget(self.management_template_combo, 1)
         layout.addLayout(template_row)
-        apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template(SECTION_MANAGEMENT, self.management_template_combo))
-        add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference(SECTION_MANAGEMENT))
+        apply = QPushButton(APPLY_TEMPLATE_TEXT); apply.clicked.connect(lambda: self.apply_template(SECTION_MANAGEMENT, self.management_template_combo))
+        add_ref = QPushButton(ADD_REFERENCE_TEXT); add_ref.clicked.connect(lambda: self.add_from_reference(SECTION_MANAGEMENT))
         add_empty = QPushButton(ADD_ROW_TEXT); add_empty.clicked.connect(lambda: self.add_blank_report_row(SECTION_MANAGEMENT))
         # Keep the complete template title on its own wide row. Actions
         # can wrap below, instead of shrinking the selection field.
         layout.addWidget(action_panel(
-            "Наполнение раздела", apply, add_ref, add_empty, primary=add_ref
+            SECTION_CONTENT_LABEL, apply, add_ref, add_empty, primary=add_ref
         ))
 
         self.management_table = CopyPasteTable(0, 7)
-        self.management_table.setHorizontalHeaderLabels(["ID", "Работа ID", "Наименование услуги", "Ед. изм.", "Цена единицы", "Кол-во", "Стоимость"])
+        self.management_table.setHorizontalHeaderLabels(["ID", WORK_ID_LABEL, "Наименование услуги", UNIT_LABEL, "Цена единицы", "Кол-во", COST_LABEL])
         self.management_table.setColumnHidden(0, True); self.management_table.setColumnHidden(1, True)
         fit_table_columns(self.management_table, flex=(2,),
                           widths={3: 110, 4: 135, 5: 115, 6: 145})
@@ -2152,7 +2179,7 @@ class ReportsTab(BaseTab):
             return None
 
     def reload_filters(self):
-        fill_combo(self.company_filter, "SELECT id, name FROM companies ORDER BY name", empty="Выберите организацию")
+        fill_combo(self.company_filter, COMPANY_LIST_SQL, empty="Выберите организацию")
         # A single UO needs no extra selection; never silently choose
         # the first of several organizations.
         if self.company_filter.count() == 2 and self.company_filter.currentData() is None:
@@ -2267,7 +2294,7 @@ class ReportsTab(BaseTab):
             self.msg("Сначала выберите конкретный дом слева.")
             return
         if not cid:
-            house = db.row("SELECT company_id FROM houses WHERE id=?", (hid,))
+            house = db.row(HOUSE_COMPANY_SQL, (hid,))
             cid = house["company_id"] if house else None
         if not cid:
             self.msg("У дома не выбрана управляющая организация.")
@@ -2423,8 +2450,8 @@ class ReportsTab(BaseTab):
         finally:
             self._content_recalc_lock = False
         self.content_table.item(row, 0).setData(Qt.UserRole, {
-            "source": item.get("source", "ручной ввод/редактирование"),
-            "is_manual": item.get("is_manual", 0 if item.get("source") in ("массовое применение", "шаблон") else 1),
+            "source": item.get("source", MANUAL_SOURCE),
+            "is_manual": item.get("is_manual", 0 if item.get("source") in (MASS_SOURCE, TEMPLATE_SOURCE) else 1),
         })
         self.schedule_autosave()
 
@@ -2433,8 +2460,8 @@ class ReportsTab(BaseTab):
         vals = [item.get("id", ""), item.get("work_item_id", ""), item.get("name", ""), item.get("basis", ""), item.get("cost", "0"), item.get("volume", ""), item.get("act_details", "")]
         for c, val in enumerate(vals): self.repair_table.set_value(row, c, val)
         self.repair_table.item(row, 0).setData(Qt.UserRole, {
-            "source": item.get("source", "ручной ввод/редактирование"),
-            "is_manual": item.get("is_manual", 0 if item.get("source") in ("массовое применение", "шаблон") else 1),
+            "source": item.get("source", MANUAL_SOURCE),
+            "is_manual": item.get("is_manual", 0 if item.get("source") in (MASS_SOURCE, TEMPLATE_SOURCE) else 1),
         })
         self.schedule_autosave()
 
@@ -2474,8 +2501,8 @@ class ReportsTab(BaseTab):
         finally:
             self._management_recalc_lock = False
         self.management_table.item(row, 0).setData(Qt.UserRole, {
-            "source": item.get("source", "ручной ввод/редактирование"),
-            "is_manual": item.get("is_manual", 0 if item.get("source") in ("массовое применение", "шаблон") else 1),
+            "source": item.get("source", MANUAL_SOURCE),
+            "is_manual": item.get("is_manual", 0 if item.get("source") in (MASS_SOURCE, TEMPLATE_SOURCE) else 1),
         })
         self.schedule_autosave()
 
@@ -2515,11 +2542,11 @@ class ReportsTab(BaseTab):
             r = db.row("SELECT * FROM work_items WHERE id=?", (dlg.selected_id,))
             price = to_float(r["default_price"])
             if category == SECTION_CONTENT:
-                self.add_content_row({"work_item_id": r["id"], "name": r["name"], "unit": r["unit"], "unit_price": price, "plan_qty": 1, "plan_cost": price, "actual_qty": 1, "actual_cost": price, "source": "справочник"})
+                self.add_content_row({"work_item_id": r["id"], "name": r["name"], "unit": r["unit"], "unit_price": price, "plan_qty": 1, "plan_cost": price, "actual_qty": 1, "actual_cost": price, "source": REFERENCE_SOURCE})
             elif category == SECTION_MANAGEMENT:
-                self.add_management_row({"work_item_id": r["id"], "name": r["name"], "unit": r["unit"], "unit_price": price, "qty": 1, "cost": price, "source": "справочник"})
+                self.add_management_row({"work_item_id": r["id"], "name": r["name"], "unit": r["unit"], "unit_price": price, "qty": 1, "cost": price, "source": REFERENCE_SOURCE})
             else:
-                self.add_repair_row({"work_item_id": r["id"], "name": r["name"], "source": "справочник"})
+                self.add_repair_row({"work_item_id": r["id"], "name": r["name"], "source": REFERENCE_SOURCE})
 
     def _template_section(self, template_id: int, fallback: str) -> str:
         tr = db.row("SELECT category FROM templates WHERE id=?", (template_id,))
@@ -2540,7 +2567,7 @@ class ReportsTab(BaseTab):
         if not tid:
             self.msg("Выберите шаблон для этого раздела.")
             return
-        if QMessageBox.question(self, "Применить шаблон", f"Добавить строки выбранного шаблона в раздел «{target_section}»?") != QMessageBox.Yes:
+        if QMessageBox.question(self, APPLY_TEMPLATE_TEXT, f"Добавить строки выбранного шаблона в раздел «{target_section}»?") != QMessageBox.Yes:
             return
         template_section = self._template_section(int(tid), target_section)
         added = 0
@@ -2570,11 +2597,11 @@ class ReportsTab(BaseTab):
             if name_key:
                 known_names.add(name_key)
             if target_section == SECTION_MANAGEMENT:
-                self.add_management_row({"work_item_id": it["work_item_id"], "name": it["name"], "unit": it["unit"], "unit_price": it["unit_price"], "qty": it["plan_qty"], "cost": cost, "source": "шаблон"})
+                self.add_management_row({"work_item_id": it["work_item_id"], "name": it["name"], "unit": it["unit"], "unit_price": it["unit_price"], "qty": it["plan_qty"], "cost": cost, "source": TEMPLATE_SOURCE})
             elif target_section == SECTION_REPAIR:
-                self.add_repair_row({"work_item_id": it["work_item_id"], "name": it["name"], "cost": cost, "volume": f"{money(it['plan_qty'])} {it['unit']}", "source": "шаблон"})
+                self.add_repair_row({"work_item_id": it["work_item_id"], "name": it["name"], "cost": cost, "volume": f"{money(it['plan_qty'])} {it['unit']}", "source": TEMPLATE_SOURCE})
             else:
-                self.add_content_row({"work_item_id": it["work_item_id"], "name": it["name"], "unit": it["unit"], "unit_price": it["unit_price"], "plan_qty": it["plan_qty"], "plan_cost": cost, "actual_qty": it["plan_qty"], "actual_cost": cost, "source": "шаблон"})
+                self.add_content_row({"work_item_id": it["work_item_id"], "name": it["name"], "unit": it["unit"], "unit_price": it["unit_price"], "plan_qty": it["plan_qty"], "plan_cost": cost, "actual_qty": it["plan_qty"], "actual_cost": cost, "source": TEMPLATE_SOURCE})
             added += 1
         self.msg(f"Шаблон применен. Раздел: {target_section}. Добавлено: {added}. Пропущено: {skipped}")
 
@@ -2657,7 +2684,7 @@ class ReportsTab(BaseTab):
                             "id": int(widget.value(row_index, 0) or 0),
                             "work_item_id": int(widget.value(row_index, 1) or 0) or None,
                             "name": name,
-                            "source": meta.get("source", "ручной ввод/редактирование"),
+                            "source": meta.get("source", MANUAL_SOURCE),
                             "is_manual": meta.get("is_manual", 1),
                         }
                         if table_name == "report_content_items":
@@ -2856,8 +2883,8 @@ class MassApplyTab(BaseTab):
     """Guided bulk entry: sources, calculation, targets, review, confirmation."""
 
     PREVIEW_COLUMNS = [
-        "Дом", "Площадь, м²", "Раздел / работа", "Отчет", "Стоимость",
-        "Цена в строке", "Количество", "Действие",
+        "Дом", "Площадь, м²", "Раздел / работа", "Отчет", COST_LABEL,
+        "Цена в строке", QUANTITY_LABEL, "Действие",
     ]
     MODES = [
         ("Цена за 1 м² площади дома", "area"),
@@ -2894,7 +2921,7 @@ class MassApplyTab(BaseTab):
         self.year.setValue(2026)
         self.work = ClickComboBox()
         source.addRow(selectable_label("Управляющая организация"), self.company)
-        source.addRow(selectable_label("Отчетный год"), self.year)
+        source.addRow(selectable_label(REPORT_YEAR_LABEL), self.year)
         source.addRow(selectable_label("Работа / услуга"), self.work)
         polish_form(source, label_width=155)
         context.add_layout(source)
@@ -2910,7 +2937,7 @@ class MassApplyTab(BaseTab):
             self.mode.addItem(title, key)
         self.rate_label = selectable_label("Ставка / цена")
         self.months_label = selectable_label("Количество месяцев")
-        self.quantity_label = selectable_label("Количество")
+        self.quantity_label = selectable_label(QUANTITY_LABEL)
         self.total_label = selectable_label("Сумма")
         self.rate = QLineEdit()
         self.rate.setPlaceholderText("Например: 6,76")
@@ -3739,13 +3766,13 @@ class MainWindow(QMainWindow):
             # Categories and templates are helpful but optional once the
             # directory is populated. Do not force users to visit them.
             has_works = db.row("SELECT id FROM work_items WHERE is_active=1 LIMIT 1")
-            action = ("Далее: отчеты →", 6) if has_works else ("Далее: справочник работ →", 3)
+            action = (NEXT_REPORTS_TEXT, 6) if has_works else ("Далее: справочник работ →", 3)
         elif isinstance(page, CategoriesTab) and page.current_id:
             action = ("Далее: справочник работ →", 3)
         elif isinstance(page, WorksTab) and page.table.rowCount():
-            action = ("Далее: отчеты →", 6)
+            action = (NEXT_REPORTS_TEXT, 6)
         elif isinstance(page, TemplatesTab) and page.current_id:
-            action = ("Далее: отчеты →", 6)
+            action = (NEXT_REPORTS_TEXT, 6)
         self._next_page = action[1] if action else None
         self.page_header.next_button.setVisible(action is not None)
         if action:
