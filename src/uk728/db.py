@@ -430,6 +430,16 @@ def load_report_bundle(report_id: int) -> dict[str, Any]:
         management = conn.execute("SELECT * FROM report_management_items WHERE report_id=? ORDER BY position, id", (report_id,)).fetchall()
         financials = conn.execute("SELECT * FROM report_financials WHERE report_id=? ORDER BY CASE payer_type WHEN 'Собственники' THEN 1 ELSE 2 END", (report_id,)).fetchall()
         claims = conn.execute("SELECT * FROM report_claims WHERE report_id=?", (report_id,)).fetchone()
+        # The previous report is contextual evidence, not a claim that its
+        # balances were actually copied. Review can flag uncertain continuity.
+        previous = conn.execute(
+            """SELECT id,company_id,year,period_end,status FROM reports
+               WHERE house_id=? AND id<>?
+                 AND (year<? OR (year=? AND period_end<?))
+               ORDER BY year DESC,period_end DESC,id DESC LIMIT 1""",
+            (report["house_id"], report_id, report["year"],
+             report["year"], report["period_start"]),
+        ).fetchone()
         return {
             "report": dict(report),
             "company": dict(company) if company else {},
@@ -439,4 +449,5 @@ def load_report_bundle(report_id: int) -> dict[str, Any]:
             "management": [dict(x) for x in management],
             "financials": [dict(x) for x in financials],
             "claims": dict(claims) if claims else {},
+            "previous_report": dict(previous) if previous else {},
         }
