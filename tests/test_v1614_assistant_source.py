@@ -230,6 +230,17 @@ class AssistantReadOnlySourceTests(unittest.TestCase):
         self.assertTrue(home.status.isEnabled())
         self.assertTrue(home.notes.isEnabled())
 
+    def test_extracted_page_aborts_sync_when_pending_edits_cannot_be_saved(self):
+        window = MainWindow()
+        self.addCleanup(window.close)
+        with patch.object(window, "save_before_assistant_sync", return_value=False) as save, \
+             patch("src.uk728.backups_ui.assistant_source.synchronize") as sync, \
+             patch.object(window, "reload_after_assistant_sync") as reload:
+            window.backups_tab._apply_assistant_sync(self.source, remember=True)
+        save.assert_called_once_with()
+        sync.assert_not_called()
+        reload.assert_not_called()
+
     def test_data_page_connect_updates_all_related_selectors(self):
         window = MainWindow()
         window.resize(1350, 900)
@@ -238,7 +249,13 @@ class AssistantReadOnlySourceTests(unittest.TestCase):
         self.app.processEvents()
         window.navigate(7)
         self.app.processEvents()
-        window.backups_tab._apply_assistant_sync(self.source, remember=True)
+        with patch.object(window, "save_before_assistant_sync",
+                          wraps=window.save_before_assistant_sync) as save, \
+             patch.object(window, "reload_after_assistant_sync",
+                          wraps=window.reload_after_assistant_sync) as reload:
+            window.backups_tab._apply_assistant_sync(self.source, remember=True)
+        save.assert_called_once_with()
+        reload.assert_called_once_with()
         self.app.processEvents()
         self.assertEqual(assistant_source.configured_source_path(), self.source)
         self.assertEqual(window.company_tab.list.count(), 1)
