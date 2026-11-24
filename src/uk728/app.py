@@ -2366,22 +2366,25 @@ class ReportsTab(BaseTab):
         except Exception as e:
             QMessageBox.warning(self, "Не удалось удалить отчет", str(e))
 
+    def _restore_report_selection(self, old_id, exc):
+        # The model selection has changed but the old editor must not be discarded.
+        blocked = self.list.blockSignals(True)
+        for i in range(self.list.count()):
+            if self.list.item(i).data(Qt.UserRole) == old_id:
+                self.list.setCurrentRow(i)
+                break
+        self.list.blockSignals(blocked)
+        win = self.window()
+        if hasattr(win, "set_save_status"):
+            win.set_save_status("error")
+        self.msg(f"Не удалось сохранить предыдущий отчет: {exc}")
+
     def _save_before_report_switch(self, old_id, new_id):
         if old_id and old_id != new_id and not self._loading_report and not self._saving_report:
             try:
                 self.flush_autosave()
             except Exception as exc:
-                # The model selection has changed but the old editor must not be discarded.
-                blocked = self.list.blockSignals(True)
-                for i in range(self.list.count()):
-                    if self.list.item(i).data(Qt.UserRole) == old_id:
-                        self.list.setCurrentRow(i)
-                        break
-                self.list.blockSignals(blocked)
-                win = self.window()
-                if hasattr(win, "set_save_status"):
-                    win.set_save_status("error")
-                self.msg(f"Не удалось сохранить предыдущий отчет: {exc}")
+                self._restore_report_selection(old_id, exc)
                 return False
         return True
 
@@ -2606,15 +2609,19 @@ class ReportsTab(BaseTab):
         else:
             self.add_content_row({"work_item_id": it["work_item_id"], "name": it["name"], "unit": it["unit"], "unit_price": it["unit_price"], "plan_qty": it["plan_qty"], "plan_cost": cost, "actual_qty": it["plan_qty"], "actual_cost": cost, "source": TEMPLATE_SOURCE})
 
-    def _apply_template_items(self, tid, target_section, template_section):
-        added = 0
-        skipped = 0
+    def _template_target_table(self, target_section):
         if target_section == SECTION_CONTENT:
             target_table = self.content_table
         elif target_section == SECTION_REPAIR:
             target_table = self.repair_table
         else:
             target_table = self.management_table
+        return target_table
+
+    def _apply_template_items(self, tid, target_section, template_section):
+        added = 0
+        skipped = 0
+        target_table = self._template_target_table(target_section)
         known_ids = {target_table.value(row, 1)
                      for row in range(target_table.rowCount()) if target_table.value(row, 1)}
         known_names = {target_table.value(row, 2).strip().casefold()
@@ -3804,24 +3811,28 @@ class MainWindow(QMainWindow):
         if company is not None or isinstance(page, CompaniesTab):
             self._active_company_id = company
 
+    def _select_company_row(self, page, cid):
+        for row in range(page.list.count()):
+            if page.list.item(row).data(Qt.UserRole) == cid:
+                if page.list.currentRow() != row:
+                    page.list.setCurrentRow(row)
+                break
+
+    def _company_context_combo(self, page):
+        if isinstance(page, (HousesTab, ReportsTab)):
+            return page.company_filter
+        if isinstance(page, MassApplyTab):
+            return page.company
+        return None
+
     def _apply_company_context(self, page):
         cid = self._active_company_id
         if cid is None:
             return
         if isinstance(page, CompaniesTab):
-            for row in range(page.list.count()):
-                if page.list.item(row).data(Qt.UserRole) == cid:
-                    if page.list.currentRow() != row:
-                        page.list.setCurrentRow(row)
-                    break
+            self._select_company_row(page, cid)
         else:
-            combo = None
-            if isinstance(page, HousesTab):
-                combo = page.company_filter
-            elif isinstance(page, ReportsTab):
-                combo = page.company_filter
-            elif isinstance(page, MassApplyTab):
-                combo = page.company
+            combo = self._company_context_combo(page)
             if combo is not None:
                 index = combo.findData(cid)
                 if index >= 0 and combo.currentIndex() != index:
@@ -3892,6 +3903,26 @@ class MainWindow(QMainWindow):
         if isinstance(current, ReportsTab) and current.current_id and not current._dirty_report:
             self.set_save_status("saved")
 
+    def _refresh_sidebar_company(self, current):
+        display_cid = current.current_id if isinstance(current, CompaniesTab) else self._active_company_id
+        if isinstance(current, HousesTab):
+            display_cid = current.company_filter.currentData()
+        elif isinstance(current, ReportsTab):
+            display_cid = current.company_filter.currentData()
+        elif isinstance(current, MassApplyTab):
+            display_cid = current.company.currentData()
+        company = db.row("SELECT name FROM companies WHERE id=?", (display_cid,)) if display_cid else None
+        self.sidebar.set_company_name(str(company["name"]) if company else "")
+
+    def _refresh_editor_save_status(self, current):
+        if isinstance(current, BaseTab) and not isinstance(current, ReportsTab):
+            if current.has_unsaved_changes():
+                if self.page_header.save_status.property("state") not in ("pending", "error"):
+                    self.set_save_status("pending")
+            elif (self._can_autosave_tab(current)
+                  and self.page_header.save_status.property("state") == "pending"):
+                self.set_save_status("saved")
+
     def refresh_context(self):
         """Show only the active page's selection and its meaningful next step."""
         try:
@@ -3899,23 +3930,9 @@ class MainWindow(QMainWindow):
             context, guidance = describe_context(current)
             self.page_header.set_context(context)
             self.page_header.guide.setText(guidance)
-            display_cid = current.current_id if isinstance(current, CompaniesTab) else self._active_company_id
-            if isinstance(current, HousesTab):
-                display_cid = current.company_filter.currentData()
-            elif isinstance(current, ReportsTab):
-                display_cid = current.company_filter.currentData()
-            elif isinstance(current, MassApplyTab):
-                display_cid = current.company.currentData()
-            company = db.row("SELECT name FROM companies WHERE id=?", (display_cid,)) if display_cid else None
-            self.sidebar.set_company_name(str(company["name"]) if company else "")
+            self._refresh_sidebar_company(current)
             self._update_next_action(current)
-            if isinstance(current, BaseTab) and not isinstance(current, ReportsTab):
-                if current.has_unsaved_changes():
-                    if self.page_header.save_status.property("state") not in ("pending", "error"):
-                        self.set_save_status("pending")
-                elif (self._can_autosave_tab(current)
-                      and self.page_header.save_status.property("state") == "pending"):
-                    self.set_save_status("saved")
+            self._refresh_editor_save_status(current)
         except (AttributeError, RuntimeError):
             self.page_header.set_context("Рабочий контекст")
 
