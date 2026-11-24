@@ -158,9 +158,9 @@ def stage_restore(selected: Path) -> dict:
     target = data_dir() / "backups" / name
     temporary = target.with_suffix(".tmp")
     try:
-        with closing(_read_only(source)) as original:
-            with closing(sqlite3.connect(str(temporary), timeout=30)) as destination:
-                original.backup(destination)
+        with (closing(_read_only(source)) as original,
+              closing(sqlite3.connect(str(temporary), timeout=30)) as destination):
+            original.backup(destination)
         os.replace(temporary, target)
         verify_backup(target)
         request = {
@@ -218,17 +218,17 @@ def apply_pending_restore() -> Path | None:
     try:
         # SQLite's online backup API manages existing WAL files correctly.
         # It is safer than replacing only .db while -wal/-shm may be present.
-        with closing(_read_only(snapshot)) as original:
-            with closing(sqlite3.connect(str(live), timeout=30)) as destination:
-                original.backup(destination)
+        with (closing(_read_only(snapshot)) as original,
+              closing(sqlite3.connect(str(live), timeout=30)) as destination):
+            original.backup(destination)
         verify_backup(live)
     except Exception:
         # If the destination was touched and a guard exists, attempt rollback.
         # On a second failure, abort startup; do not open a possibly damaged DB.
         if guard is not None:
-            with closing(_read_only(guard)) as old:
-                with closing(sqlite3.connect(str(live), timeout=30)) as destination:
-                    old.backup(destination)
+            with (closing(_read_only(guard)) as old,
+                  closing(sqlite3.connect(str(live), timeout=30)) as destination):
+                old.backup(destination)
             verify_backup(live)
         raise
     # Removing the marker last makes an interrupted restore retryable.
