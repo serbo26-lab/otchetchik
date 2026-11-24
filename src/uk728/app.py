@@ -151,8 +151,10 @@ def numeric_error(value: Any, label: str, *, whole: bool = False) -> str | None:
         amount = Decimal(raw)
     except (InvalidOperation, ValueError):
         return f"«{label}»: укажите число, например 1200 или 1 200,50."
-    if not amount.is_finite():
+    if not amount.is_finite() or not float("-inf") < float(amount) < float("inf"):
         return f"«{label}»: некорректное числовое значение."
+    if whole and amount > Decimal(2**53 - 1):
+        return f"«{label}»: слишком большое количество."
     if whole and (amount < 0 or amount != amount.to_integral_value()):
         return f"«{label}»: требуется целое неотрицательное количество."
     return None
