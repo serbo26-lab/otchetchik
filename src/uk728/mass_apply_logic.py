@@ -55,6 +55,23 @@ def amount(value: Any, label: str, *, strictly_positive: bool = False) -> Decima
     return result
 
 
+def _validate_mode_values(inputs, result, mode):
+    if mode in {"area", "monthly", "quantity"}:
+        result["rate"] = str(amount(inputs.get("rate"), "Ставка / цена", strictly_positive=True))
+    if mode == "monthly":
+        months_text = str(inputs.get("months") or "").strip()
+        if not months_text.isdecimal() or not (1 <= int(months_text) <= 12):
+            raise ValueError("Количество месяцев должно быть целым числом от 1 до 12.")
+        result["months"] = int(months_text)
+    if mode == "quantity":
+        result["quantity"] = str(amount(inputs.get("quantity"), "Количество", strictly_positive=True))
+    if mode in {"fixed", "split"}:
+        total = amount(inputs.get("total"), "Сумма", strictly_positive=True)
+        if mode == "split" and total != total.quantize(CENT):
+            raise ValueError("Распределяемая сумма должна быть указана с точностью до копейки.")
+        result["total"] = str(total)
+
+
 def validate_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
     mode = str(inputs.get("mode") or "")
     if mode not in MODES:
@@ -76,20 +93,7 @@ def validate_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
         "override_manual": bool(inputs.get("override_manual")) and bool(inputs.get("update_existing")),
         "rate": "", "months": 12, "quantity": "", "total": "",
     }
-    if mode in {"area", "monthly", "quantity"}:
-        result["rate"] = str(amount(inputs.get("rate"), "Ставка / цена", strictly_positive=True))
-    if mode == "monthly":
-        months_text = str(inputs.get("months") or "").strip()
-        if not months_text.isdecimal() or not (1 <= int(months_text) <= 12):
-            raise ValueError("Количество месяцев должно быть целым числом от 1 до 12.")
-        result["months"] = int(months_text)
-    if mode == "quantity":
-        result["quantity"] = str(amount(inputs.get("quantity"), "Количество", strictly_positive=True))
-    if mode in {"fixed", "split"}:
-        total = amount(inputs.get("total"), "Сумма", strictly_positive=True)
-        if mode == "split" and total != total.quantize(CENT):
-            raise ValueError("Распределяемая сумма должна быть указана с точностью до копейки.")
-        result["total"] = str(total)
+    _validate_mode_values(inputs, result, mode)
     return result
 
 
@@ -133,6 +137,113 @@ def _split_cents(total: Decimal, areas: list[Decimal]) -> list[Decimal]:
     return [Decimal(value) * CENT for value in allocated]
 
 
+def _choose_action(inputs, reports, report_id, matches, existing):
+    if len(reports) > 1:
+        action = "skip_many_reports"
+    elif report_id is not None and str(reports[0]["status"] or "") in ("Размещен", "Размещён", "Архив"):
+        action = "skip_protected_report"
+    elif len(matches) > 1:
+        action = "skip_ambiguous"
+    elif existing and int(existing["is_manual"] or 0) and not inputs["override_manual"]:
+        action = "skip_manual"
+    elif existing and not inputs["update_existing"]:
+        action = "skip_exists"
+    elif existing:
+        action = "update"
+    elif report_id is None and not inputs["create_missing"]:
+        action = "skip_report"
+    elif report_id is None:
+        action = "create"
+    else:
+        action = "insert"
+    return action
+
+
+def _check_area_action(mode, area, action):
+    if mode in {"area", "monthly", "split"} and area <= 0:
+        return "skip_area" if action in {"insert", "update", "create"} else action
+    return action
+
+
+def _preview_rows(conn, inputs, work, table, houses):
+    rows = []
+    for h in houses:
+        hid = int(h["id"])
+        area = _decimal(h["total_area"])
+        if not area.is_finite() or not isfinite(float(area)):
+            raise ValueError("Некорректная площадь выбранного дома.")
+        reports = conn.execute(
+            "SELECT * FROM reports WHERE house_id=? AND year=? ORDER BY id",
+            (hid, inputs["year"]),
+        ).fetchall()
+        report_id = int(reports[0]["id"]) if len(reports) == 1 else None
+        matches = _existing_rows(conn, table, report_id, inputs["work_id"], work["name"]) if report_id else []
+        existing = matches[0] if len(matches) == 1 else None
+        action = _choose_action(inputs, reports, report_id, matches, existing)
+        action = _check_area_action(inputs["mode"], area, action)
+        rows.append({
+            "house_id": hid, "address": str(h["address"] or ""), "area": str(area),
+            "house_state": _fingerprint(h),
+            "report_id": report_id, "existing_id": int(existing["id"]) if existing else None,
+            "existing_state": _fingerprint(existing),
+            "match_ids": [int(r["id"]) for r in matches],
+            "report_ids": [int(r["id"]) for r in reports],
+            "report_state": [_fingerprint(r) for r in reports],
+            "action": action,
+            "unit": "", "price": 0.0, "quantity": 0.0, "cost": 0.0,
+        })
+    return rows
+
+
+def _calculate_row(area, mode, rate, total, qty, months, split_cost):
+    if mode == "monthly":
+        line_qty = area
+        price = rate * months
+        cost = price * line_qty
+        unit = "м²"
+    elif mode == "area":
+        line_qty = area
+        price = rate
+        cost = price * line_qty
+        unit = "м²"
+    elif mode == "fixed":
+        line_qty = Decimal(1)
+        price = total
+        cost = total
+        unit = "усл."
+    elif mode == "split":
+        line_qty = area
+        cost = split_cost
+        price = cost / line_qty
+        unit = "м²"
+    else:
+        line_qty = qty
+        price = rate
+        cost = price * line_qty
+        unit = "усл."
+    if not all(isfinite(float(value)) for value in (cost, price, line_qty)):
+        raise ValueError("Результат расчета превышает допустимый числовой диапазон.")
+    return dict(cost=float(cost), price=float(price), quantity=float(line_qty), unit=unit)
+
+
+def _calculate_rows(inputs, rows):
+    actionable = [r for r in rows if r["action"] in ("insert", "update", "create")]
+    mode = inputs["mode"]
+    rate = _decimal(inputs["rate"] or 0)
+    total = _decimal(inputs["total"] or 0)
+    qty = _decimal(inputs["quantity"] or 0)
+    months = int(inputs["months"])
+    split_costs = (
+        _split_cents(total, [_decimal(r["area"]) for r in actionable])
+        if mode == "split" and actionable else []
+    )
+    for idx, row in enumerate(actionable):
+        area = _decimal(row["area"])
+        split_cost = split_costs[idx] if mode == "split" else None
+        row.update(_calculate_row(area, mode, rate, total, qty, months, split_cost))
+    return actionable
+
+
 def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
     inputs = validate_inputs(raw_inputs)
     company = conn.execute("SELECT id FROM companies WHERE id=?", (inputs["company_id"],)).fetchone()
@@ -153,90 +264,8 @@ def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
     ).fetchall()
     if {int(h["id"]) for h in houses} != set(selected_ids):
         raise ValueError("Список домов изменился. Обновите выбор домов.")
-    rows = []
-    for h in houses:
-        hid = int(h["id"])
-        area = _decimal(h["total_area"])
-        if not area.is_finite() or not isfinite(float(area)):
-            raise ValueError("Некорректная площадь выбранного дома.")
-        reports = conn.execute(
-            "SELECT * FROM reports WHERE house_id=? AND year=? ORDER BY id",
-            (hid, inputs["year"]),
-        ).fetchall()
-        report_id = int(reports[0]["id"]) if len(reports) == 1 else None
-        matches = _existing_rows(conn, table, report_id, inputs["work_id"], work["name"]) if report_id else []
-        existing = matches[0] if len(matches) == 1 else None
-        if len(reports) > 1:
-            action = "skip_many_reports"
-        elif report_id is not None and str(reports[0]["status"] or "") in ("Размещен", "Размещён", "Архив"):
-            action = "skip_protected_report"
-        elif len(matches) > 1:
-            action = "skip_ambiguous"
-        elif existing and int(existing["is_manual"] or 0) and not inputs["override_manual"]:
-            action = "skip_manual"
-        elif existing and not inputs["update_existing"]:
-            action = "skip_exists"
-        elif existing:
-            action = "update"
-        elif report_id is None and not inputs["create_missing"]:
-            action = "skip_report"
-        elif report_id is None:
-            action = "create"
-        else:
-            action = "insert"
-        if inputs["mode"] in {"area", "monthly", "split"} and area <= 0:
-            action = "skip_area" if action in {"insert", "update", "create"} else action
-        rows.append({
-            "house_id": hid, "address": str(h["address"] or ""), "area": str(area),
-            "house_state": _fingerprint(h),
-            "report_id": report_id, "existing_id": int(existing["id"]) if existing else None,
-            "existing_state": _fingerprint(existing),
-            "match_ids": [int(r["id"]) for r in matches],
-            "report_ids": [int(r["id"]) for r in reports],
-            "report_state": [_fingerprint(r) for r in reports],
-            "action": action,
-            "unit": "", "price": 0.0, "quantity": 0.0, "cost": 0.0,
-        })
-    actionable = [r for r in rows if r["action"] in ("insert", "update", "create")]
-    mode = inputs["mode"]
-    rate = _decimal(inputs["rate"] or 0)
-    total = _decimal(inputs["total"] or 0)
-    qty = _decimal(inputs["quantity"] or 0)
-    months = int(inputs["months"])
-    split_costs = (
-        _split_cents(total, [_decimal(r["area"]) for r in actionable])
-        if mode == "split" and actionable else []
-    )
-    for idx, row in enumerate(actionable):
-        area = _decimal(row["area"])
-        if mode == "monthly":
-            line_qty = area
-            price = rate * months
-            cost = price * line_qty
-            unit = "м²"
-        elif mode == "area":
-            line_qty = area
-            price = rate
-            cost = price * line_qty
-            unit = "м²"
-        elif mode == "fixed":
-            line_qty = Decimal(1)
-            price = total
-            cost = total
-            unit = "усл."
-        elif mode == "split":
-            line_qty = area
-            cost = split_costs[idx]
-            price = cost / line_qty
-            unit = "м²"
-        else:
-            line_qty = qty
-            price = rate
-            cost = price * line_qty
-            unit = "усл."
-        if not all(isfinite(float(value)) for value in (cost, price, line_qty)):
-            raise ValueError("Результат расчета превышает допустимый числовой диапазон.")
-        row.update(cost=float(cost), price=float(price), quantity=float(line_qty), unit=unit)
+    rows = _preview_rows(conn, inputs, work, table, houses)
+    actionable = _calculate_rows(inputs, rows)
     summary = {
         "insert": sum(r["action"] in ("insert", "create") for r in rows),
         "update": sum(r["action"] == "update" for r in rows),
@@ -251,6 +280,65 @@ def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
         "section": section, "table": table,
         "rows": rows, "summary": summary,
     }
+
+
+def _write_content(conn, row, rid, wid, work_name):
+    action = row["action"]
+    cost, price, qty, unit = (row["cost"], row["price"], row["quantity"], row["unit"])
+    existing_id = row["existing_id"]
+    if action == "update":
+        conn.execute("""UPDATE report_content_items SET unit=?, unit_price=?, plan_qty=?,
+            plan_cost=?, actual_qty=?, actual_cost=?, source='массовое применение',
+            is_manual=0 WHERE id=? AND report_id=?""",
+            (unit, price, qty, cost, qty, cost, existing_id, rid))
+    else:
+        pos = conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM report_content_items WHERE report_id=?", (rid,)).fetchone()[0]
+        conn.execute("""INSERT INTO report_content_items
+            (report_id,work_item_id,name,unit,unit_price,plan_qty,plan_cost,actual_qty,
+             actual_cost,source,is_manual,position)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (rid, wid, work_name, unit, price, qty, cost, qty, cost, MASS_SOURCE, 0, pos))
+
+
+def _write_repair(conn, row, rid, wid, work_name):
+    action = row["action"]
+    cost, qty, unit = (row["cost"], row["quantity"], row["unit"])
+    existing_id = row["existing_id"]
+    volume = f"{qty:g} {unit}" if qty else unit
+    if action == "update":
+        conn.execute("""UPDATE report_repair_items SET cost=?,volume=?,source='массовое применение',
+            is_manual=0 WHERE id=? AND report_id=?""", (cost, volume, existing_id, rid))
+    else:
+        pos = conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM report_repair_items WHERE report_id=?", (rid,)).fetchone()[0]
+        conn.execute("""INSERT INTO report_repair_items
+            (report_id,work_item_id,name,basis,cost,volume,act_details,source,is_manual,position)
+            VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (rid, wid, work_name, "", cost, volume, "", MASS_SOURCE, 0, pos))
+
+
+def _write_management(conn, row, rid, wid, work_name):
+    action = row["action"]
+    cost, price, qty, unit = (row["cost"], row["price"], row["quantity"], row["unit"])
+    existing_id = row["existing_id"]
+    if action == "update":
+        conn.execute("""UPDATE report_management_items SET unit=?,unit_price=?,qty=?,cost=?,
+            source='массовое применение',is_manual=0 WHERE id=? AND report_id=?""",
+            (unit, price, qty, cost, existing_id, rid))
+    else:
+        pos = conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM report_management_items WHERE report_id=?", (rid,)).fetchone()[0]
+        conn.execute("""INSERT INTO report_management_items
+            (report_id,work_item_id,name,unit,unit_price,qty,cost,source,is_manual,position)
+            VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (rid, wid, work_name, unit, price, qty, cost, MASS_SOURCE, 0, pos))
+
+
+def _write_section_row(conn, table, row, rid, wid, work_name):
+    if table == "report_content_items":
+        _write_content(conn, row, rid, wid, work_name)
+    elif table == "report_repair_items":
+        _write_repair(conn, row, rid, wid, work_name)
+    else:
+        _write_management(conn, row, rid, wid, work_name)
 
 
 def apply_plan(conn, preview: dict[str, Any]) -> dict[str, Any]:
@@ -277,43 +365,7 @@ def apply_plan(conn, preview: dict[str, Any]) -> dict[str, Any]:
             rid = row["report_id"]
             if action == "create":
                 rid = db.create_report_in_conn(conn, cid, row["house_id"], year)
-            cost, price, qty, unit = (row["cost"], row["price"], row["quantity"], row["unit"])
-            existing_id = row["existing_id"]
-            if table == "report_content_items":
-                if action == "update":
-                    conn.execute("""UPDATE report_content_items SET unit=?, unit_price=?, plan_qty=?,
-                        plan_cost=?, actual_qty=?, actual_cost=?, source='массовое применение',
-                        is_manual=0 WHERE id=? AND report_id=?""",
-                        (unit, price, qty, cost, qty, cost, existing_id, rid))
-                else:
-                    pos = conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM report_content_items WHERE report_id=?", (rid,)).fetchone()[0]
-                    conn.execute("""INSERT INTO report_content_items
-                        (report_id,work_item_id,name,unit,unit_price,plan_qty,plan_cost,actual_qty,
-                         actual_cost,source,is_manual,position)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        (rid, wid, work_name, unit, price, qty, cost, qty, cost, MASS_SOURCE, 0, pos))
-            elif table == "report_repair_items":
-                volume = f"{qty:g} {unit}" if qty else unit
-                if action == "update":
-                    conn.execute("""UPDATE report_repair_items SET cost=?,volume=?,source='массовое применение',
-                        is_manual=0 WHERE id=? AND report_id=?""", (cost, volume, existing_id, rid))
-                else:
-                    pos = conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM report_repair_items WHERE report_id=?", (rid,)).fetchone()[0]
-                    conn.execute("""INSERT INTO report_repair_items
-                        (report_id,work_item_id,name,basis,cost,volume,act_details,source,is_manual,position)
-                        VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                        (rid, wid, work_name, "", cost, volume, "", MASS_SOURCE, 0, pos))
-            else:
-                if action == "update":
-                    conn.execute("""UPDATE report_management_items SET unit=?,unit_price=?,qty=?,cost=?,
-                        source='массовое применение',is_manual=0 WHERE id=? AND report_id=?""",
-                        (unit, price, qty, cost, existing_id, rid))
-                else:
-                    pos = conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM report_management_items WHERE report_id=?", (rid,)).fetchone()[0]
-                    conn.execute("""INSERT INTO report_management_items
-                        (report_id,work_item_id,name,unit,unit_price,qty,cost,source,is_manual,position)
-                        VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                        (rid, wid, work_name, unit, price, qty, cost, MASS_SOURCE, 0, pos))
+            _write_section_row(conn, table, row, rid, wid, work_name)
             # Editing a checked report invalidates the previous check.
             conn.execute(
                 "UPDATE reports SET status=CASE WHEN status='Проверен' "
