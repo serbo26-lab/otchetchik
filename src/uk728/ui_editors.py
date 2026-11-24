@@ -123,7 +123,8 @@ def distinct_texts(table: str, column: str, extra: list[str] | None = None) -> l
             vals.append(t); seen.add(t.lower())
     try:
         for r in db.rows(f"SELECT DISTINCT {column} AS v FROM {table} WHERE TRIM(COALESCE({column},''))<>'' ORDER BY {column}"):
-            t = str(r["v"]).strip()
+            # The query returns exactly one column.
+            t = str(r[0]).strip()
             if t and t.lower() not in seen:
                 vals.append(t); seen.add(t.lower())
     except Exception:
@@ -503,7 +504,9 @@ def fill_combo(combo: QComboBox, sql: str, params: tuple = (), empty: str | None
     if empty is not None:
         combo.addItem(empty, None)
     for r in db.rows(sql, params):
-        combo.addItem(str(r["name"] if "name" in r.keys() else r[1]), r["id"])
+        fields = dict(r)
+        label = fields["name"] if "name" in fields else r[1]
+        combo.addItem(str(label), fields["id"])
     if preserve:
         restore_combo_selection(combo, old_data, old_text)
     combo.blockSignals(False)
