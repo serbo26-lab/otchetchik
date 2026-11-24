@@ -153,6 +153,26 @@ class HouseFieldsAndSignatoriesV1615Tests(unittest.TestCase):
         assistant_source.synchronize(self.source)
         self.assertEqual(len(signatories.list_signatories(house_id=house["id"])), 2)
 
+    def test_reassigned_source_signatory_rolls_back_organization_and_house_updates(self):
+        assistant_source.synchronize(self.source, save_path=True)
+        org = dict(db.row("SELECT * FROM companies WHERE assistant_source_id='uo-test'"))
+        home = dict(db.row("SELECT * FROM houses WHERE assistant_source_id='house-test'"))
+        people = [dict(row) for row in db.rows("SELECT * FROM signatories ORDER BY id")]
+        with sqlite3.connect(self.source) as conn:
+            conn.execute("UPDATE management_organizations SET name=?", ("Synthetic changed company",))
+            conn.execute("UPDATE houses SET charge_area=?", ("9999",))
+            conn.execute(
+                "UPDATE act_people SET organization_id=NULL,house_id=? WHERE id=?",
+                ("house-test", "person-uo"),
+            )
+        source_digest = hashlib.sha256(self.source.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(assistant_source.AssistantSourceError, "принадлежность подписанта"):
+            assistant_source.synchronize(self.source, save_path=True)
+        self.assertEqual(dict(db.row("SELECT * FROM companies WHERE id=?", (org["id"],))), org)
+        self.assertEqual(dict(db.row("SELECT * FROM houses WHERE id=?", (home["id"],))), home)
+        self.assertEqual([dict(row) for row in db.rows("SELECT * FROM signatories ORDER BY id")], people)
+        self.assertEqual(hashlib.sha256(self.source.read_bytes()).hexdigest(), source_digest)
+
     def test_manual_signer_validation_and_source_protection(self):
         assistant_source.synchronize(self.source)
         org = db.row("SELECT * FROM companies WHERE assistant_source_id='uo-test'")
