@@ -54,7 +54,7 @@ class BackupRestorationTests(unittest.TestCase):
         self.assertIsNotNone(guard)
         self.assertTrue(guard.exists())
         self.assertEqual(self.count_companies(), 1)
-        self.assertEqual(pending_restore(), None)
+        self.assertIsNone(pending_restore())
         self.assertEqual(verify_backup(guard)["companies"], 2)
         with sqlite3.connect(guard) as conn:
             self.assertEqual(

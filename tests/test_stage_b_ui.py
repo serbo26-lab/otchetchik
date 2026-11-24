@@ -84,7 +84,7 @@ class CommonUxTests(TestCase):
         self.assertEqual(table.item(0, 0).toolTip(), long_name)
         table.item(0, 0).setText(long_name + " — уточнение")
         self.assertEqual(table.item(0, 0).toolTip(), long_name + " — уточнение")
-        self.assertTrue(table.horizontalScrollMode() == QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.assertEqual(table.horizontalScrollMode(), QAbstractItemView.ScrollMode.ScrollPerPixel)
 
     def test_themes_consistently_style_cards_and_actions(self):
         self.window.switch_theme()

@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 )
 
 from .assistant_work_list import (
-    SKIP, CONTENT, REPAIR, WorkListImportError,
+    SKIP, CONTENT, REPAIR,
     apply_selected, read_preview,
 )
 
@@ -186,7 +186,7 @@ class AssistantWorkListDialog(QDialog):
                 return
         try:
             result = apply_selected(self.preview, selections)
-        except (WorkListImportError, OSError, ValueError) as exc:
+        except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "Перенос отменён", str(exc))
             return
         self.import_result = result

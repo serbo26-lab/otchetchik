@@ -404,6 +404,20 @@ def execute(query: str, params: tuple[Any, ...] = ()) -> int:
         return int(cur.lastrowid or 0)
 
 
+def _previous_balances(conn, previous):
+    repair_start = float(previous["repair_end_balance"]) if previous else 0.0
+    owners_debt_start = 0.0
+    tenants_debt_start = 0.0
+    if previous:
+        prev_fin = conn.execute("SELECT * FROM report_financials WHERE report_id=?", (previous["id"],)).fetchall()
+        for fin in prev_fin:
+            if fin["payer_type"] == "Собственники":
+                owners_debt_start = float(fin["debt_end"] or 0)
+            if fin["payer_type"] == "Наниматели":
+                tenants_debt_start = float(fin["debt_end"] or 0)
+    return repair_start, owners_debt_start, tenants_debt_start
+
+
 def create_report_in_conn(conn: sqlite3.Connection, company_id: int, house_id: int, year: int, period_start: str | None = None, period_end: str | None = None, show_period_note: bool = False) -> int:
     """Создает отчет, используя уже открытую SQLite-сессию.
 
@@ -427,16 +441,7 @@ def create_report_in_conn(conn: sqlite3.Connection, company_id: int, house_id: i
         """,
         (house_id, year, year, p_start),
     ).fetchone()
-    repair_start = float(previous["repair_end_balance"]) if previous else 0.0
-    owners_debt_start = 0.0
-    tenants_debt_start = 0.0
-    if previous:
-        prev_fin = conn.execute("SELECT * FROM report_financials WHERE report_id=?", (previous["id"],)).fetchall()
-        for fin in prev_fin:
-            if fin["payer_type"] == "Собственники":
-                owners_debt_start = float(fin["debt_end"] or 0)
-            if fin["payer_type"] == "Наниматели":
-                tenants_debt_start = float(fin["debt_end"] or 0)
+    repair_start, owners_debt_start, tenants_debt_start = _previous_balances(conn, previous)
     cur = conn.execute(
         """
         INSERT INTO reports(company_id, house_id, year, period_start, period_end, show_period_note, repair_start_balance)

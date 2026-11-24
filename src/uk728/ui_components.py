@@ -47,7 +47,10 @@ def action_panel(title: str, *buttons: QPushButton, purpose: str = "normal", pri
     """Compose a single, meaningful group; destructive groups are always separate."""
     panel = ActionPanel(title, purpose=purpose)
     for button in buttons:
-        role = "danger" if purpose == "danger" else "primary" if button is primary else "neutral"
+        if purpose == "danger":
+            role = "danger"
+        else:
+            role = "primary" if button is primary else "neutral"
         panel.add_action(button, role=role)
     # A single operation should be a visible button, not a nested
     # frame with another heading repeating the purpose of the button.

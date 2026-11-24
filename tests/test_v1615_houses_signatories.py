@@ -195,8 +195,8 @@ class HouseFieldsAndSignatoriesV1615Tests(unittest.TestCase):
                 "basis_kind": "Устав",
                 "valid_from": "2025-01-01",
             }, company_id=org["id"])
+        source_id = signatories.list_signatories(company_id=org["id"])[0]["id"]
         with self.assertRaisesRegex(ValueError, "Ассистента"):
-            source_id = signatories.list_signatories(company_id=org["id"])[0]["id"]
             signatories.save_local_signatory({
                 "full_name": "Заменён", "valid_from": "2025-01-01",
                 "basis_kind": "Устав"

@@ -2572,11 +2572,12 @@ class ReportsTab(BaseTab):
         template_section = self._template_section(int(tid), target_section)
         added = 0
         skipped = 0
-        target_table = (
-            self.content_table if target_section == SECTION_CONTENT
-            else self.repair_table if target_section == SECTION_REPAIR
-            else self.management_table
-        )
+        if target_section == SECTION_CONTENT:
+            target_table = self.content_table
+        elif target_section == SECTION_REPAIR:
+            target_table = self.repair_table
+        else:
+            target_table = self.management_table
         known_ids = {target_table.value(row, 1)
                      for row in range(target_table.rowCount()) if target_table.value(row, 1)}
         known_names = {target_table.value(row, 2).strip().casefold()
@@ -3382,9 +3383,8 @@ class BackupsTab(BaseTab):
 
     def _apply_assistant_sync(self, path: Path | None = None, *, remember: bool = False):
         win = self.window()
-        if isinstance(win, MainWindow):
-            if not win.save_before_assistant_sync():
-                return
+        if isinstance(win, MainWindow) and not win.save_before_assistant_sync():
+            return
         try:
             # synchronize() compares source data and makes a safety copy
             # only when an actual import is necessary.
@@ -3788,9 +3788,8 @@ class MainWindow(QMainWindow):
             if isinstance(previous, ReportsTab):
                 # No pending edit may be thrown away when selecting another page.
                 previous.flush_autosave()
-            elif self._can_autosave_tab(previous):
-                if previous.save() is False:
-                    raise ValueError("Исправьте ошибки заполнения перед переходом.")
+            elif self._can_autosave_tab(previous) and previous.save() is False:
+                raise ValueError("Исправьте ошибки заполнения перед переходом.")
         except Exception as exc:
             self.set_save_status("error")
             self.statusBar().showMessage(f"Не удалось сохранить изменения: {exc}", 12000)
@@ -3890,9 +3889,8 @@ class MainWindow(QMainWindow):
             tab = self.tabs.currentWidget()
             if isinstance(tab, ReportsTab):
                 tab.flush_autosave()
-            elif self._can_autosave_tab(tab):
-                if tab.save() is False:
-                    raise ValueError("Не все обязательные поля заполнены.")
+            elif self._can_autosave_tab(tab) and tab.save() is False:
+                raise ValueError("Не все обязательные поля заполнены.")
             path = make_backup("auto")
             if path is not None:
                 self.statusBar().showMessage(f"Резервная копия создана: {path.name}", 5000)
@@ -3908,9 +3906,8 @@ class MainWindow(QMainWindow):
             tab = self.tabs.currentWidget()
             if isinstance(tab, ReportsTab):
                 tab.flush_autosave()
-            elif self._can_autosave_tab(tab):
-                if tab.save() is False:
-                    raise ValueError("Не все обязательные поля заполнены.")
+            elif self._can_autosave_tab(tab) and tab.save() is False:
+                raise ValueError("Не все обязательные поля заполнены.")
         except Exception as exc:
             self.set_save_status("error")
             self.statusBar().showMessage(f"Закрытие отменено: данные не сохранены ({exc})", 12000)
