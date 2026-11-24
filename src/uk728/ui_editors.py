@@ -83,7 +83,14 @@ def empty_record_editor(
     return stack
 
 
-COMMON_SECTIONS = ["Содержание", "Текущий ремонт", "Управление"]
+SECTION_CONTENT = "Содержание"
+SECTION_REPAIR = "Текущий ремонт"
+SECTION_MANAGEMENT = "Управление"
+DELETE_ROWS_TITLE = "Удаление строк"
+DELETE_ROWS_TEXT = "Удалить выбранные строки"
+ADD_ROW_TEXT = "Добавить строку"
+
+COMMON_SECTIONS = [SECTION_CONTENT, SECTION_REPAIR, SECTION_MANAGEMENT]
 COMMON_UNITS = ["усл.", "шт.", "м²", "м³", "п.м.", "мес.", "год", "работа", "комплект", "акт", "раз"]
 COMMON_FILL_MODES = [
     "Цена × количество",
@@ -266,13 +273,13 @@ class CopyPasteTable(QTableWidget):
         act_paste = QAction("Вставить", self)
         act_paste.triggered.connect(self.paste_selection)
         menu.addAction(act_paste)
-        act_add = QAction("Добавить строку", self)
+        act_add = QAction(ADD_ROW_TEXT, self)
         act_add.triggered.connect(
             self.context_add_handler if self.context_add_handler is not None
             else lambda: self.insertRow(self.rowCount())
         )
         menu.addAction(act_add)
-        act_del = QAction("Удалить выбранные строки", self)
+        act_del = QAction(DELETE_ROWS_TEXT, self)
         act_del.triggered.connect(
             self.context_delete_handler if self.context_delete_handler is not None
             else self.delete_selected_rows
@@ -310,30 +317,37 @@ class CopyPasteTable(QTableWidget):
         start_col = self.currentColumn() if self.currentColumn() >= 0 else 0
         for offset, line in enumerate(lines):
             row = start_row + offset
-            if row >= self.rowCount():
-                if not self.allow_paste_append:
-                    break  # Fixed legal tables cannot gain arbitrary payers.
-                before = self.rowCount()
-                if self.context_add_handler is not None:
-                    self.context_add_handler()  # Creates business metadata/defaults.
-                else:
-                    self.insertRow(self.rowCount())
-                if self.rowCount() <= before:
-                    break
-            for shift, value in enumerate(line.split("\t")):
-                col = start_col + shift
-                if col >= self.columnCount():
-                    break
-                if self.isColumnHidden(col) or col in self.protected_columns:
-                    continue
-                self.setItem(row, col, QTableWidgetItem(value))
+            if not self._prepare_paste_row(row):
+                break
+            self._paste_line(row, start_col, line)
+
+    def _prepare_paste_row(self, row):
+        if row < self.rowCount():
+            return True
+        if not self.allow_paste_append:
+            return False  # Fixed legal tables cannot gain arbitrary payers.
+        before = self.rowCount()
+        if self.context_add_handler is not None:
+            self.context_add_handler()  # Creates business metadata/defaults.
+        else:
+            self.insertRow(self.rowCount())
+        return self.rowCount() > before
+
+    def _paste_line(self, row, start_col, line):
+        for shift, value in enumerate(line.split("\t")):
+            col = start_col + shift
+            if col >= self.columnCount():
+                break
+            if self.isColumnHidden(col) or col in self.protected_columns:
+                continue
+            self.setItem(row, col, QTableWidgetItem(value))
 
     def delete_selected_rows(self, confirmed: bool = False):
         rows = sorted({i.row() for i in self.selectedIndexes()}, reverse=True)
         if not rows:
             return False
         if not confirmed and QMessageBox.question(
-            self, "Удаление строк",
+            self, DELETE_ROWS_TITLE,
             f"Удалить выбранные строки ({len(rows)})? Изменения будут сохранены при следующем сохранении формы.",
         ) != QMessageBox.Yes:
             return False
@@ -469,15 +483,15 @@ def row_get(row: Any, key: str, default: Any = "") -> Any:
         return default
 
 
-def normalize_section(value: Any, default: str = "Содержание") -> str:
+def normalize_section(value: Any, default: str = SECTION_CONTENT) -> str:
     raw = str(value or "").strip()
     low = raw.lower()
     if "управ" in low:
-        return "Управление"
+        return SECTION_MANAGEMENT
     if "ремонт" in low:
-        return "Текущий ремонт"
+        return SECTION_REPAIR
     if "содерж" in low:
-        return "Содержание"
+        return SECTION_CONTENT
     return raw if raw in COMMON_SECTIONS else default
 
 
