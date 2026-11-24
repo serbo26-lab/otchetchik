@@ -38,8 +38,7 @@ def _new_export_path(base: Path):
             f"{base.stem}_{index}{base.suffix}"
         )
         try:
-            with candidate.open("xb"):
-                pass
+            candidate.open("xb").close()
         except FileExistsError:
             index += 1
             continue
@@ -197,7 +196,6 @@ def export_xlsx(report_id: int) -> Path:
     thin = Side(style="thin", color="333333")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     header_fill = PatternFill("solid", fgColor="E9EEF7")
-    title_font = Font(name="Arial", size=13, bold=True)
     bold = Font(name="Arial", size=10, bold=True)
     normal = Font(name="Arial", size=10)
 
@@ -393,23 +391,23 @@ def export_pdf(report_id: int) -> Path:
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("FONTNAME", (0, 0), (-1, -1), font_name),
         ]))
-        elems.append(table)
-        elems.append(Spacer(1, 5))
+        elems.extend([table, Spacer(1, 5)])
 
     elems.append(P(CONTENT_HEADING, section))
     data = [["N", "Наименование", "Ед.", "Цена", "Кол-во", COST_LABEL, "Выполнено", COST_LABEL]] + _content_rows(bundle)
     add_table(data, [10*mm, 54*mm, 13*mm, 20*mm, 20*mm, 24*mm, 20*mm, 25*mm])
 
-    elems.append(P(REPAIR_HEADING, section))
-    elems.append(P(f"Остаток (перерасход, сальдо) на 1 января отчетного периода: {balance_text(report.get('repair_start_balance'))}"))
-    elems.append(P(f"Общий объем денежных средств, подлежащий внесению собственниками за текущий ремонт: {money(report.get('repair_accrual'))} руб."))
-    elems.append(P(f"Стоимость работ по текущему ремонту, выполненных за отчетный период: {money(report.get('repair_work_cost'))} руб."))
-    elems.append(P(f"Остаток (перерасход, сальдо) на 31 декабря отчетного периода: {balance_text(report.get('repair_end_balance'))}"))
+    elems.extend([
+        P(REPAIR_HEADING, section),
+        P(f"Остаток (перерасход, сальдо) на 1 января отчетного периода: {balance_text(report.get('repair_start_balance'))}"),
+        P(f"Общий объем денежных средств, подлежащий внесению собственниками за текущий ремонт: {money(report.get('repair_accrual'))} руб."),
+        P(f"Стоимость работ по текущему ремонту, выполненных за отчетный период: {money(report.get('repair_work_cost'))} руб."),
+        P(f"Остаток (перерасход, сальдо) на 31 декабря отчетного периода: {balance_text(report.get('repair_end_balance'))}"),
+    ])
     data = [["N", "Наименование", "Основание", COST_LABEL, "Объем", "Акт/ссылка"]] + _repair_rows(bundle)
     add_table(data, [10*mm, 48*mm, 34*mm, 24*mm, 28*mm, 42*mm])
 
-    elems.append(P(MANAGEMENT_HEADING, section))
-    elems.append(P(f"{money(_management_cost(bundle))} руб."))
+    elems.extend([P(MANAGEMENT_HEADING, section), P(f"{money(_management_cost(bundle))} руб.")])
 
     elems.append(P(CLAIMS_HEADING, section))
     claims = bundle["claims"] or {}
