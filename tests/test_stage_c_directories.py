@@ -175,6 +175,40 @@ class DirectoryFlowTests(unittest.TestCase):
         self.assertEqual(tab.work_combo.findData(w1), -1)
         self.assertGreaterEqual(tab.work_combo.findData(w2), 0)
 
+    def test_directory_validation_rejects_changes_before_saving(self):
+        category = self.window.categories_tab
+        category.add_category()
+        cid = category.current_id
+        category.name.setText("Synthetic category")
+        category.section.setCurrentText("Содержание")
+        category.add_subcategory()
+        category.sub_table.set_value(0, 1, "Synthetic subcategory")
+        category.sub_table.set_value(0, 4, "invalid")
+        original = dict(db.row("SELECT * FROM work_categories WHERE id=?", (cid,)))
+        with patch("src.uk728.app.QMessageBox.warning"):
+            self.assertIs(category.save(refresh_after=False), False)
+        self.assertEqual(dict(db.row("SELECT * FROM work_categories WHERE id=?", (cid,))), original)
+        self.assertFalse(db.rows("SELECT id FROM work_categories WHERE parent_id=?", (cid,)))
+        category.sub_table.set_value(0, 4, "10")
+        category.save(refresh_after=False)
+        row_id = int(category.sub_table.value(0, 0))
+        self.assertEqual(db.row("SELECT default_price FROM work_categories WHERE id=?", (row_id,))[0], 10)
+
+        work = self.window.works_tab
+        work.reload()
+        work.add_row()
+        index = work.table.rowCount() - 1
+        work.table.set_value(index, 3, "Synthetic invalid work")
+        work.table.set_value(index, 4, "Содержание")
+        work.table.set_value(index, 6, "invalid")
+        before = len(db.rows("SELECT id FROM work_items"))
+        with patch("src.uk728.app.QMessageBox.warning"):
+            self.assertIs(work.save(), False)
+        self.assertEqual(len(db.rows("SELECT id FROM work_items")), before)
+        work.table.set_value(index, 6, "7")
+        work.save()
+        self.assertEqual(len(db.rows("SELECT id FROM work_items")), before + 1)
+
     def test_destructive_buttons_are_separate_from_creation(self):
         for page in (self.window.company_tab, self.window.houses_tab,
                      self.window.categories_tab, self.window.templates_tab):
