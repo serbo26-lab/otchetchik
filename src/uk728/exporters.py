@@ -171,12 +171,20 @@ def _write_xlsx_table(ws, r, headers, data, widths_count, styles):
     return r
 
 
-def export_xlsx(report_id: int) -> Path:
+def _export_bundle(report_id: int, bundle: dict[str, Any] | None) -> dict[str, Any]:
+    if bundle is None:
+        return load_report_bundle(report_id)
+    if bundle["report"]["id"] != report_id:
+        raise ValueError("Снимок относится к другому отчету.")
+    return bundle
+
+
+def export_xlsx(report_id: int, *, bundle: dict[str, Any] | None = None) -> Path:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
 
-    bundle = load_report_bundle(report_id)
+    bundle = _export_bundle(report_id, bundle)
     report = bundle["report"]
     company = bundle["company"]
     house = bundle["house"]
@@ -277,12 +285,12 @@ def export_xlsx(report_id: int) -> Path:
     return target
 
 
-def export_docx(report_id: int) -> Path:
+def export_docx(report_id: int, *, bundle: dict[str, Any] | None = None) -> Path:
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Pt
 
-    bundle = load_report_bundle(report_id)
+    bundle = _export_bundle(report_id, bundle)
     report = bundle["report"]
     company = bundle["company"]
     house = bundle["house"]
@@ -345,7 +353,7 @@ def export_docx(report_id: int) -> Path:
     return target
 
 
-def export_pdf(report_id: int) -> Path:
+def export_pdf(report_id: int, *, bundle: dict[str, Any] | None = None) -> Path:
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER, TA_LEFT
     from reportlab.lib.pagesizes import A4
@@ -362,7 +370,7 @@ def export_pdf(report_id: int) -> Path:
             pdfmetrics.registerFont(TTFont(font_name, str(font_path)))
             break
 
-    bundle = load_report_bundle(report_id)
+    bundle = _export_bundle(report_id, bundle)
     report = bundle["report"]
     company = bundle["company"]
     house = bundle["house"]
