@@ -88,8 +88,10 @@ class ReportDataSafetyTests(unittest.TestCase):
                     (self.rid, "Учебная работа"),
                 )
                 old = dict(db.row(f"SELECT * FROM {table} WHERE id=?", (row_id,)))
+                conn = db.connect()
+                self.addCleanup(conn.close)
                 with self.assertRaisesRegex(ValueError, "наименование"):
-                    with db.connect() as conn:
+                    with conn:
                         sync_report_rows(conn, table, self.rid, [{**old, "name": " "}])
                 self.assertEqual(dict(db.row(f"SELECT * FROM {table} WHERE id=?", (row_id,))), old)
                 # Explicit removal of the row from the table remains possible.
@@ -112,11 +114,14 @@ class ReportDataSafetyTests(unittest.TestCase):
     def test_failed_export_reservation_does_not_touch_previous_file(self):
         base = self.root / "example.xlsx"
         base.write_bytes(b"existing export")
-        with self.assertRaisesRegex(OSError, "synthetic failure"):
+        def fail_export():
             with _new_export_path(base) as target:
                 self.assertNotEqual(base, target)
                 target.write_bytes(b"partial")
                 raise OSError("synthetic failure")
+
+        with self.assertRaisesRegex(OSError, "synthetic failure"):
+            fail_export()
         self.assertEqual(base.read_bytes(), b"existing export")
         self.assertEqual(list(self.root.glob("example*.xlsx")), [base])
 
