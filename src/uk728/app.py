@@ -56,6 +56,7 @@ from .utils import full_year_period, iso_date, money, to_float, parse_date, form
 from .ui_style import apply_theme
 from .ui_shell import ActionFlowLayout, NavigationSidebar, PageChrome, PAGES
 from .report_storage import sync_report_rows
+from .template_storage import save_template
 from .report_review import inspect_report, review_text, bundle_fingerprint
 from .mass_apply_logic import (ACTION_TEXT as MASS_ACTION_TEXT, OutdatedPreview as MassOutdatedPreview,
                                build_plan as build_mass_plan, apply_plan as apply_mass_plan)
@@ -2016,6 +2017,10 @@ class TemplatesTab(BaseTab):
         if not self.current_id:
             self.msg("Нажмите «Добавить шаблон», затем заполните поля и сохраните.")
             return
+        # Navigation, sync and timer saves must not mutate untouched templates.
+        if (getattr(self, "_loaded_form_id", None) == self.current_id
+                and not self.has_unsaved_changes()):
+            return
         section = normalize_section(self.category.currentText(), "")
         if section not in COMMON_SECTIONS:
             QMessageBox.warning(self, "Раздел шаблона", "Выберите официальный раздел формы.")
@@ -2039,18 +2044,31 @@ class TemplatesTab(BaseTab):
                     "Исправьте состав шаблона или верните прежний раздел.",
                 )
                 return False
-        with connect() as conn:
-            conn.execute("UPDATE templates SET name=?, category=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (self.name.text(), self.category.currentText(), self.notes.toPlainText(), self.current_id))
-            conn.execute("DELETE FROM template_items WHERE template_id=?", (self.current_id,))
-            for r in range(self.table.rowCount()):
-                name = self.table.value(r, 2)
-                if not name:
-                    continue
-                conn.execute(
-                    "INSERT INTO template_items(template_id, work_item_id, name, unit, unit_price, plan_qty, position) VALUES(?,?,?,?,?,?,?)",
-                    (self.current_id, int(self.table.value(r, 1) or 0) or None, name, self.table.value(r, 3), to_float(self.table.value(r, 4)), to_float(self.table.value(r, 5)), r + 1),
+        rows = [
+            {
+                "id": self.table.value(r, 0),
+                "work_item_id": int(self.table.value(r, 1) or 0) or None,
+                "name": self.table.value(r, 2),
+                "unit": self.table.value(r, 3),
+                "unit_price": to_float(self.table.value(r, 4)),
+                "plan_qty": to_float(self.table.value(r, 5)),
+            }
+            for r in range(self.table.rowCount())
+        ]
+        try:
+            with connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                inserted = save_template(
+                    conn, self.current_id, self.name.text(),
+                    self.category.currentText(), self.notes.toPlainText(), rows,
                 )
-            conn.commit()
+                conn.commit()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Шаблон не сохранён", str(exc))
+            return False
+        # Reconcile hidden row IDs even when saving before a selection change.
+        for index, row_id in inserted:
+            self.table.set_value(index, 0, row_id)
         self._remember_form_state()
         self.msg("Шаблон сохранен")
         if refresh_after:
