@@ -63,6 +63,8 @@ from .ui_components import (
 )
 
 from .ui_editors import (
+    SECTION_CONTENT, SECTION_REPAIR, SECTION_MANAGEMENT,
+    DELETE_ROWS_TITLE, DELETE_ROWS_TEXT, ADD_ROW_TEXT,
     selectable_label, polish_form, empty_record_editor, COMMON_SECTIONS,
     COMMON_UNITS, COMMON_FILL_MODES, COMMON_PAYER_TYPES, COMMON_REPAIR_BASIS,
     numeric_error, distinct_texts, ClickComboBox, SafeSpinBox,
@@ -940,7 +942,7 @@ class CategoriesTab(BaseTab):
         self.delete_sub_button.clicked.connect(self.sub_table.delete_selected_rows)
         self.save_button = QPushButton("Сохранить категорию и подкатегории")
         self.save_button.clicked.connect(self.save)
-        subcategories.add_widget(action_panel("Удаление строк", self.delete_sub_button, purpose="danger"))
+        subcategories.add_widget(action_panel(DELETE_ROWS_TITLE, self.delete_sub_button, purpose="danger"))
         subcategories.add_widget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
         self.form_widgets = [self.name, self.section, self.unit, self.price, self.notes, self.sub_table]
         splitter.addWidget(right)
@@ -1154,11 +1156,11 @@ class WorksTab(BaseTab):
         entries.add_widget(action_panel("Добавление строки", self.add_manual_button,
                                        primary=self.add_manual_button))
         root.addWidget(entries, 1)
-        delete = QPushButton("Удалить выбранные строки")
+        delete = QPushButton(DELETE_ROWS_TEXT)
         delete.clicked.connect(self.table.delete_selected_rows)
         save = QPushButton("Сохранить справочник")
         save.clicked.connect(self.save)
-        entries.add_widget(action_panel("Удаление строк", delete, purpose="danger"))
+        entries.add_widget(action_panel(DELETE_ROWS_TITLE, delete, purpose="danger"))
         entries.add_widget(action_panel("3. Сохранение справочника", save, primary=save))
         self.reload_category_combo()
         self.refresh()
@@ -1378,11 +1380,11 @@ class TemplatesTab(BaseTab):
         composition = table_card("4. Состав шаблона", self.table,
                                  subtitle="Проверьте цену и количество в каждой строке.")
         right_l.addWidget(composition, 1)
-        self.remove_item_button = QPushButton("Удалить выбранные строки")
+        self.remove_item_button = QPushButton(DELETE_ROWS_TEXT)
         self.remove_item_button.clicked.connect(self.table.delete_selected_rows)
         self.save_button = QPushButton("Сохранить шаблон")
         self.save_button.clicked.connect(self.save)
-        composition.add_widget(action_panel("Удаление строк", self.remove_item_button, purpose="danger"))
+        composition.add_widget(action_panel(DELETE_ROWS_TITLE, self.remove_item_button, purpose="danger"))
         composition.add_widget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
         self.editor_stack = empty_record_editor(
             right, "Шаблон не выбран",
@@ -1474,7 +1476,7 @@ class TemplatesTab(BaseTab):
     def add_template(self):
         if self.current_id and self.save() is False:
             return
-        tid = db.execute("INSERT INTO templates(name, category) VALUES(?,?)", ("Новый шаблон", "Содержание"))
+        tid = db.execute("INSERT INTO templates(name, category) VALUES(?,?)", ("Новый шаблон", SECTION_CONTENT))
         self.current_id = tid; self.refresh()
         for i in range(self.list.count()):
             if self.list.item(i).data(Qt.UserRole) == tid:
@@ -1784,9 +1786,9 @@ class ReportsTab(BaseTab):
     def add_blank_report_row(self, section: str):
         if not self.current_id:
             return
-        if section == "Содержание":
+        if section == SECTION_CONTENT:
             table, add = self.content_table, self.add_content_row
-        elif section == "Текущий ремонт":
+        elif section == SECTION_REPAIR:
             table, add = self.repair_table, self.add_repair_row
         else:
             table, add = self.management_table, self.add_management_row
@@ -1803,7 +1805,7 @@ class ReportsTab(BaseTab):
             self.msg("Выделите строки, которые требуется удалить.")
             return
         if QMessageBox.question(
-            self, "Удаление строк", f"Удалить из отчета выбранные строки ({count})?"
+            self, DELETE_ROWS_TITLE, f"Удалить из отчета выбранные строки ({count})?"
         ) != QMessageBox.Yes:
             return
         table.delete_selected_rows(confirmed=True)
@@ -1895,9 +1897,9 @@ class ReportsTab(BaseTab):
         self.content_template_combo.currentTextChanged.connect(self.content_template_combo.setToolTip)
         template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.content_template_combo, 1)
         layout.addLayout(template_row)
-        apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template("Содержание", self.content_template_combo))
-        add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference("Содержание"))
-        add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_blank_report_row("Содержание"))
+        apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template(SECTION_CONTENT, self.content_template_combo))
+        add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference(SECTION_CONTENT))
+        add_empty = QPushButton(ADD_ROW_TEXT); add_empty.clicked.connect(lambda: self.add_blank_report_row(SECTION_CONTENT))
         from_assistant = QPushButton("Перенести перечень из Ассистента…")
         from_assistant.clicked.connect(self.import_assistant_work_list)
         # Keep the complete template title on its own wide row. Actions
@@ -1913,16 +1915,16 @@ class ReportsTab(BaseTab):
         self.content_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_content_items", "unit", distinct_texts("work_items", "unit", COMMON_UNITS)), self.content_table))
         self._content_recalc_lock = False
         self.content_table.itemChanged.connect(self.on_content_item_changed)
-        self.content_table.context_add_handler = lambda: self.add_blank_report_row("Содержание")
+        self.content_table.context_add_handler = lambda: self.add_blank_report_row(SECTION_CONTENT)
         self.content_table.allow_paste_append = True
         self.content_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.content_table)
         content_card = table_card_with_selection(
             "Строки содержания", self.content_table, name_column=2
         )
         layout.addWidget(content_card, 1)
-        delete = QPushButton("Удалить выбранные строки")
+        delete = QPushButton(DELETE_ROWS_TEXT)
         delete.clicked.connect(lambda: self._delete_selected_report_rows(self.content_table))
-        content_card.add_widget(action_panel("Удаление строк", delete, purpose="danger"))
+        content_card.add_widget(action_panel(DELETE_ROWS_TITLE, delete, purpose="danger"))
         self._next_report_action(layout, "Перейти к текущему ремонту", 2)
         self.report_tabs.addTab(w, "1. Содержание")
 
@@ -1946,9 +1948,9 @@ class ReportsTab(BaseTab):
         self.repair_template_combo.currentTextChanged.connect(self.repair_template_combo.setToolTip)
         template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.repair_template_combo, 1)
         layout.addLayout(template_row)
-        apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template("Текущий ремонт", self.repair_template_combo))
-        add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference("Текущий ремонт"))
-        add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_blank_report_row("Текущий ремонт"))
+        apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template(SECTION_REPAIR, self.repair_template_combo))
+        add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference(SECTION_REPAIR))
+        add_empty = QPushButton(ADD_ROW_TEXT); add_empty.clicked.connect(lambda: self.add_blank_report_row(SECTION_REPAIR))
         from_assistant_repair = QPushButton("Перенести перечень из Ассистента…")
         from_assistant_repair.clicked.connect(self.import_assistant_work_list)
         # Keep the complete template title on its own wide row. Actions
@@ -1962,16 +1964,16 @@ class ReportsTab(BaseTab):
         fit_table_columns(self.repair_table, flex=(2, 3, 6),
                           widths={4: 120, 5: 150})
         self.repair_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_repair_items", "basis", COMMON_REPAIR_BASIS), self.repair_table))
-        self.repair_table.context_add_handler = lambda: self.add_blank_report_row("Текущий ремонт")
+        self.repair_table.context_add_handler = lambda: self.add_blank_report_row(SECTION_REPAIR)
         self.repair_table.allow_paste_append = True
         self.repair_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.repair_table)
         repair_card = table_card_with_selection(
             "Работы текущего ремонта", self.repair_table, name_column=2
         )
         layout.addWidget(repair_card, 1)
-        delete = QPushButton("Удалить выбранные строки")
+        delete = QPushButton(DELETE_ROWS_TEXT)
         delete.clicked.connect(lambda: self._delete_selected_report_rows(self.repair_table))
-        repair_card.add_widget(action_panel("Удаление строк", delete, purpose="danger"))
+        repair_card.add_widget(action_panel(DELETE_ROWS_TITLE, delete, purpose="danger"))
         self._next_report_action(layout, "Перейти к управлению", 3)
         self.report_tabs.addTab(w, "2. Текущий ремонт")
 
@@ -2003,9 +2005,9 @@ class ReportsTab(BaseTab):
         self.management_template_combo.currentTextChanged.connect(self.management_template_combo.setToolTip)
         template_row.addWidget(selectable_label("Шаблон:")); template_row.addWidget(self.management_template_combo, 1)
         layout.addLayout(template_row)
-        apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template("Управление", self.management_template_combo))
-        add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference("Управление"))
-        add_empty = QPushButton("Добавить строку"); add_empty.clicked.connect(lambda: self.add_blank_report_row("Управление"))
+        apply = QPushButton("Применить шаблон"); apply.clicked.connect(lambda: self.apply_template(SECTION_MANAGEMENT, self.management_template_combo))
+        add_ref = QPushButton("Добавить из справочника"); add_ref.clicked.connect(lambda: self.add_from_reference(SECTION_MANAGEMENT))
+        add_empty = QPushButton(ADD_ROW_TEXT); add_empty.clicked.connect(lambda: self.add_blank_report_row(SECTION_MANAGEMENT))
         # Keep the complete template title on its own wide row. Actions
         # can wrap below, instead of shrinking the selection field.
         layout.addWidget(action_panel(
@@ -2020,14 +2022,14 @@ class ReportsTab(BaseTab):
         self.management_table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("report_management_items", "unit", distinct_texts("work_items", "unit", COMMON_UNITS)), self.management_table))
         self._management_recalc_lock = False
         self.management_table.itemChanged.connect(self.on_management_item_changed)
-        self.management_table.context_add_handler = lambda: self.add_blank_report_row("Управление")
+        self.management_table.context_add_handler = lambda: self.add_blank_report_row(SECTION_MANAGEMENT)
         self.management_table.allow_paste_append = True
         self.management_table.context_delete_handler = lambda: self._delete_selected_report_rows(self.management_table)
         management_card = table_card_with_selection(
             "Внутренний расчет услуг управления", self.management_table, name_column=2
         )
         layout.addWidget(management_card, 1)
-        delete = QPushButton("Удалить выбранные строки")
+        delete = QPushButton(DELETE_ROWS_TEXT)
         delete.clicked.connect(lambda: self._delete_selected_report_rows(self.management_table))
         management_card.add_widget(action_panel("Удаление строк расчета", delete, purpose="danger"))
         layout.addWidget(selectable_label(
@@ -2205,11 +2207,11 @@ class ReportsTab(BaseTab):
         # Это защищает от случайного применения шаблона текущего ремонта в содержание
         # или шаблона управления в другой раздел.
         if hasattr(self, "content_template_combo"):
-            self._fill_template_combo(self.content_template_combo, "Содержание")
+            self._fill_template_combo(self.content_template_combo, SECTION_CONTENT)
         if hasattr(self, "repair_template_combo"):
-            self._fill_template_combo(self.repair_template_combo, "Текущий ремонт")
+            self._fill_template_combo(self.repair_template_combo, SECTION_REPAIR)
         if hasattr(self, "management_template_combo"):
-            self._fill_template_combo(self.management_template_combo, "Управление")
+            self._fill_template_combo(self.management_template_combo, SECTION_MANAGEMENT)
 
     def refresh(self):
         # Before rebuilding the report list, persist the report still on screen.
@@ -2512,9 +2514,9 @@ class ReportsTab(BaseTab):
         if dlg.exec() == QDialog.Accepted and dlg.selected_id:
             r = db.row("SELECT * FROM work_items WHERE id=?", (dlg.selected_id,))
             price = to_float(r["default_price"])
-            if category == "Содержание":
+            if category == SECTION_CONTENT:
                 self.add_content_row({"work_item_id": r["id"], "name": r["name"], "unit": r["unit"], "unit_price": price, "plan_qty": 1, "plan_cost": price, "actual_qty": 1, "actual_cost": price, "source": "справочник"})
-            elif category == "Управление":
+            elif category == SECTION_MANAGEMENT:
                 self.add_management_row({"work_item_id": r["id"], "name": r["name"], "unit": r["unit"], "unit_price": price, "qty": 1, "cost": price, "source": "справочник"})
             else:
                 self.add_repair_row({"work_item_id": r["id"], "name": r["name"], "source": "справочник"})
@@ -2544,8 +2546,8 @@ class ReportsTab(BaseTab):
         added = 0
         skipped = 0
         target_table = (
-            self.content_table if target_section == "Содержание"
-            else self.repair_table if target_section == "Текущий ремонт"
+            self.content_table if target_section == SECTION_CONTENT
+            else self.repair_table if target_section == SECTION_REPAIR
             else self.management_table
         )
         known_ids = {target_table.value(row, 1)
@@ -2567,9 +2569,9 @@ class ReportsTab(BaseTab):
                 known_ids.add(work_key)
             if name_key:
                 known_names.add(name_key)
-            if target_section == "Управление":
+            if target_section == SECTION_MANAGEMENT:
                 self.add_management_row({"work_item_id": it["work_item_id"], "name": it["name"], "unit": it["unit"], "unit_price": it["unit_price"], "qty": it["plan_qty"], "cost": cost, "source": "шаблон"})
-            elif target_section == "Текущий ремонт":
+            elif target_section == SECTION_REPAIR:
                 self.add_repair_row({"work_item_id": it["work_item_id"], "name": it["name"], "cost": cost, "volume": f"{money(it['plan_qty'])} {it['unit']}", "source": "шаблон"})
             else:
                 self.add_content_row({"work_item_id": it["work_item_id"], "name": it["name"], "unit": it["unit"], "unit_price": it["unit_price"], "plan_qty": it["plan_qty"], "plan_cost": cost, "actual_qty": it["plan_qty"], "actual_cost": cost, "source": "шаблон"})
@@ -2595,9 +2597,9 @@ class ReportsTab(BaseTab):
             if problem:
                 raise ValueError(problem)
         sections = (
-            (self.content_table, "Содержание", (4, 5, 6, 7, 8)),
-            (self.repair_table, "Текущий ремонт", (4,)),
-            (self.management_table, "Управление", (4, 5, 6)),
+            (self.content_table, SECTION_CONTENT, (4, 5, 6, 7, 8)),
+            (self.repair_table, SECTION_REPAIR, (4,)),
+            (self.management_table, SECTION_MANAGEMENT, (4, 5, 6)),
             (self.finance_table, "Финансы", (2, 3, 4, 5)),
         )
         for table, section, columns in sections:
