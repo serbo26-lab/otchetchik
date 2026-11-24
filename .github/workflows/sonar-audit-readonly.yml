@@ -1,0 +1,47 @@
+name: Read public Sonar issues (temporary audit)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/sonar-audit-readonly.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read public issue details
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import urllib.parse
+          import urllib.request
+          import urllib.error
+
+          query = urllib.parse.urlencode({
+              "componentKeys": "serbo26-lab_otchetchik",
+              "branch": "main",
+              "resolved": "false",
+              "ps": 100,
+          })
+          url = "https://sonarcloud.io/api/issues/search?" + query
+          request = urllib.request.Request(url, headers={"Accept": "application/json"})
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  data = json.load(response)
+          except urllib.error.HTTPError as exc:
+              print("Public API HTTP status:", exc.code)
+              print("No authentication will be attempted.")
+              raise SystemExit(1)
+          print("Total:", data.get("total", data.get("paging", {}).get("total")))
+          for issue in data.get("issues", []):
+              print(json.dumps({
+                  key: issue.get(key)
+                  for key in ("key", "rule", "component", "line", "message", "severity", "status")
+              }, ensure_ascii=False))
+          PY
