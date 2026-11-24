@@ -1,10 +1,8 @@
 name: Read public Sonar issues (temporary audit)
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - '.github/workflows/sonar-audit-readonly.yml'
+  push:
+    branches: ['audit/sonar-remaining-issues']
 
 permissions:
   contents: read
@@ -25,7 +23,7 @@ jobs:
 
           query = urllib.parse.urlencode({
               "componentKeys": "serbo26-lab_otchetchik",
-              "branch": "main",
+              "pullRequest": "47",
               "resolved": "false",
               "ps": 100,
           })
