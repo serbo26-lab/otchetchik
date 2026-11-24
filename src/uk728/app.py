@@ -3824,7 +3824,7 @@ class MainWindow(QMainWindow):
         """Show only the active page's selection and its meaningful next step."""
         try:
             current = self.tabs.currentWidget()
-            context, guidance = describe_context(current, self)
+            context, guidance = describe_context(current)
             self.page_header.set_context(context)
             self.page_header.guide.setText(guidance)
             display_cid = current.current_id if isinstance(current, CompaniesTab) else self._active_company_id
