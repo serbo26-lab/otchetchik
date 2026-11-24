@@ -1355,11 +1355,32 @@ class ReportsTab(BaseTab):
                 return None
         return rid
 
+    def _checked_export_bundle(self, rid):
+        # A modal warning dialog can allow changes after the first review check.
+        # Capture the verified snapshot once; all formats must use that data.
+        try:
+            self.flush_autosave()
+            snapshot = self._review_snapshot
+            bundle = db.load_report_bundle(rid)
+            if (self._review_dirty or not snapshot or snapshot[0] != rid
+                    or self.current_id != rid or bundle_fingerprint(bundle) != snapshot[1]):
+                self._invalidate_review()
+                self.msg("Данные отчета изменились после проверки. Повторите ее.")
+                return None
+            return bundle
+        except Exception as exc:
+            self._invalidate_review()
+            self.msg(f"Экспорт отменен: не удалось проверить сохраненные данные ({exc})")
+            return None
+
     def export(self, kind: str):
         if kind not in ("xlsx", "docx", "pdf", "all"):
             return
         rid = self._reviewed_export_id()
         if rid is None:
+            return
+        bundle = self._checked_export_bundle(rid)
+        if bundle is None:
             return
         # Export reads the saved report but does not modify SQLite. A new
         # database copy for every Word/Excel/PDF export is unnecessary.
@@ -1371,7 +1392,7 @@ class ReportsTab(BaseTab):
                 ("pdf", export_pdf),
             ):
                 if kind in (fmt, "all"):
-                    paths.append(export_func(rid))
+                    paths.append(export_func(rid, bundle=bundle))
         except Exception as exc:
             QMessageBox.critical(
                 self, "Ошибка экспорта",
