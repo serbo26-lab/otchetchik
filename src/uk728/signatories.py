@@ -74,6 +74,34 @@ def list_signatories(*, company_id: int | None = None,
     return items
 
 
+def _validate_existing_signatory(conn, existing_id, company_id, house_id):
+    if existing_id is not None:
+        row = conn.execute(
+            "SELECT * FROM signatories WHERE id=?", (existing_id,)
+        ).fetchone()
+        if row is None or row["assistant_source_id"] is not None:
+            raise ValueError("Исходного подписанта Ассистента нельзя изменять здесь.")
+        if row["company_id"] != company_id or row["house_id"] != house_id:
+            raise ValueError("Подписант относится к другому дому или УО.")
+
+
+def _reject_duplicate_signatory(conn, existing_id, company_id, house_id, data):
+    field = "company_id" if company_id is not None else "house_id"
+    owner_id = company_id if company_id is not None else house_id
+    for row in conn.execute(
+        f"SELECT id,data_json FROM signatories WHERE {field}=?", (owner_id,)
+    ):
+        if row["id"] == existing_id:
+            continue
+        other = json.loads(row["data_json"])
+        if (str(other.get("full_name") or "").casefold() ==
+                data["full_name"].casefold()
+                and str(other.get("valid_from") or "") == data["valid_from"]):
+            raise ValueError(
+                "Запись подписанта с таким ФИО и началом полномочий уже есть."
+            )
+
+
 def save_local_signatory(values: dict, *, company_id: int | None = None,
                          house_id: int | None = None,
                          existing_id: int | None = None) -> int:
@@ -81,28 +109,8 @@ def save_local_signatory(values: dict, *, company_id: int | None = None,
         raise ValueError("Подписант должен относиться к одной УО или одному дому.")
     data = _normalize(values, organization=company_id is not None)
     with db.connect() as conn:
-        if existing_id is not None:
-            row = conn.execute(
-                "SELECT * FROM signatories WHERE id=?", (existing_id,)
-            ).fetchone()
-            if row is None or row["assistant_source_id"] is not None:
-                raise ValueError("Исходного подписанта Ассистента нельзя изменять здесь.")
-            if row["company_id"] != company_id or row["house_id"] != house_id:
-                raise ValueError("Подписант относится к другому дому или УО.")
-        field = "company_id" if company_id is not None else "house_id"
-        owner_id = company_id if company_id is not None else house_id
-        for row in conn.execute(
-            f"SELECT id,data_json FROM signatories WHERE {field}=?", (owner_id,)
-        ):
-            if row["id"] == existing_id:
-                continue
-            other = json.loads(row["data_json"])
-            if (str(other.get("full_name") or "").casefold() ==
-                    data["full_name"].casefold()
-                    and str(other.get("valid_from") or "") == data["valid_from"]):
-                raise ValueError(
-                    "Запись подписанта с таким ФИО и началом полномочий уже есть."
-                )
+        _validate_existing_signatory(conn, existing_id, company_id, house_id)
+        _reject_duplicate_signatory(conn, existing_id, company_id, house_id, data)
         payload = json.dumps(data, ensure_ascii=False)
         if existing_id is not None:
             conn.execute(
@@ -177,6 +185,15 @@ class PersonEditor(QDialog):
         form = QFormLayout(body)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        self._build_identity_fields(form, organization)
+        self._build_role_fields(form, organization)
+        self._build_basis_fields(form, organization)
+        self._build_authority_fields(form)
+        scrolling.setWidget(body)
+        root.addWidget(scrolling, 1)
+        self._build_buttons(root, readonly)
+
+    def _build_identity_fields(self, form, organization):
         self.fields = {}
         for field, label in (
             ("full_name", "ФИО"),
@@ -189,6 +206,8 @@ class PersonEditor(QDialog):
             if field in ("position", "position_genitive") and not organization:
                 continue
             form.addRow(label, item)
+
+    def _build_role_fields(self, form, organization):
         self.role = QComboBox()
         self.role.addItems(
             ["Руководитель", "Уполномоченный сотрудник"]
@@ -210,6 +229,8 @@ class PersonEditor(QDialog):
             str(self.original.get("gender") or ""), 0,
         ))
         form.addRow("Род для склонения", self.gender)
+
+    def _build_basis_fields(self, form, organization):
         self.basis = QComboBox()
         self.basis.addItems(
             [UNSPECIFIED_LABEL, "Устав", "Доверенность", "Иное"]
@@ -221,6 +242,8 @@ class PersonEditor(QDialog):
         if basis:
             self.basis.setCurrentText(basis)
         form.addRow("Основание полномочий", self.basis)
+
+    def _build_authority_fields(self, form):
         for field, label in (
             ("basis_number", "Номер документа-основания"),
             ("basis_date", "Дата документа-основания"),
@@ -234,8 +257,8 @@ class PersonEditor(QDialog):
                 item.setPlaceholderText("ДД.ММ.ГГГГ")
             self.fields[field] = item
             form.addRow(label, item)
-        scrolling.setWidget(body)
-        root.addWidget(scrolling, 1)
+
+    def _build_buttons(self, root, readonly):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Close if readonly else
             (QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
