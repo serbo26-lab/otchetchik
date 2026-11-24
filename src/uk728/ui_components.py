@@ -146,88 +146,117 @@ def table_card_with_selection(title: str, table: QTableWidget, *,
     return card
 
 
-def describe_context(tab, main_window) -> tuple[str, str]:
+def _selected_combo(combo, placeholders=()):
+    if combo is None:
+        return ""
+    text = combo.currentText().strip()
+    return text if combo.currentData() is not None and text not in placeholders else ""
+
+
+def _companies_context(tab, current):
+    item = tab.list.currentItem()
+    if current is not None and item:
+        return f"Управляющая организация: {item.text()}", "Проверьте реквизиты выбранной организации. После заполнения откройте «Дома»."
+    return "Управляющая организация не выбрана", "Создайте управляющую организацию кнопкой под перечнем."
+
+
+def _houses_context(tab, current):
+    company = _selected_combo(tab.company_filter)
+    if not company:
+        return "Управляющая организация не выбрана", "Сначала выберите УО — после этого станет доступно добавление дома."
+    item = tab.list.currentItem()
+    if current and item:
+        return f"УО: {company}   •   Дом: {item.text()}", "Проверьте адрес, площадь и период управления, затем переходите к отчетам."
+    return f"УО: {company}", "Добавьте дом или выберите его из списка."
+
+
+def _categories_context(tab, current):
+    item = tab.list.currentItem()
+    if current and item:
+        return f"Категория: {item.text()}", "Укажите раздел формы, при необходимости добавьте подкатегории и сохраните."
+    return "Категория не выбрана", "Создайте категорию, затем добавляйте подкатегории."
+
+
+def _works_context(tab):
+    category = _selected_combo(tab.category_combo)
+    sub = _selected_combo(tab.subcategory_combo)
+    context = "Справочник работ"
+    if category:
+        context += f"   •   Категория: {category}"
+    if sub:
+        context += f"   •   Подкатегория: {sub}"
+    return context, "Добавьте работу из выбранной категории или создайте строку вручную. Укажите раздел формы и стоимость."
+
+
+def _templates_context(tab, current):
+    item = tab.list.currentItem()
+    if current and item:
+        return f"Шаблон: {item.text()}", "Добавьте строки из справочника, укажите количества и сохраните шаблон."
+    return "Шаблон не выбран", "Создайте новый шаблон, выберите раздел формы и наполните его строками."
+
+
+def _mass_context(tab):
+    company = _selected_combo(tab.company)
+    work = _selected_combo(tab.work)
+    chosen = len(tab.selected_house_ids())
+    prefix = f"Массовое заполнение   •   Год: {tab.year.value()}   •   Домов выбрано: {chosen}"
+    if company:
+        prefix += f"   •   УО: {company}"
+    if not company or not work:
+        return prefix, "Шаг 1: выберите УО и работу, затем укажите способ расчета."
+    if not chosen:
+        return prefix, "Шаг 3: отметьте хотя бы один дом, который нужно заполнить."
+    if tab._preview_dirty:
+        return prefix, "Шаг 4: обновите предварительный просмотр и проверьте суммы и причины пропусков."
+    count = tab._preview_plan["summary"]["insert"] + tab._preview_plan["summary"]["update"]
+    if not count:
+        return prefix, "Нет строк для записи. Проверьте выбор домов и параметры."
+    return prefix, "Шаг 5: проверьте готовый предпросмотр, затем подтвердите запись."
+
+
+def _reports_context(tab, current):
+    company = _selected_combo(tab.company_filter)
+    house = _selected_combo(tab.house_filter)
+    parts = [f"Отчетный год: {tab.year_filter.value()}"]
+    if company:
+        parts.insert(0, f"УО: {company}")
+    if house:
+        parts.insert(1 if company else 0, f"Дом: {house}")
+    if current:
+        item = tab.list.currentItem()
+        return "   •   ".join(parts), (
+            "Проверьте введенные значения по разделам формы, затем переходите к выгрузке."
+            if item else "Заполните разделы отчета."
+        )
+    return "   •   ".join(parts), ("Выберите дом и создайте отчет за выбранный год."
+                                     if house else "Выберите дом, затем создайте или откройте отчет.")
+
+
+def describe_context(tab) -> tuple[str, str]:
     """Current page-specific context and relevant next step; no mutations."""
     name = tab.__class__.__name__
     current = getattr(tab, "current_id", None)
 
-    def selected(combo, placeholders=()):
-        if combo is None:
-            return ""
-        text = combo.currentText().strip()
-        return text if combo.currentData() is not None and text not in placeholders else ""
-
     if name == "CompaniesTab":
-        item = tab.list.currentItem()
-        if current is not None and item:
-            return f"Управляющая организация: {item.text()}", "Проверьте реквизиты выбранной организации. После заполнения откройте «Дома»."
-        return "Управляющая организация не выбрана", "Создайте управляющую организацию кнопкой под перечнем."
+        return _companies_context(tab, current)
 
     if name == "HousesTab":
-        company = selected(tab.company_filter)
-        if not company:
-            return "Управляющая организация не выбрана", "Сначала выберите УО — после этого станет доступно добавление дома."
-        item = tab.list.currentItem()
-        if current and item:
-            return f"УО: {company}   •   Дом: {item.text()}", "Проверьте адрес, площадь и период управления, затем переходите к отчетам."
-        return f"УО: {company}", "Добавьте дом или выберите его из списка."
+        return _houses_context(tab, current)
 
     if name == "CategoriesTab":
-        item = tab.list.currentItem()
-        if current and item:
-            return f"Категория: {item.text()}", "Укажите раздел формы, при необходимости добавьте подкатегории и сохраните."
-        return "Категория не выбрана", "Создайте категорию, затем добавляйте подкатегории."
+        return _categories_context(tab, current)
 
     if name == "WorksTab":
-        category = selected(tab.category_combo)
-        sub = selected(tab.subcategory_combo)
-        context = "Справочник работ"
-        if category:
-            context += f"   •   Категория: {category}"
-        if sub:
-            context += f"   •   Подкатегория: {sub}"
-        return context, "Добавьте работу из выбранной категории или создайте строку вручную. Укажите раздел формы и стоимость."
+        return _works_context(tab)
 
     if name == "TemplatesTab":
-        item = tab.list.currentItem()
-        if current and item:
-            return f"Шаблон: {item.text()}", "Добавьте строки из справочника, укажите количества и сохраните шаблон."
-        return "Шаблон не выбран", "Создайте новый шаблон, выберите раздел формы и наполните его строками."
+        return _templates_context(tab, current)
 
     if name == "MassApplyTab":
-        company = selected(tab.company)
-        work = selected(tab.work)
-        chosen = len(tab.selected_house_ids())
-        prefix = f"Массовое заполнение   •   Год: {tab.year.value()}   •   Домов выбрано: {chosen}"
-        if company:
-            prefix += f"   •   УО: {company}"
-        if not company or not work:
-            return prefix, "Шаг 1: выберите УО и работу, затем укажите способ расчета."
-        if not chosen:
-            return prefix, "Шаг 3: отметьте хотя бы один дом, который нужно заполнить."
-        if tab._preview_dirty:
-            return prefix, "Шаг 4: обновите предварительный просмотр и проверьте суммы и причины пропусков."
-        count = tab._preview_plan["summary"]["insert"] + tab._preview_plan["summary"]["update"]
-        if not count:
-            return prefix, "Нет строк для записи. Проверьте выбор домов и параметры."
-        return prefix, "Шаг 5: проверьте готовый предпросмотр, затем подтвердите запись."
+        return _mass_context(tab)
 
     if name == "ReportsTab":
-        company = selected(tab.company_filter)
-        house = selected(tab.house_filter)
-        parts = [f"Отчетный год: {tab.year_filter.value()}"]
-        if company:
-            parts.insert(0, f"УО: {company}")
-        if house:
-            parts.insert(1 if company else 0, f"Дом: {house}")
-        if current:
-            item = tab.list.currentItem()
-            return "   •   ".join(parts), (
-                "Проверьте введенные значения по разделам формы, затем переходите к выгрузке."
-                if item else "Заполните разделы отчета."
-            )
-        return "   •   ".join(parts), ("Выберите дом и создайте отчет за выбранный год."
-                                         if house else "Выберите дом, затем создайте или откройте отчет.")
+        return _reports_context(tab, current)
 
     if name == "BackupsTab":
         return "Локальные данные программы", "Создайте резервную копию перед обновлением программы или крупными изменениями."
