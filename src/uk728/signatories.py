@@ -137,7 +137,8 @@ def delete_local_signatory(record_id: int, *, company_id: int | None = None,
             raise ValueError("Удалять исходные записи Ассистента нельзя.")
         if row["company_id"] != company_id or row["house_id"] != house_id:
             raise ValueError("Этот подписант относится к другому объекту.")
-    make_backup("before_delete_signatory")
+    if make_backup("before_delete_signatory") is None:
+        raise RuntimeError("Не удалось создать резервную копию.")
     db.execute("DELETE FROM signatories WHERE id=? AND assistant_source_id IS NULL",
                (record_id,))
 
