@@ -65,6 +65,16 @@ class ReportContextSafetyTests(unittest.TestCase):
         self.assertEqual(db.row("SELECT notes FROM reports WHERE id=?", (self.report,))[0],
                          "Synthetic pending edit")
 
+    def test_negative_save_notifications_do_not_announce_success(self):
+        for message in ("Переход отменен: отчет не сохранен",
+                        "Отчёт не сохранён", "Не удалось сохранить данные"):
+            with self.subTest(message=message):
+                self.window.set_save_status("saved")
+                self.window.notification_received(message)
+                self.assertEqual(self.window.page_header.save_status.property("state"), "error")
+        self.window.notification_received("Отчет сохранен")
+        self.assertEqual(self.window.page_header.save_status.property("state"), "saved")
+
     def test_creation_same_year_saves_previous_report_before_new_id(self):
         page = self.page
         page.notes.setPlainText("Synthetic old report notes")
