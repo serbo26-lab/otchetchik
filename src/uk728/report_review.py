@@ -65,14 +65,7 @@ def _check_identity(report, company, house, errors, warnings):
         warnings.append("Не заполнена дата размещения отчёта.")
 
 
-def _check_period(report, errors, warnings):
-    try:
-        year = int(report.get("year") or 0)
-    except (ValueError, TypeError, OverflowError):
-        year = 0
-    if not 2000 <= year <= 2100:
-        errors.append("Некорректный отчетный год.")
-
+def _check_period_dates(report, year, errors, warnings):
     start_raw = report.get("period_start")
     end_raw = report.get("period_end")
     start, end = _date(start_raw), _date(end_raw)
@@ -90,6 +83,18 @@ def _check_period(report, errors, warnings):
         errors.append("Включено отображение периода управления, но его даты не заполнены.")
     if not start_raw or not end_raw:
         warnings.append("Период управления не заполнен полностью.")
+    return start
+
+
+def _check_period(report, errors, warnings):
+    try:
+        year = int(report.get("year") or 0)
+    except (ValueError, TypeError, OverflowError):
+        year = 0
+    if not 2000 <= year <= 2100:
+        errors.append("Некорректный отчетный год.")
+
+    start = _check_period_dates(report, year, errors, warnings)
 
     if report.get("publish_date") and not _date(report["publish_date"]):
         errors.append("Неверный формат даты размещения отчета.")
@@ -132,6 +137,13 @@ def _check_numbers(bundle, report, house, errors):
                 errors.append(f"{section}: строка {index} содержит некорректное число.")
 
 
+def _incomplete_imported_repair(item):
+    return (str(item.get("source") or "").startswith("assistant-work-list:")
+            and (not str(item.get("basis") or "").strip()
+                 or not str(item.get("volume") or "").strip()
+                 or _number(item.get("cost")) <= 0))
+
+
 def _check_section_rows(section, key, entries, errors):
     for index, item in enumerate(entries, 1):
         if key == "financials" and item.get("payer_type") not in ("Собственники", "Наниматели"):
@@ -140,10 +152,7 @@ def _check_section_rows(section, key, entries, errors):
             )
         if key in ("content", "repair", "management") and not str(item.get("name") or "").strip():
             errors.append(f"{section}: строка {index} не имеет наименования.")
-        if (key == "repair" and str(item.get("source") or "").startswith("assistant-work-list:")
-                and (not str(item.get("basis") or "").strip()
-                     or not str(item.get("volume") or "").strip()
-                     or _number(item.get("cost")) <= 0)):
+        if key == "repair" and _incomplete_imported_repair(item):
             errors.append(
                 f"Текущий ремонт: строка {index} перенесена из перечня "
                 "как черновик. Укажите подтверждённые основание, объём и "
