@@ -32,22 +32,45 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
+def read_schema_version(conn: sqlite3.Connection) -> int | None:
+    """Read the version without changing a database, including legacy copies."""
+    meta = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_meta'"
+    ).fetchone()
+    if meta is None:
+        return None
+    row = conn.execute(
+        "SELECT value FROM app_meta WHERE key='schema_version'"
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        version = int(row[0])
+    except (TypeError, ValueError):
+        raise ValueError("Неверный номер версии структуры базы.") from None
+    if version < 0:
+        raise ValueError("Неверный номер версии структуры базы.")
+    if version > SCHEMA_VERSION:
+        raise ValueError(
+            f"Версия структуры базы ({version}) новее поддерживаемой "
+            f"программой ({SCHEMA_VERSION}). Установите более новую версию."
+        )
+    return version
+
+
 def init_db() -> None:
     path = db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     # Back up the existing Reporter database BEFORE any version-12 ALTER/DDL.
     # The Assistant source is never involved. This also works with Reporter WAL.
     if path.is_file() and path.stat().st_size > 0:
-        with closing(sqlite3.connect(str(path), timeout=15.0)) as old_conn:
-            try:
-                previous = old_conn.execute(
-                    "SELECT value FROM app_meta WHERE key='schema_version'"
-                ).fetchone()
-                previous_version = str(previous[0]) if previous else None
-            except sqlite3.DatabaseError:
-                previous_version = None
-        if previous_version != str(SCHEMA_VERSION):
-            make_backup("before_schema_v12")
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro",
+                                     uri=True, timeout=15.0)) as old_conn:
+            old_conn.execute("PRAGMA query_only=ON")
+            previous_version = read_schema_version(old_conn)
+        if previous_version != SCHEMA_VERSION:
+            if make_backup(f"before_schema_v{SCHEMA_VERSION}") is None:
+                raise RuntimeError("Не удалось создать копию перед обновлением структуры базы.")
     with connect(path) as conn:
         conn.executescript(
             """
@@ -287,7 +310,11 @@ def init_db() -> None:
         )
         if installed is None and not existing_records:
             seed_defaults(conn)
-        conn.execute("INSERT OR REPLACE INTO app_meta(key, value) VALUES('schema_version', ?)", (str(SCHEMA_VERSION),))
+        conn.execute(
+            "INSERT INTO app_meta(key,value) VALUES('schema_version',?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value "
+            "WHERE app_meta.value<>excluded.value", (str(SCHEMA_VERSION),)
+        )
         conn.commit()
 
 

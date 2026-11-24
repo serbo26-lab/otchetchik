@@ -15,15 +15,60 @@ from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
-from .db import SCHEMA_VERSION
+from .db import SCHEMA_VERSION, read_schema_version
 from .paths import data_dir, db_path, make_backup
 
 
-_REQUIRED_TABLES = {
-    "app_meta", "companies", "houses", "work_items", "templates",
-    "reports", "report_content_items", "report_repair_items",
-    "report_management_items", "report_financials", "report_claims",
+# Baseline columns not provided by any existing migration. Legacy optional
+# tables/columns may be added by init_db; a current-version copy must be complete.
+_BASE_COLUMNS = {
+    "app_meta": "key value",
+    "companies": "id name ogrn_inn reception_address report_person report_contact notes created_at updated_at",
+    "houses": "id company_id address total_area management_start management_end status notes created_at updated_at",
+    "work_items": "id name category unit default_price notes is_active created_at updated_at",
+    "templates": "id name category notes created_at updated_at",
+    "template_items": "id template_id work_item_id name unit unit_price plan_qty position",
+    "reports": "id company_id house_id year period_start period_end show_period_note publish_date status management_cost repair_start_balance repair_accrual repair_work_cost repair_end_balance notes created_at updated_at",
+    "report_content_items": "id report_id work_item_id name unit unit_price plan_qty plan_cost actual_qty actual_cost source is_manual position",
+    "report_repair_items": "id report_id work_item_id name basis cost volume act_details source is_manual position",
+    "report_management_items": "id report_id work_item_id name unit unit_price qty cost notes source is_manual position",
+    "report_financials": "id report_id payer_type debt_start accrued paid debt_end notes",
+    "report_claims": "id report_id pretensions_count lawsuits_count recovered_amount notes",
 }
+_OPTIONAL_LEGACY_TABLES = {
+    "work_categories": "id parent_id name section unit default_price notes is_active created_at updated_at",
+    "signatories": "id company_id house_id assistant_source_id data_json created_at updated_at",
+}
+_MIGRATABLE_COLUMNS = {
+    "work_items": "group_name subgroup_name",
+    "companies": "assistant_source_id",
+    "houses": "assistant_source_id assistant_area_missing residential_area non_residential_area assistant_residential_missing assistant_non_residential_missing management_agreement_number management_agreement_date agreement_valid_from agreement_valid_to",
+}
+
+
+def _verify_columns(conn: sqlite3.Connection, tables: set[str], version: int | None) -> None:
+    required = dict(_BASE_COLUMNS)
+    current = version == SCHEMA_VERSION
+    for table, columns in _OPTIONAL_LEGACY_TABLES.items():
+        if current or table in tables:
+            required[table] = columns
+    if current:
+        for table, columns in _MIGRATABLE_COLUMNS.items():
+            required[table] += " " + columns
+    missing = set(required) - tables
+    if missing:
+        raise ValueError(
+            "Файл не является полной базой «Отчетности УК» "
+            f"(нет таблиц: {', '.join(sorted(missing))})."
+        )
+    for table, columns in required.items():
+        actual = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}
+        absent = set(columns.split()) - actual
+        if absent:
+            raise ValueError(
+                f"Несовместимая структура резервной копии: {table}, "
+                f"нет столбцов: {', '.join(sorted(absent))}."
+            )
 _PENDING_NAME = re.compile(r"^\.restore_pending_[0-9a-f]{32}\.db$")
 
 
@@ -54,27 +99,13 @@ def verify_backup(path: Path) -> dict:
                     "SELECT name FROM sqlite_master WHERE type='table'"
                 )
             }
-            missing = _REQUIRED_TABLES - tables
-            if missing:
-                raise ValueError(
-                    "Файл не является полной базой «Отчетности УК» "
-                    f"(нет таблиц: {', '.join(sorted(missing))})."
-                )
-            row = conn.execute(
-                "SELECT value FROM app_meta WHERE key='schema_version'"
-            ).fetchone()
-            if row is not None:
-                try:
-                    version = int(row[0])
-                except (TypeError, ValueError):
-                    raise ValueError("Неверный номер версии структуры базы.") from None
-                if version > SCHEMA_VERSION:
-                    raise ValueError(
-                        f"Версия структуры копии ({version}) новее поддерживаемой "
-                        f"программой ({SCHEMA_VERSION}). Установите более новую версию."
-                    )
-            else:
-                version = None
+            # Retain the established message for unrelated SQLite files.
+            if "app_meta" not in tables:
+                raise ValueError("Файл не является полной базой «Отчетности УК».")
+            version = read_schema_version(conn)
+            _verify_columns(conn, tables, version)
+            if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise ValueError("В резервной копии нарушены связи между записями.")
             companies = conn.execute("SELECT COUNT(*) FROM companies").fetchone()[0]
             houses = conn.execute("SELECT COUNT(*) FROM houses").fetchone()[0]
             reports = conn.execute("SELECT COUNT(*) FROM reports").fetchone()[0]
