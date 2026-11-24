@@ -55,6 +55,23 @@ def amount(value: Any, label: str, *, strictly_positive: bool = False) -> Decima
     return result
 
 
+def _validate_mode_values(inputs, result, mode):
+    if mode in {"area", "monthly", "quantity"}:
+        result["rate"] = str(amount(inputs.get("rate"), "Ставка / цена", strictly_positive=True))
+    if mode == "monthly":
+        months_text = str(inputs.get("months") or "").strip()
+        if not months_text.isdecimal() or not (1 <= int(months_text) <= 12):
+            raise ValueError("Количество месяцев должно быть целым числом от 1 до 12.")
+        result["months"] = int(months_text)
+    if mode == "quantity":
+        result["quantity"] = str(amount(inputs.get("quantity"), "Количество", strictly_positive=True))
+    if mode in {"fixed", "split"}:
+        total = amount(inputs.get("total"), "Сумма", strictly_positive=True)
+        if mode == "split" and total != total.quantize(CENT):
+            raise ValueError("Распределяемая сумма должна быть указана с точностью до копейки.")
+        result["total"] = str(total)
+
+
 def validate_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
     mode = str(inputs.get("mode") or "")
     if mode not in MODES:
@@ -76,20 +93,7 @@ def validate_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
         "override_manual": bool(inputs.get("override_manual")) and bool(inputs.get("update_existing")),
         "rate": "", "months": 12, "quantity": "", "total": "",
     }
-    if mode in {"area", "monthly", "quantity"}:
-        result["rate"] = str(amount(inputs.get("rate"), "Ставка / цена", strictly_positive=True))
-    if mode == "monthly":
-        months_text = str(inputs.get("months") or "").strip()
-        if not months_text.isdecimal() or not (1 <= int(months_text) <= 12):
-            raise ValueError("Количество месяцев должно быть целым числом от 1 до 12.")
-        result["months"] = int(months_text)
-    if mode == "quantity":
-        result["quantity"] = str(amount(inputs.get("quantity"), "Количество", strictly_positive=True))
-    if mode in {"fixed", "split"}:
-        total = amount(inputs.get("total"), "Сумма", strictly_positive=True)
-        if mode == "split" and total != total.quantize(CENT):
-            raise ValueError("Распределяемая сумма должна быть указана с точностью до копейки.")
-        result["total"] = str(total)
+    _validate_mode_values(inputs, result, mode)
     return result
 
 
@@ -191,7 +195,7 @@ def _preview_rows(conn, inputs, work, table, houses):
     return rows
 
 
-def _calculate_row(row, area, mode, rate, total, qty, months, split_cost):
+def _calculate_row(area, mode, rate, total, qty, months, split_cost):
     if mode == "monthly":
         line_qty = area
         price = rate * months
@@ -219,7 +223,7 @@ def _calculate_row(row, area, mode, rate, total, qty, months, split_cost):
         unit = "усл."
     if not all(isfinite(float(value)) for value in (cost, price, line_qty)):
         raise ValueError("Результат расчета превышает допустимый числовой диапазон.")
-    row.update(cost=float(cost), price=float(price), quantity=float(line_qty), unit=unit)
+    return dict(cost=float(cost), price=float(price), quantity=float(line_qty), unit=unit)
 
 
 def _calculate_rows(inputs, rows):
@@ -236,7 +240,7 @@ def _calculate_rows(inputs, rows):
     for idx, row in enumerate(actionable):
         area = _decimal(row["area"])
         split_cost = split_costs[idx] if mode == "split" else None
-        _calculate_row(row, area, mode, rate, total, qty, months, split_cost)
+        row.update(_calculate_row(area, mode, rate, total, qty, months, split_cost))
     return actionable
 
 
