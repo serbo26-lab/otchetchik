@@ -133,26 +133,31 @@ def _split_cents(total: Decimal, areas: list[Decimal]) -> list[Decimal]:
     return [Decimal(value) * CENT for value in allocated]
 
 
-def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
-    inputs = validate_inputs(raw_inputs)
-    company = conn.execute("SELECT id FROM companies WHERE id=?", (inputs["company_id"],)).fetchone()
-    work = conn.execute("SELECT * FROM work_items WHERE id=? AND is_active=1", (inputs["work_id"],)).fetchone()
-    if not company or not work:
-        raise ValueError("Управляющая организация или работа больше не существует.")
-    section = str(work["category"] or "").strip()
-    if section not in TABLES:
-        raise ValueError("У выбранной работы должен быть указан раздел формы: Содержание, Текущий ремонт или Управление.")
-    table = TABLES[section]
-    selected_ids = inputs["house_ids"]
-    placeholders = ",".join("?" for _ in selected_ids)
-    houses = conn.execute(
-        f"""SELECT * FROM houses
-            WHERE company_id=? AND status!='Архив' AND id IN ({placeholders})
-            ORDER BY address, id""",
-        (inputs["company_id"], *selected_ids),
-    ).fetchall()
-    if {int(h["id"]) for h in houses} != set(selected_ids):
-        raise ValueError("Список домов изменился. Обновите выбор домов.")
+def _choose_action(inputs, area, reports, report_id, matches, existing):
+    if len(reports) > 1:
+        action = "skip_many_reports"
+    elif report_id is not None and str(reports[0]["status"] or "") in ("Размещен", "Размещён", "Архив"):
+        action = "skip_protected_report"
+    elif len(matches) > 1:
+        action = "skip_ambiguous"
+    elif existing and int(existing["is_manual"] or 0) and not inputs["override_manual"]:
+        action = "skip_manual"
+    elif existing and not inputs["update_existing"]:
+        action = "skip_exists"
+    elif existing:
+        action = "update"
+    elif report_id is None and not inputs["create_missing"]:
+        action = "skip_report"
+    elif report_id is None:
+        action = "create"
+    else:
+        action = "insert"
+    if inputs["mode"] in {"area", "monthly", "split"} and area <= 0:
+        action = "skip_area" if action in {"insert", "update", "create"} else action
+    return action
+
+
+def _preview_rows(conn, inputs, work, table, houses):
     rows = []
     for h in houses:
         hid = int(h["id"])
@@ -166,26 +171,7 @@ def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
         report_id = int(reports[0]["id"]) if len(reports) == 1 else None
         matches = _existing_rows(conn, table, report_id, inputs["work_id"], work["name"]) if report_id else []
         existing = matches[0] if len(matches) == 1 else None
-        if len(reports) > 1:
-            action = "skip_many_reports"
-        elif report_id is not None and str(reports[0]["status"] or "") in ("Размещен", "Размещён", "Архив"):
-            action = "skip_protected_report"
-        elif len(matches) > 1:
-            action = "skip_ambiguous"
-        elif existing and int(existing["is_manual"] or 0) and not inputs["override_manual"]:
-            action = "skip_manual"
-        elif existing and not inputs["update_existing"]:
-            action = "skip_exists"
-        elif existing:
-            action = "update"
-        elif report_id is None and not inputs["create_missing"]:
-            action = "skip_report"
-        elif report_id is None:
-            action = "create"
-        else:
-            action = "insert"
-        if inputs["mode"] in {"area", "monthly", "split"} and area <= 0:
-            action = "skip_area" if action in {"insert", "update", "create"} else action
+        action = _choose_action(inputs, area, reports, report_id, matches, existing)
         rows.append({
             "house_id": hid, "address": str(h["address"] or ""), "area": str(area),
             "house_state": _fingerprint(h),
@@ -197,6 +183,10 @@ def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
             "action": action,
             "unit": "", "price": 0.0, "quantity": 0.0, "cost": 0.0,
         })
+    return rows
+
+
+def _calculate_rows(inputs, rows):
     actionable = [r for r in rows if r["action"] in ("insert", "update", "create")]
     mode = inputs["mode"]
     rate = _decimal(inputs["rate"] or 0)
@@ -237,6 +227,31 @@ def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
         if not all(isfinite(float(value)) for value in (cost, price, line_qty)):
             raise ValueError("Результат расчета превышает допустимый числовой диапазон.")
         row.update(cost=float(cost), price=float(price), quantity=float(line_qty), unit=unit)
+    return actionable
+
+
+def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
+    inputs = validate_inputs(raw_inputs)
+    company = conn.execute("SELECT id FROM companies WHERE id=?", (inputs["company_id"],)).fetchone()
+    work = conn.execute("SELECT * FROM work_items WHERE id=? AND is_active=1", (inputs["work_id"],)).fetchone()
+    if not company or not work:
+        raise ValueError("Управляющая организация или работа больше не существует.")
+    section = str(work["category"] or "").strip()
+    if section not in TABLES:
+        raise ValueError("У выбранной работы должен быть указан раздел формы: Содержание, Текущий ремонт или Управление.")
+    table = TABLES[section]
+    selected_ids = inputs["house_ids"]
+    placeholders = ",".join("?" for _ in selected_ids)
+    houses = conn.execute(
+        f"""SELECT * FROM houses
+            WHERE company_id=? AND status!='Архив' AND id IN ({placeholders})
+            ORDER BY address, id""",
+        (inputs["company_id"], *selected_ids),
+    ).fetchall()
+    if {int(h["id"]) for h in houses} != set(selected_ids):
+        raise ValueError("Список домов изменился. Обновите выбор домов.")
+    rows = _preview_rows(conn, inputs, work, table, houses)
+    actionable = _calculate_rows(inputs, rows)
     summary = {
         "insert": sum(r["action"] in ("insert", "create") for r in rows),
         "update": sum(r["action"] == "update" for r in rows),
@@ -251,6 +266,65 @@ def build_plan(conn, raw_inputs: dict[str, Any]) -> dict[str, Any]:
         "section": section, "table": table,
         "rows": rows, "summary": summary,
     }
+
+
+def _write_content(conn, row, rid, wid, work_name):
+    action = row["action"]
+    cost, price, qty, unit = (row["cost"], row["price"], row["quantity"], row["unit"])
+    existing_id = row["existing_id"]
+    if action == "update":
+        conn.execute("""UPDATE report_content_items SET unit=?, unit_price=?, plan_qty=?,
+            plan_cost=?, actual_qty=?, actual_cost=?, source='массовое применение',
+            is_manual=0 WHERE id=? AND report_id=?""",
+            (unit, price, qty, cost, qty, cost, existing_id, rid))
+    else:
+        pos = conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM report_content_items WHERE report_id=?", (rid,)).fetchone()[0]
+        conn.execute("""INSERT INTO report_content_items
+            (report_id,work_item_id,name,unit,unit_price,plan_qty,plan_cost,actual_qty,
+             actual_cost,source,is_manual,position)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (rid, wid, work_name, unit, price, qty, cost, qty, cost, MASS_SOURCE, 0, pos))
+
+
+def _write_repair(conn, row, rid, wid, work_name):
+    action = row["action"]
+    cost, price, qty, unit = (row["cost"], row["price"], row["quantity"], row["unit"])
+    existing_id = row["existing_id"]
+    volume = f"{qty:g} {unit}" if qty else unit
+    if action == "update":
+        conn.execute("""UPDATE report_repair_items SET cost=?,volume=?,source='массовое применение',
+            is_manual=0 WHERE id=? AND report_id=?""", (cost, volume, existing_id, rid))
+    else:
+        pos = conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM report_repair_items WHERE report_id=?", (rid,)).fetchone()[0]
+        conn.execute("""INSERT INTO report_repair_items
+            (report_id,work_item_id,name,basis,cost,volume,act_details,source,is_manual,position)
+            VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (rid, wid, work_name, "", cost, volume, "", MASS_SOURCE, 0, pos))
+
+
+def _write_management(conn, row, rid, wid, work_name):
+    action = row["action"]
+    cost, price, qty, unit = (row["cost"], row["price"], row["quantity"], row["unit"])
+    existing_id = row["existing_id"]
+    if action == "update":
+        conn.execute("""UPDATE report_management_items SET unit=?,unit_price=?,qty=?,cost=?,
+            source='массовое применение',is_manual=0 WHERE id=? AND report_id=?""",
+            (unit, price, qty, cost, existing_id, rid))
+    else:
+        pos = conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM report_management_items WHERE report_id=?", (rid,)).fetchone()[0]
+        conn.execute("""INSERT INTO report_management_items
+            (report_id,work_item_id,name,unit,unit_price,qty,cost,source,is_manual,position)
+            VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (rid, wid, work_name, unit, price, qty, cost, MASS_SOURCE, 0, pos))
+
+
+def _write_section_row(conn, table, row, rid, wid, work_name):
+    if table == "report_content_items":
+        _write_content(conn, row, rid, wid, work_name)
+    elif table == "report_repair_items":
+        _write_repair(conn, row, rid, wid, work_name)
+    else:
+        _write_management(conn, row, rid, wid, work_name)
 
 
 def apply_plan(conn, preview: dict[str, Any]) -> dict[str, Any]:
@@ -277,43 +351,7 @@ def apply_plan(conn, preview: dict[str, Any]) -> dict[str, Any]:
             rid = row["report_id"]
             if action == "create":
                 rid = db.create_report_in_conn(conn, cid, row["house_id"], year)
-            cost, price, qty, unit = (row["cost"], row["price"], row["quantity"], row["unit"])
-            existing_id = row["existing_id"]
-            if table == "report_content_items":
-                if action == "update":
-                    conn.execute("""UPDATE report_content_items SET unit=?, unit_price=?, plan_qty=?,
-                        plan_cost=?, actual_qty=?, actual_cost=?, source='массовое применение',
-                        is_manual=0 WHERE id=? AND report_id=?""",
-                        (unit, price, qty, cost, qty, cost, existing_id, rid))
-                else:
-                    pos = conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM report_content_items WHERE report_id=?", (rid,)).fetchone()[0]
-                    conn.execute("""INSERT INTO report_content_items
-                        (report_id,work_item_id,name,unit,unit_price,plan_qty,plan_cost,actual_qty,
-                         actual_cost,source,is_manual,position)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        (rid, wid, work_name, unit, price, qty, cost, qty, cost, MASS_SOURCE, 0, pos))
-            elif table == "report_repair_items":
-                volume = f"{qty:g} {unit}" if qty else unit
-                if action == "update":
-                    conn.execute("""UPDATE report_repair_items SET cost=?,volume=?,source='массовое применение',
-                        is_manual=0 WHERE id=? AND report_id=?""", (cost, volume, existing_id, rid))
-                else:
-                    pos = conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM report_repair_items WHERE report_id=?", (rid,)).fetchone()[0]
-                    conn.execute("""INSERT INTO report_repair_items
-                        (report_id,work_item_id,name,basis,cost,volume,act_details,source,is_manual,position)
-                        VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                        (rid, wid, work_name, "", cost, volume, "", MASS_SOURCE, 0, pos))
-            else:
-                if action == "update":
-                    conn.execute("""UPDATE report_management_items SET unit=?,unit_price=?,qty=?,cost=?,
-                        source='массовое применение',is_manual=0 WHERE id=? AND report_id=?""",
-                        (unit, price, qty, cost, existing_id, rid))
-                else:
-                    pos = conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM report_management_items WHERE report_id=?", (rid,)).fetchone()[0]
-                    conn.execute("""INSERT INTO report_management_items
-                        (report_id,work_item_id,name,unit,unit_price,qty,cost,source,is_manual,position)
-                        VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                        (rid, wid, work_name, unit, price, qty, cost, MASS_SOURCE, 0, pos))
+            _write_section_row(conn, table, row, rid, wid, work_name)
             # Editing a checked report invalidates the previous check.
             conn.execute(
                 "UPDATE reports SET status=CASE WHEN status='Проверен' "
