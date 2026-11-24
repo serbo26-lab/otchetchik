@@ -28,9 +28,9 @@ class AuditFixture(unittest.TestCase):
 
 class StorageAuditTests(AuditFixture):
     def test_v10_database_preserves_all_original_tables_and_records(self):
-        fixture = Path(__file__).with_name("fixtures") / "legacy_v10_schema.sql"
+        fixture = Path(__file__).with_name("fixtures") / "legacy_v10_schema.py"
         with closing(sqlite3.connect(paths.db_path())) as conn:
-            conn.executescript(fixture.read_text(encoding="utf-8"))
+            conn.executescript(runpy.run_path(str(fixture))["SCHEMA_SQL"])
             conn.executescript("""
                 INSERT INTO app_meta VALUES('schema_version','10');
                 INSERT INTO app_meta VALUES('synthetic_marker','retained');
