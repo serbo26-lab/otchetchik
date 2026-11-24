@@ -470,7 +470,9 @@ def create_report(company_id: int, house_id: int, year: int, period_start: str |
 
 
 def load_report_bundle(report_id: int) -> dict[str, Any]:
-    with connect() as conn:
+    """Read all report sections from one SQLite snapshot."""
+    with closing(connect()) as conn:
+        conn.execute("BEGIN")
         report = conn.execute("SELECT * FROM reports WHERE id=?", (report_id,)).fetchone()
         if not report:
             raise ValueError("Отчет не найден")
