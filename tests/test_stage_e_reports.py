@@ -155,6 +155,33 @@ class ReportWorkflowTests(TestCase):
         self.assertEqual(self.page.content_table.rowCount(), 0)
         self.assertTrue(self.page._dirty_report)
 
+    def test_clearing_saved_name_preserves_row_and_pending_edits(self):
+        self.page.add_content_row({
+            "name": "Учебная услуга", "unit_price": 10, "plan_qty": 2,
+            "actual_qty": 1,
+        })
+        self.page.flush_autosave()
+        table = self.page.content_table
+        record_id = int(table.value(0, 0))
+        table.set_value(0, 2, "")
+        table.set_value(0, 5, "3")
+        try:
+            with self.assertRaisesRegex(ValueError, "наименование"):
+                self.page.flush_autosave()
+            stored = db.row("SELECT * FROM report_content_items WHERE id=?", (record_id,))
+            self.assertEqual(stored["name"], "Учебная услуга")
+            self.assertEqual(stored["plan_qty"], 2)
+            self.assertTrue(self.page._dirty_report)
+            self.assertEqual(table.value(0, 2), "")
+            self.assertEqual(float(table.value(0, 5).replace(",", ".")), 3)
+        finally:
+            # Keep the test independent of modal close handling.
+            table.set_value(0, 2, "Учебная услуга")
+            self.page.flush_autosave()
+        stored = db.row("SELECT * FROM report_content_items WHERE id=?", (record_id,))
+        self.assertEqual(stored["plan_qty"], 3)
+        self.assertEqual(stored["name"], "Учебная услуга")
+
     def test_tab_navigation_undoes_failed_save(self):
         self.page.report_tabs.setCurrentIndex(0)
         self.page.period_start.setText("2025-02-01")
