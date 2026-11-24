@@ -19,6 +19,7 @@ from src.uk728.assistant_work_list import (
 )
 from src.uk728.assistant_work_list_ui import AssistantWorkListDialog
 from src.uk728.report_review import inspect_report
+from src.uk728.paths import make_backup
 
 
 def synthetic_source(path):
@@ -352,6 +353,34 @@ class WorkListTransferTests(unittest.TestCase):
         })
         self.assertEqual(result.skipped, 2)
         self.assertEqual(len(db.load_report_bundle(self.report_id)["content"]), 2)
+
+    def test_house_link_changed_during_backup_cancels_import(self):
+        preview = read_preview(self.report_id)
+
+        def backup_and_change_link(reason):
+            result = make_backup(reason)
+            db.execute("UPDATE houses SET assistant_source_id=? WHERE assistant_source_id=?",
+                       ("different-example", "house-example"))
+            return result
+
+        with patch("src.uk728.assistant_work_list.make_backup", side_effect=backup_and_change_link):
+            with self.assertRaisesRegex(WorkListImportError, "изменился"):
+                apply_selected(preview, {"item-content": (CONTENT, "м²")})
+        self.assertFalse(db.load_report_bundle(self.report_id)["content"])
+
+    def test_source_changed_during_backup_cancels_import(self):
+        preview = read_preview(self.report_id)
+
+        def backup_and_change_source(reason):
+            result = make_backup(reason)
+            with sqlite3.connect(self.source) as conn:
+                conn.execute("UPDATE work_list_items SET price='6', cost='3600' WHERE id='item-content'")
+            return result
+
+        with patch("src.uk728.assistant_work_list.make_backup", side_effect=backup_and_change_source):
+            with self.assertRaisesRegex(WorkListImportError, "изменён"):
+                apply_selected(preview, {"item-content": (CONTENT, "м²")})
+        self.assertFalse(db.load_report_bundle(self.report_id)["content"])
 
     def test_second_section_failure_rolls_back_first_and_keeps_verified_status(self):
         db.execute("UPDATE reports SET status='Проверен' WHERE id=?", (self.report_id,))
