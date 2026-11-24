@@ -92,7 +92,10 @@ def validate_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
 
 
 def _decimal(value: Any) -> Decimal:
-    return Decimal(str(value if value is not None else 0))
+    try:
+        return Decimal(str(value if value is not None else 0))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("Некорректный числовой показатель в базе.") from exc
 
 
 def _fingerprint(row):
