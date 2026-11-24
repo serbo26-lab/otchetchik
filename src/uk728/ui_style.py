@@ -123,7 +123,7 @@ QStatusBar { background: @surface; color: @muted; border-top: 1px solid @border;
 QMessageBox { background: @background; }
 """
 
-def apply_theme(app, theme: str, scale: int = 100) -> None:
+def apply_theme(app, theme: str) -> None:
     theme = theme if theme in PALETTES else "light"
     palette = PALETTES[theme]
     q_palette = QPalette()
@@ -141,11 +141,9 @@ def apply_theme(app, theme: str, scale: int = 100) -> None:
         (QPalette.ColorRole.ToolTipText, "text"),
     ]:
         q_palette.setColor(role, QColor(palette[key]))
-    percent = 100
     base = QSS
     for key, value in sorted(palette.items(), key=lambda pair: len(pair[0]), reverse=True):
         base = base.replace("@" + key, value)
-    base = base.replace("font-size: 10pt;", f"font-size: {10 * percent / 100:g}pt;")
     # Applying the same application-wide stylesheet again repolishes every
     # Qt widget, including inactive pages and retained test windows. Repeated
     # MainWindow creation became progressively slower; only re-theme when
