@@ -13,6 +13,8 @@ from typing import Any
 from . import db
 
 CENT = Decimal("0.01")
+
+MASS_SOURCE = "массовое применение"
 MODES = {"area", "monthly", "fixed", "split", "quantity"}
 TABLES = {
     "Содержание": "report_content_items",
@@ -289,7 +291,7 @@ def apply_plan(conn, preview: dict[str, Any]) -> dict[str, Any]:
                         (report_id,work_item_id,name,unit,unit_price,plan_qty,plan_cost,actual_qty,
                          actual_cost,source,is_manual,position)
                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        (rid, wid, work_name, unit, price, qty, cost, qty, cost, "массовое применение", 0, pos))
+                        (rid, wid, work_name, unit, price, qty, cost, qty, cost, MASS_SOURCE, 0, pos))
             elif table == "report_repair_items":
                 volume = f"{qty:g} {unit}" if qty else unit
                 if action == "update":
@@ -300,7 +302,7 @@ def apply_plan(conn, preview: dict[str, Any]) -> dict[str, Any]:
                     conn.execute("""INSERT INTO report_repair_items
                         (report_id,work_item_id,name,basis,cost,volume,act_details,source,is_manual,position)
                         VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                        (rid, wid, work_name, "", cost, volume, "", "массовое применение", 0, pos))
+                        (rid, wid, work_name, "", cost, volume, "", MASS_SOURCE, 0, pos))
             else:
                 if action == "update":
                     conn.execute("""UPDATE report_management_items SET unit=?,unit_price=?,qty=?,cost=?,
@@ -311,7 +313,7 @@ def apply_plan(conn, preview: dict[str, Any]) -> dict[str, Any]:
                     conn.execute("""INSERT INTO report_management_items
                         (report_id,work_item_id,name,unit,unit_price,qty,cost,source,is_manual,position)
                         VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                        (rid, wid, work_name, unit, price, qty, cost, "массовое применение", 0, pos))
+                        (rid, wid, work_name, unit, price, qty, cost, MASS_SOURCE, 0, pos))
             # Editing a checked report invalidates the previous check.
             conn.execute(
                 "UPDATE reports SET status=CASE WHEN status='Проверен' "
