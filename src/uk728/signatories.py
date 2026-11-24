@@ -56,7 +56,7 @@ def list_signatories(*, company_id: int | None = None,
         raise ValueError("Нужно выбрать либо УО, либо дом.")
     field = "company_id" if company_id is not None else "house_id"
     ident = company_id if company_id is not None else house_id
-    result = db.rows(
+    result = db.named_rows(
         f"SELECT * FROM signatories WHERE {field}=? ORDER BY id", (ident,)
     )
     items = []

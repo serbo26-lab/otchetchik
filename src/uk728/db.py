@@ -373,6 +373,14 @@ def rows(query: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         return conn.execute(query, params).fetchall()
 
 
+def named_rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    """Return explicit name-keyed records for UI consumers.
+
+    Keep rows() and its positional SQLite Row access unchanged for other callers.
+    """
+    return [dict(record) for record in rows(query, params)]
+
+
 def row(query: str, params: tuple[Any, ...] = ()) -> sqlite3.Row | None:
     with connect() as conn:
         return conn.execute(query, params).fetchone()
