@@ -1,6 +1,8 @@
 """Preview and explicit classification of Assistant's annual work-list items."""
 from __future__ import annotations
 
+import sqlite3
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
@@ -186,7 +188,7 @@ class AssistantWorkListDialog(QDialog):
                 return
         try:
             result = apply_selected(self.preview, selections)
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, sqlite3.Error, RuntimeError) as exc:
             QMessageBox.warning(self, "Перенос отменён", str(exc))
             return
         self.import_result = result

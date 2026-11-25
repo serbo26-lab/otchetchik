@@ -2,6 +2,7 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
@@ -82,6 +83,18 @@ class MassWorkflowTests(TestCase):
              price * 100, 100, price * 100, "ручной ввод", manual),
         )
         return rid, row_id
+
+    def test_sqlite_preview_failure_invalidates_previous_plan(self):
+        self._preview_area()
+        with patch("src.uk728.mass_apply_ui.connect", side_effect=sqlite3.OperationalError("synthetic locked database")):
+            self.ui.preview()
+        self.assertTrue(self.ui._preview_dirty)
+        self.assertIsNone(self.ui._preview_plan)
+        self.assertFalse(self.ui.apply_button.isEnabled())
+        self.assertIn("synthetic locked database", self.ui.status_label.text())
+        self.assertEqual(db.row("SELECT COUNT(*) FROM reports")[0], 0)
+        self._preview_area()
+        self.assertTrue(self.ui.apply_button.isEnabled())
 
     def test_explicit_house_selection_and_archived_excluded(self):
         self.assertEqual(self.ui.house_list.count(), 2)

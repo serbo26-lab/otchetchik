@@ -2,13 +2,14 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QSplitter
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QSplitter
 from src.uk728 import db
 from src.uk728.app import MainWindow
 from src.uk728.ui_components import ActionPanel, ContentCard
@@ -150,6 +151,25 @@ class DirectoryFlowTests(unittest.TestCase):
         previous_count = len(db.rows("SELECT id FROM work_items WHERE is_active=1"))
         work.save()
         self.assertEqual(len(db.rows("SELECT id FROM work_items WHERE is_active=1")), previous_count + 2)
+
+    def test_template_sqlite_failure_keeps_edits_for_retry(self):
+        tab = self.window.templates_tab
+        tab.reload()
+        tab.add_template()
+        template_id = tab.current_id
+        original = db.row("SELECT name FROM templates WHERE id=?", (template_id,))[0]
+        tab.name.setText("Synthetic pending template")
+        with patch("src.uk728.templates_ui.connect", side_effect=sqlite3.OperationalError("synthetic locked database")):
+            with patch.object(QMessageBox, "warning") as warning:
+                self.assertIs(tab.save(refresh_after=False), False)
+                warning.assert_called_once()
+        self.assertEqual(tab.current_id, template_id)
+        self.assertTrue(tab.has_unsaved_changes())
+        self.assertEqual(tab.name.text(), "Synthetic pending template")
+        self.assertEqual(db.row("SELECT name FROM templates WHERE id=?", (template_id,))[0], original)
+        tab.save(refresh_after=False)
+        self.assertEqual(db.row("SELECT name FROM templates WHERE id=?", (template_id,))[0],
+                         "Synthetic pending template")
 
     def test_template_filters_by_section_and_prevents_duplicates(self):
         w1 = db.execute("INSERT INTO work_items(name,category,unit,default_price) VALUES(?,?,?,?)",
