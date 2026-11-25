@@ -311,6 +311,76 @@ class DirectoryFlowTests(unittest.TestCase):
         self.assertEqual(db.row("SELECT notes FROM work_categories WHERE id=?", (parent,))[0],
                          "Synthetic retried edit")
 
+    def test_work_save_preserves_untouched_legacy_records(self):
+        work = self.window.works_tab
+        old_id = db.execute(
+            "INSERT INTO work_items(name,category,unit,notes,updated_at) VALUES(?,?,?,?,?)",
+            ("Synthetic legacy", "", "", "  Synthetic notes  ", "2000-01-01 00:00:00"),
+        )
+        changed_id = db.execute(
+            "INSERT INTO work_items(name,category) VALUES(?,?)",
+            ("Synthetic edited", "Содержание"),
+        )
+        work.refresh()
+        original = dict(db.row("SELECT * FROM work_items WHERE id=?", (old_id,)))
+        index = next(i for i in range(work.table.rowCount())
+                     if work.table.value(i, 0) == str(changed_id))
+        work.table.set_value(index, 7, "Synthetic change")
+        work.save()
+        self.assertEqual(dict(db.row("SELECT * FROM work_items WHERE id=?", (old_id,))), original)
+        self.assertEqual(db.row("SELECT notes FROM work_items WHERE id=?", (changed_id,))[0],
+                         "Synthetic change")
+
+    def test_work_save_rejects_duplicate_and_unloaded_ids(self):
+        work = self.window.works_tab
+        first = db.execute("INSERT INTO work_items(name,category) VALUES(?,?)",
+                           ("Synthetic first", "Содержание"))
+        second = db.execute("INSERT INTO work_items(name,category) VALUES(?,?)",
+                            ("Synthetic second", "Содержание"))
+        work.refresh()
+        index = next(i for i in range(work.table.rowCount())
+                     if work.table.value(i, 0) == str(second))
+        before = [dict(row) for row in db.rows("SELECT * FROM work_items ORDER BY id")]
+        for bad_id in (first, -1):
+            work.table.set_value(index, 0, bad_id)
+            with patch.object(QMessageBox, "warning") as warning:
+                self.assertIs(work.save(), False)
+                warning.assert_called_once()
+            self.assertEqual([dict(row) for row in db.rows("SELECT * FROM work_items ORDER BY id")], before)
+        work.table.set_value(index, 0, second)
+        work.table.set_value(index, 7, "Synthetic valid edit")
+        work.save()
+        self.assertEqual(db.row("SELECT notes FROM work_items WHERE id=?", (second,))[0],
+                         "Synthetic valid edit")
+
+    def test_work_save_rejects_external_changes(self):
+        work = self.window.works_tab
+        first = db.execute("INSERT INTO work_items(name,category) VALUES(?,?)",
+                           ("Synthetic first", "Содержание"))
+        work.refresh()
+        index = next(i for i in range(work.table.rowCount())
+                     if work.table.value(i, 0) == str(first))
+        work.table.set_value(index, 7, "Synthetic pending edit")
+        db.execute("UPDATE work_items SET default_price=25 WHERE id=?", (first,))
+        with patch.object(QMessageBox, "warning") as warning:
+            self.assertIs(work.save(), False)
+            warning.assert_called_once()
+        self.assertEqual(db.row("SELECT default_price FROM work_items WHERE id=?", (first,))[0], 25)
+        self.assertEqual(work.table.value(index, 7), "Synthetic pending edit")
+        work.refresh()
+        index = next(i for i in range(work.table.rowCount())
+                     if work.table.value(i, 0) == str(first))
+        work.table.set_value(index, 7, "Synthetic pending edit")
+        added = db.execute("INSERT INTO work_items(name,category) VALUES(?,?)",
+                           ("Synthetic external", "Содержание"))
+        with patch.object(QMessageBox, "warning") as warning:
+            self.assertIs(work.save(), False)
+            warning.assert_called_once()
+        self.assertEqual(db.row("SELECT is_active FROM work_items WHERE id=?", (added,))[0], 1)
+        self.assertEqual(db.row("SELECT notes FROM work_items WHERE id=?", (first,))[0], "")
+        self.assertTrue(work.has_unsaved_changes())
+        work.refresh()
+
     def test_directory_validation_rejects_changes_before_saving(self):
         category = self.window.categories_tab
         category.add_category()
