@@ -4,6 +4,22 @@ from __future__ import annotations
 ITEM_FIELDS = ("work_item_id", "name", "unit", "unit_price", "plan_qty", "position")
 
 
+def read_template_snapshot(conn, template_id):
+    """Read the header and ordered composition in the caller's transaction."""
+    header = conn.execute(
+        "SELECT * FROM templates WHERE id=?", (template_id,)
+    ).fetchone()
+    if header is None:
+        return None
+    items = [
+        dict(row) for row in conn.execute(
+            "SELECT * FROM template_items WHERE template_id=? ORDER BY position,id",
+            (template_id,),
+        )
+    ]
+    return dict(header), items
+
+
 def _prepare_rows(rows, existing):
     kept = set()
     prepared = []

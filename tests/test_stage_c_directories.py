@@ -209,6 +209,66 @@ class DirectoryFlowTests(unittest.TestCase):
         tab.save(refresh_after=False)
         self.assertEqual(db.row("SELECT is_active FROM work_categories WHERE id=?", (sub_id,))[0], 1)
 
+    def test_template_save_rejects_external_composition_and_header_changes(self):
+        tab = self.window.templates_tab
+        tab.add_template()
+        tid = tab.current_id
+        tab.notes.setPlainText("Synthetic pending edit")
+        added_id = db.execute(
+            "INSERT INTO template_items(template_id,name,unit,unit_price,plan_qty) VALUES(?,?,?,?,?)",
+            (tid, "Synthetic external item", "шт.", 5, 2),
+        )
+        with patch.object(QMessageBox, "warning") as warning:
+            self.assertIs(tab.save(refresh_after=False), False)
+            warning.assert_called_once()
+        self.assertIsNotNone(db.row("SELECT id FROM template_items WHERE id=?", (added_id,)))
+        self.assertEqual(tab.notes.toPlainText(), "Synthetic pending edit")
+        self.assertEqual(db.row("SELECT notes FROM templates WHERE id=?", (tid,))[0], "")
+        tab.notes.clear()
+        tab.refresh()
+        self.assertEqual(tab.table.rowCount(), 1)
+        tab.notes.setPlainText("Synthetic pending edit")
+        db.execute("UPDATE template_items SET plan_qty=9 WHERE id=?", (added_id,))
+        with patch.object(QMessageBox, "warning"):
+            self.assertIs(tab.save(refresh_after=False), False)
+        self.assertEqual(db.row("SELECT plan_qty FROM template_items WHERE id=?", (added_id,))[0], 9)
+        tab.notes.clear()
+        tab.refresh()
+        tab.notes.setPlainText("Synthetic pending edit")
+        db.execute("UPDATE templates SET name=? WHERE id=?", ("Synthetic external title", tid))
+        with patch.object(QMessageBox, "warning"):
+            self.assertIs(tab.save(refresh_after=False), False)
+        self.assertEqual(db.row("SELECT name FROM templates WHERE id=?", (tid,))[0],
+                         "Synthetic external title")
+        tab.notes.clear()
+        tab.refresh()
+        tab.notes.setPlainText("Synthetic retry")
+        tab.save(refresh_after=False)
+        tab.notes.setPlainText("Synthetic second save")
+        tab.save(refresh_after=False)
+        self.assertEqual(db.row("SELECT notes FROM templates WHERE id=?", (tid,))[0],
+                         "Synthetic second save")
+        self.assertEqual(db.row("SELECT plan_qty FROM template_items WHERE id=?", (added_id,))[0], 9)
+
+    def test_template_failed_read_disables_editor_until_retry(self):
+        tab = self.window.templates_tab
+        tab.add_template()
+        tid = tab.current_id
+        with patch("src.uk728.templates_ui.connect", side_effect=sqlite3.OperationalError("synthetic read failure")):
+            with patch.object(QMessageBox, "warning") as warning:
+                tab._load_current()
+                warning.assert_called_once()
+        self.assertIsNone(tab.current_id)
+        self.assertFalse(tab.save_button.isEnabled())
+        self.assertFalse(tab.delete_button.isEnabled())
+        self.assertEqual(tab.list.currentRow(), -1)
+        self.assertFalse(tab.has_unsaved_changes())
+        index = next(i for i in range(tab.list.count())
+                     if tab.list.item(i).data(Qt.UserRole) == tid)
+        tab.list.setCurrentRow(index)
+        self.assertEqual(tab.current_id, tid)
+        self.assertTrue(tab.save_button.isEnabled())
+
     def test_template_sqlite_failure_keeps_edits_for_retry(self):
         tab = self.window.templates_tab
         tab.reload()
