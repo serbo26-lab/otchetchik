@@ -30,6 +30,7 @@ ACTION_TEXT = {
     "skip_manual": "Ручные правки защищены — пропуск",
     "skip_report": "Нет отчета — пропуск",
     "skip_many_reports": "Несколько отчетов за год — пропуск",
+    "skip_other_company": "Отчет другой УО — пропуск",
     "skip_protected_report": "Размещенный или архивный отчет — пропуск",
     "skip_ambiguous": "Неоднозначная строка — пропуск",
     "skip_area": "Площадь не указана — пропуск",
@@ -140,6 +141,8 @@ def _split_cents(total: Decimal, areas: list[Decimal]) -> list[Decimal]:
 def _choose_action(inputs, reports, report_id, matches, existing):
     if len(reports) > 1:
         action = "skip_many_reports"
+    elif report_id is not None and reports[0]["company_id"] != inputs["company_id"]:
+        action = "skip_other_company"
     elif report_id is not None and str(reports[0]["status"] or "") in ("Размещен", "Размещён", "Архив"):
         action = "skip_protected_report"
     elif len(matches) > 1:
@@ -190,6 +193,7 @@ def _preview_rows(conn, inputs, work, table, houses):
             "report_ids": [int(r["id"]) for r in reports],
             "report_state": [_fingerprint(r) for r in reports],
             "action": action,
+            "opening_state": db.report_opening_state(conn, hid, inputs["year"]) if action == "create" else None,
             "unit": "", "price": 0.0, "quantity": 0.0, "cost": 0.0,
         })
     return rows

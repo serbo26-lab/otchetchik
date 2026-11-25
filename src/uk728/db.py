@@ -418,6 +418,20 @@ def _previous_balances(conn, previous):
     return repair_start, owners_debt_start, tenants_debt_start
 
 
+def report_opening_state(conn, house_id: int, year: int, period_start: str | None = None):
+    """Return the predecessor identity and balances used when creating a report."""
+    p_start = period_start or full_year_period(year)[0]
+    previous = conn.execute(
+        """
+        SELECT * FROM reports
+        WHERE house_id=? AND (year < ? OR (year=? AND period_end < ?))
+        ORDER BY year DESC, period_end DESC, id DESC LIMIT 1
+        """,
+        (house_id, year, year, p_start),
+    ).fetchone()
+    return (previous["id"] if previous else None, *_previous_balances(conn, previous))
+
+
 def create_report_in_conn(conn: sqlite3.Connection, company_id: int, house_id: int, year: int, period_start: str | None = None, period_end: str | None = None, show_period_note: bool = False) -> int:
     """Создает отчет, используя уже открытую SQLite-сессию.
 
@@ -433,15 +447,9 @@ def create_report_in_conn(conn: sqlite3.Connection, company_id: int, house_id: i
     default_start, default_end = full_year_period(year)
     p_start = period_start or default_start
     p_end = period_end or default_end
-    previous = conn.execute(
-        """
-        SELECT * FROM reports
-        WHERE house_id=? AND (year < ? OR (year=? AND period_end < ?))
-        ORDER BY year DESC, period_end DESC, id DESC LIMIT 1
-        """,
-        (house_id, year, year, p_start),
-    ).fetchone()
-    repair_start, owners_debt_start, tenants_debt_start = _previous_balances(conn, previous)
+    _, repair_start, owners_debt_start, tenants_debt_start = report_opening_state(
+        conn, house_id, year, p_start
+    )
     cur = conn.execute(
         """
         INSERT INTO reports(company_id, house_id, year, period_start, period_end, show_period_note, repair_start_balance)
