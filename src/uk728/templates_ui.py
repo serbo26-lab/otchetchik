@@ -193,7 +193,12 @@ class TemplatesTab(BaseTab):
             except Exception as exc:
                 QMessageBox.warning(self, DELETE_CANCELLED, f"Не удалось сохранить резервную копию или удалить шаблон: {exc}")
                 return
-            self.current_id = None; self.refresh(); self.table.setRowCount(0); self.update_form_state()
+            # Clear the deleted editor and its snapshot before refresh can
+            # select another template and populate its rows.
+            self.current_id = None
+            self.update_form_state()
+            self._remember_form_state()
+            self.refresh()
 
     def add_work_to_template(self):
         if not self.current_id:
