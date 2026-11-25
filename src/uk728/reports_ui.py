@@ -835,8 +835,8 @@ class ReportsTab(BaseTab):
             win.set_save_status("error")
         self.msg(f"Не удалось сохранить предыдущий отчет: {exc}")
 
-    def _save_before_report_switch(self, old_id, new_id):
-        if old_id and old_id != new_id and not self._loading_report and not self._saving_report:
+    def _save_before_report_switch(self, old_id):
+        if old_id and not self._loading_report and not self._saving_report:
             try:
                 self.flush_autosave()
             except Exception as exc:
@@ -867,29 +867,47 @@ class ReportsTab(BaseTab):
         claims = bundle["claims"] or {}
         self.claim_pret.setText(str(claims.get("pretensions_count") or "")); self.claim_lawsuits.setText(str(claims.get("lawsuits_count") or "")); self.claim_amount.setText(str(claims.get("recovered_amount") or ""))
 
+    def _clear_failed_report_load(self, exc):
+        # A partially populated editor must never remain bound to a report ID.
+        self.current_id = None
+        self._dirty_report = False
+        self._autosave_timer.stop()
+        blocked = self.list.blockSignals(True)
+        try:
+            self.list.setCurrentRow(-1)
+        finally:
+            self.list.blockSignals(blocked)
+        self._invalidate_review()
+        self._update_report_actions()
+        win = self.window()
+        if hasattr(win, "set_save_status"):
+            win.set_save_status("error")
+        self.msg(f"Не удалось открыть отчет: {exc}. Выберите отчет повторно.")
+
     def _load_current(self):
         item = self.list.currentItem()
         new_id = item.data(Qt.UserRole) if item else None
-        old_id = self.current_id
-        if not self._save_before_report_switch(old_id, new_id):
-            return
-        self.current_id = new_id
-        if not self.current_id:
-            self._invalidate_review()
-            self._update_report_actions()
+        if not self._save_before_report_switch(self.current_id):
             return
         self._invalidate_review()
-        self._update_report_actions()
         self._loading_report = True
         try:
-            bundle = db.load_report_bundle(self.current_id)
-            self._populate_loaded_report(bundle)
+            self.current_id = None
+            if new_id is not None:
+                bundle = db.load_report_bundle(new_id)
+                self._populate_loaded_report(bundle)
+                self.current_id = new_id
+        except Exception as exc:
+            self._clear_failed_report_load(exc)
+            return
         finally:
             self._loading_report = False
         self._dirty_report = False
-        win = self.window()
-        if hasattr(win, "set_save_status"):
-            win.set_save_status("saved")
+        self._update_report_actions()
+        if self.current_id is not None:
+            win = self.window()
+            if hasattr(win, "set_save_status"):
+                win.set_save_status("saved")
 
     def _content_calc_values(self, row: int) -> tuple[float, float]:
         unit_price = to_float(self.content_table.value(row, 4))
