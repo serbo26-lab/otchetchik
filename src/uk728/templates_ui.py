@@ -13,7 +13,7 @@ from . import db
 from .db import connect
 from .paths import make_backup
 from .utils import to_float
-from .template_storage import save_template
+from .template_storage import read_template_snapshot, save_template
 from .ui_components import ContentCard, action_panel, table_card, fit_table_columns
 from .ui_editors import (
     BaseTab, ClickComboBox, CopyPasteTable, EditableComboDelegate,
@@ -32,6 +32,7 @@ class TemplatesTab(BaseTab):
     def __init__(self):
         super().__init__()
         self.current_id: int | None = None
+        self._loaded_template_snapshot = None
         root = QHBoxLayout(self)
         splitter = QSplitter(); self.splitter = splitter; root.addWidget(splitter)
         left = QWidget(); left_l = QVBoxLayout(left)
@@ -158,17 +159,36 @@ class TemplatesTab(BaseTab):
         next_id = item.data(Qt.UserRole) if item else None
         if not self._commit_form_before_load():
             return
-        self.current_id = next_id
-        r = db.row("SELECT * FROM templates WHERE id=?", (self.current_id,)) if self.current_id else None
-        if not r:
+        try:
+            snapshot = None
+            if next_id is not None:
+                with connect() as conn:
+                    conn.execute("BEGIN")
+                    snapshot = read_template_snapshot(conn, next_id)
+        except (OSError, sqlite3.Error) as exc:
+            self.current_id = None
+            self._loaded_template_snapshot = None
+            blocked = self.list.blockSignals(True)
+            try:
+                self.list.setCurrentRow(-1)
+            finally:
+                self.list.blockSignals(blocked)
+            self.update_form_state()
+            self._remember_form_state()
+            QMessageBox.warning(self, "Не удалось открыть шаблон", str(exc))
+            return
+        self._loaded_template_snapshot = snapshot
+        self.current_id = next_id if snapshot is not None else None
+        if snapshot is None:
             self.update_form_state()
             self._remember_form_state()
             return
+        r, items = snapshot
         self.update_form_state()
         self.name.setText(r["name"]); self.category.setCurrentText(r["category"]); self.notes.setPlainText(r["notes"])
         self.reload_work_combo()
         self.table.setRowCount(0)
-        for it in db.named_rows("SELECT * FROM template_items WHERE template_id=? ORDER BY position,id", (self.current_id,)):
+        for it in items:
             row = self.table.rowCount(); self.table.insertRow(row)
             vals = [it["id"], it["work_item_id"] or "", it["name"], it["unit"], it["unit_price"], it["plan_qty"]]
             for c, val in enumerate(vals): self.table.set_value(row, c, val)
@@ -196,6 +216,7 @@ class TemplatesTab(BaseTab):
             # Clear the deleted editor and its snapshot before refresh can
             # select another template and populate its rows.
             self.current_id = None
+            self._loaded_template_snapshot = None
             self.update_form_state()
             self._remember_form_state()
             self.refresh()
@@ -270,10 +291,16 @@ class TemplatesTab(BaseTab):
         try:
             with connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
+                if (self._loaded_template_snapshot is None
+                        or read_template_snapshot(conn, self.current_id) != self._loaded_template_snapshot):
+                    raise ValueError(
+                        "Шаблон изменился после открытия. Запись отменена, введенные данные сохранены в форме."
+                    )
                 inserted = save_template(
                     conn, self.current_id, self.name.text(),
                     self.category.currentText(), self.notes.toPlainText(), rows,
                 )
+                saved_snapshot = read_template_snapshot(conn, self.current_id)
                 conn.commit()
         except (ValueError, OSError, sqlite3.Error) as exc:
             win = self.window()
@@ -284,6 +311,7 @@ class TemplatesTab(BaseTab):
         # Reconcile hidden row IDs even when saving before a selection change.
         for index, row_id in inserted:
             self.table.set_value(index, 0, row_id)
+        self._loaded_template_snapshot = saved_snapshot
         self._remember_form_state()
         self.msg("Шаблон сохранен")
         if refresh_after:
