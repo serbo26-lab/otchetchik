@@ -332,6 +332,7 @@ class WorksTab(BaseTab):
         self.table.allow_paste_append = True
         self.form_widgets = [self.table]
         self._initial_work_rows = {}
+        self._loaded_work_records = {}
         entries = table_card("2. Справочник работ и услуг", self.table,
             subtitle="Заполните раздел формы, наименование, единицу измерения и цену.")
         search_row = QHBoxLayout()
@@ -409,8 +410,11 @@ class WorksTab(BaseTab):
         return tuple(self.table.value(row, col) for col in range(1, 8))
 
     def refresh(self):
+        records = db.named_rows(
+            "SELECT * FROM work_items WHERE is_active=1 ORDER BY group_name, subgroup_name, category, name"
+        )
         self.table.setRowCount(0)
-        for r in db.named_rows("SELECT * FROM work_items WHERE is_active=1 ORDER BY group_name, subgroup_name, category, name"):
+        for r in records:
             row = self.table.rowCount(); self.table.insertRow(row)
             vals = [r["id"], r["group_name"], r["subgroup_name"], r["name"], r["category"], r["unit"], r["default_price"], r["notes"]]
             for col, val in enumerate(vals):
@@ -420,6 +424,7 @@ class WorksTab(BaseTab):
             self.table.value(row, 0): self._row_signature(row)
             for row in range(self.table.rowCount())
         }
+        self._loaded_work_records = {int(record["id"]): record for record in records}
         self._remember_form_state()
         self.filter_rows()
 
@@ -454,13 +459,22 @@ class WorksTab(BaseTab):
         self.filter_rows()
 
     def _validate_work_rows(self):
+        seen = set()
         for index in range(self.table.rowCount()):
             existing = self.table.value(index, 0)
+            if existing:
+                if existing not in self._initial_work_rows or existing in seen:
+                    QMessageBox.warning(
+                        self, "Проверьте справочник",
+                        f"Строка {index + 1}: неизвестный или повторяющийся ID работы.",
+                    )
+                    return False
+                seen.add(existing)
             if existing and self._initial_work_rows.get(existing) == self._row_signature(index):
                 continue  # Preserve unchanged legacy work, including missing section.
             name = self.table.value(index, 3)
             section = self.table.value(index, 4)
-            if not name or normalize_section(section, "") not in COMMON_SECTIONS:
+            if not name.strip() or normalize_section(section, "") not in COMMON_SECTIONS:
                 QMessageBox.warning(
                     self, "Проверьте справочник",
                     f"Строка {index + 1}: заполните наименование и раздел формы "
@@ -487,7 +501,8 @@ class WorksTab(BaseTab):
                 self.table.value(r, 7),
             )
             if wid:
-                conn.execute("UPDATE work_items SET group_name=?, subgroup_name=?, name=?, category=?, unit=?, default_price=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (*vals, int(wid)))
+                if self._initial_work_rows[wid] != self._row_signature(r):
+                    conn.execute("UPDATE work_items SET group_name=?, subgroup_name=?, name=?, category=?, unit=?, default_price=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (*vals, int(wid)))
                 active_ids.append(int(wid))
             elif vals[2].strip():
                 cur = conn.execute("INSERT INTO work_items(group_name, subgroup_name, name, category, unit, default_price, notes) VALUES(?,?,?,?,?,?,?)", vals)
@@ -511,13 +526,27 @@ class WorksTab(BaseTab):
             int(self.table.value(row, 0))
             for row in range(self.table.rowCount()) if self.table.value(row, 0)
         }
-        active_ids_before = {int(row["id"]) for row in db.rows("SELECT id FROM work_items WHERE is_active=1")}
-        if active_ids_before - visible_ids:
-            if make_backup("before_work_deletion") is None:
-                raise RuntimeError("Не удалось создать резервную копию справочника перед удалением.")
-        with connect() as conn:
-            self._save_work_rows(conn)
-            conn.commit()
+        try:
+            if self._loaded_work_records.keys() - visible_ids:
+                if make_backup("before_work_deletion") is None:
+                    raise RuntimeError("Не удалось создать резервную копию справочника перед удалением.")
+            with connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                current = {int(row["id"]): dict(row) for row in conn.execute(
+                    "SELECT * FROM work_items WHERE is_active=1"
+                )}
+                if current != self._loaded_work_records:
+                    raise ValueError(
+                        "Справочник изменился после открытия. Запись отменена, введенные данные сохранены в форме."
+                    )
+                self._save_work_rows(conn)
+                conn.commit()
+        except (ValueError, OSError, RuntimeError, sqlite3.Error) as exc:
+            win = self.window()
+            if hasattr(win, "set_save_status"):
+                win.set_save_status("error")
+            QMessageBox.warning(self, "Справочник не сохранен", str(exc))
+            return False
         # Reconcile generated IDs and the in-memory snapshot even when the
         # caller requested no refresh. Otherwise newly added rows could be
         # inserted twice on a subsequent edit/save.
