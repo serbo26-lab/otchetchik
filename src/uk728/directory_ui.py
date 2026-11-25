@@ -1,6 +1,8 @@
 """Editors for work categories and the work directory."""
 from __future__ import annotations
 
+import sqlite3
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -34,6 +36,7 @@ class CategoriesTab(BaseTab):
     def __init__(self):
         super().__init__()
         self.current_id: int | None = None
+        self._loaded_subcategory_ids: set[int] = set()
         root = QHBoxLayout(self)
         splitter = QSplitter(); self.splitter = splitter; root.addWidget(splitter)
 
@@ -139,7 +142,12 @@ class CategoriesTab(BaseTab):
         self.name.setText(r["name"]); self.section.setCurrentText(r["section"] or NOT_SELECTED); self.unit.setCurrentText(r["unit"] or NOT_SELECTED)
         self.price.setText(str(r["default_price"] or "")); self.notes.setPlainText(r["notes"])
         self.sub_table.setRowCount(0)
-        for sub in db.named_rows("SELECT * FROM work_categories WHERE parent_id=? AND is_active=1 ORDER BY name", (self.current_id,)):
+        subcategories = db.named_rows(
+            "SELECT * FROM work_categories WHERE parent_id=? AND is_active=1 ORDER BY name",
+            (self.current_id,),
+        )
+        self._loaded_subcategory_ids = {int(sub["id"]) for sub in subcategories}
+        for sub in subcategories:
             row = self.sub_table.rowCount(); self.sub_table.insertRow(row)
             vals = [sub["id"], sub["name"], sub["section"], sub["unit"], sub["default_price"], sub["notes"]]
             for c, val in enumerate(vals): self.sub_table.set_value(row, c, val)
@@ -187,13 +195,40 @@ class CategoriesTab(BaseTab):
         vals = ["", "Новая подкатегория", section, unit, self.price.text() or "0", ""]
         for c, val in enumerate(vals): self.sub_table.set_value(row, c, val)
 
+    def _validated_subcategory_ids(self):
+        remaining = set()
+        for index in range(self.sub_table.rowCount()):
+            if not self.sub_table.value(index, 1).strip():
+                raise ValueError(
+                    f"Подкатегория, строка {index + 1}: заполните наименование или явно удалите строку."
+                )
+            raw_id = self.sub_table.value(index, 0)
+            if raw_id:
+                row_id = int(raw_id)
+                if row_id not in self._loaded_subcategory_ids or row_id in remaining:
+                    raise ValueError("Состав подкатегорий содержит чужой или повторяющийся ID. Запись отменена.")
+                remaining.add(row_id)
+        return remaining
+
+    def _check_subcategory_context(self, conn):
+        parent = conn.execute(
+            "SELECT 1 FROM work_categories WHERE id=? AND parent_id IS NULL AND is_active=1",
+            (self.current_id,),
+        ).fetchone()
+        current = {int(row[0]) for row in conn.execute(
+            "SELECT id FROM work_categories WHERE parent_id=? AND is_active=1",
+            (self.current_id,),
+        )}
+        if not parent or current != self._loaded_subcategory_ids:
+            raise ValueError(
+                "Категория или состав подкатегорий изменились после открытия формы. Запись отменена."
+            )
+
     def _save_subcategories(self, conn, section, unit):
         existing_ids: list[int] = []
         new_subrows: list[tuple[int, int]] = []
         for r in range(self.sub_table.rowCount()):
             name = self.sub_table.value(r, 1)
-            if not name:
-                continue
             sub_id = self.sub_table.value(r, 0)
             sub_section = self.sub_table.value(r, 2)
             sub_unit = self.sub_table.value(r, 3)
@@ -234,26 +269,29 @@ class CategoriesTab(BaseTab):
         if problem:
             QMessageBox.warning(self, "Проверьте стоимость", problem)
             return False
-        prior = {int(r["id"]) for r in db.rows(
-            "SELECT id FROM work_categories WHERE parent_id=? AND is_active=1", (self.current_id,)
-        )}
-        remaining = {
-            int(self.sub_table.value(row, 0))
-            for row in range(self.sub_table.rowCount())
-            if self.sub_table.value(row, 0) and self.sub_table.value(row, 1)
-        }
-        if prior - remaining:
-            if make_backup("before_subcategory_deletion") is None:
-                raise RuntimeError("Не удалось создать резервную копию перед удалением подкатегорий.")
-        with connect() as conn:
-            conn.execute(
-                "UPDATE work_categories SET name=?, section=?, unit=?, default_price=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                (self.name.text(), section, unit, to_float(self.price.text()), self.notes.toPlainText(), self.current_id),
-            )
-            new_subrows = self._save_subcategories(conn, section, unit)
-            conn.commit()
+        try:
+            remaining = self._validated_subcategory_ids()
+            if self._loaded_subcategory_ids - remaining:
+                if make_backup("before_subcategory_deletion") is None:
+                    raise RuntimeError("Не удалось создать резервную копию перед удалением подкатегорий.")
+            with connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self._check_subcategory_context(conn)
+                conn.execute(
+                    "UPDATE work_categories SET name=?, section=?, unit=?, default_price=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (self.name.text(), section, unit, to_float(self.price.text()), self.notes.toPlainText(), self.current_id),
+                )
+                new_subrows = self._save_subcategories(conn, section, unit)
+                conn.commit()
+        except (ValueError, OSError, RuntimeError, sqlite3.Error) as exc:
+            win = self.window()
+            if hasattr(win, "set_save_status"):
+                win.set_save_status("error")
+            QMessageBox.warning(self, "Категория не сохранена", str(exc))
+            return False
         for row_index, new_id in new_subrows:
             self.sub_table.set_value(row_index, 0, new_id)
+        self._loaded_subcategory_ids = remaining | {new_id for _, new_id in new_subrows}
         self._remember_form_state()
         self.msg("Категории сохранены")
         if refresh_after:
