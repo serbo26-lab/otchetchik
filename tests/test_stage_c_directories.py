@@ -152,6 +152,63 @@ class DirectoryFlowTests(unittest.TestCase):
         work.save()
         self.assertEqual(len(db.rows("SELECT id FROM work_items WHERE is_active=1")), previous_count + 2)
 
+    def test_template_deletion_preserves_remaining_template_items(self):
+        tab = self.window.templates_tab
+        db.execute("DELETE FROM templates")
+        deleted_id = db.execute("INSERT INTO templates(name,category) VALUES(?,?)",
+                                ("Synthetic deleted", "Содержание"))
+        kept_id = db.execute("INSERT INTO templates(name,category) VALUES(?,?)",
+                             ("Synthetic retained", "Содержание"))
+        item_id = db.execute(
+            "INSERT INTO template_items(template_id,name,unit,unit_price,plan_qty) VALUES(?,?,?,?,?)",
+            (kept_id, "Synthetic retained item", "шт.", 4, 2),
+        )
+        tab.refresh()
+        tab.list.setCurrentRow(next(i for i in range(tab.list.count())
+                                    if tab.list.item(i).data(Qt.UserRole) == deleted_id))
+        self.assertEqual(tab.current_id, deleted_id)
+        tab.notes.setPlainText("Synthetic unsaved edit to deleted template")
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), \
+             patch.object(QMessageBox, "warning") as warning:
+            tab.delete_template()
+            warning.assert_not_called()
+        self.assertIsNone(db.row("SELECT id FROM templates WHERE id=?", (deleted_id,)))
+        self.assertEqual(tab.current_id, kept_id)
+        self.assertEqual(tab.table.rowCount(), 1)
+        self.assertEqual(tab.table.value(0, 0), str(item_id))
+        self.assertFalse(tab.has_unsaved_changes())
+        tab.notes.setPlainText("Synthetic retained edit")
+        tab.save(refresh_after=False)
+        self.assertIsNotNone(db.row("SELECT id FROM template_items WHERE id=?", (item_id,)))
+
+    def test_category_deletion_preserves_next_category_subcategories(self):
+        tab = self.window.categories_tab
+        deleted_id = db.execute("INSERT INTO work_categories(name,section) VALUES(?,?)",
+                                ("001 Synthetic deleted", "Содержание"))
+        kept_id = db.execute("INSERT INTO work_categories(name,section) VALUES(?,?)",
+                             ("000 Synthetic retained", "Содержание"))
+        sub_id = db.execute(
+            "INSERT INTO work_categories(parent_id,name,section) VALUES(?,?,?)",
+            (kept_id, "Synthetic retained subcategory", "Содержание"),
+        )
+        tab.refresh()
+        tab.list.setCurrentRow(next(i for i in range(tab.list.count())
+                                    if tab.list.item(i).data(Qt.UserRole) == deleted_id))
+        self.assertEqual(tab.current_id, deleted_id)
+        tab.notes.setPlainText("Synthetic unsaved edit to deleted category")
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), \
+             patch.object(QMessageBox, "warning") as warning:
+            tab.delete_category()
+            warning.assert_not_called()
+        self.assertEqual(db.row("SELECT is_active FROM work_categories WHERE id=?", (deleted_id,))[0], 0)
+        self.assertEqual(tab.current_id, kept_id)
+        self.assertEqual(tab.sub_table.rowCount(), 1)
+        self.assertEqual(tab.sub_table.value(0, 0), str(sub_id))
+        self.assertFalse(tab.has_unsaved_changes())
+        tab.notes.setPlainText("Synthetic retained edit")
+        tab.save(refresh_after=False)
+        self.assertEqual(db.row("SELECT is_active FROM work_categories WHERE id=?", (sub_id,))[0], 1)
+
     def test_template_sqlite_failure_keeps_edits_for_retry(self):
         tab = self.window.templates_tab
         tab.reload()

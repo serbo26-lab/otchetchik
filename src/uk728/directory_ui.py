@@ -171,8 +171,11 @@ class CategoriesTab(BaseTab):
             except Exception as exc:
                 QMessageBox.warning(self, DELETE_CANCELLED, str(exc))
                 return
+            # Do not clear the next category's rows or autosave the deleted one.
             self.current_id = None
-            self.refresh(); self.sub_table.setRowCount(0); self.update_form_state()
+            self.update_form_state()
+            self._remember_form_state()
+            self.refresh()
 
     def add_subcategory(self):
         if not self.current_id:
