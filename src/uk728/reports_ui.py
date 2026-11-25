@@ -1,6 +1,7 @@
 """Report editor, creation dialog and reference-work selection."""
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -1153,7 +1154,7 @@ class ReportsTab(BaseTab):
     def save_manually(self):
         try:
             self.save()
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, sqlite3.Error) as exc:
             win = self.window()
             if hasattr(win, "set_save_status"):
                 win.set_save_status("error")

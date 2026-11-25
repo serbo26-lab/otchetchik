@@ -87,6 +87,36 @@ class StorageRefactoringTests(unittest.TestCase):
                 self.assertEqual(after[1]["source"], "synthetic-new")
                 self.assertNotIn(first, [row["id"] for row in after])
 
+    def test_invalid_report_row_ids_are_rejected_before_any_write(self):
+        other_report = db.create_report(self.company, self.house, 2024)
+        for table in COLUMNS:
+            with self.subTest(table=table), closing(db.connect()) as conn:
+                with conn:
+                    conn.execute(f"INSERT INTO {table}(report_id,name) VALUES(?,?)",
+                                 (self.report, "Synthetic original"))
+                    foreign_id = conn.execute(
+                        f"INSERT INTO {table}(report_id,name) VALUES(?,?)",
+                        (other_report, "Synthetic foreign"),
+                    ).lastrowid
+                original = dict(conn.execute(f"SELECT * FROM {table} WHERE report_id=?",
+                                             (self.report,)).fetchone())
+                changed = {**original, "name": "Synthetic edit"}
+                baseline = conn.total_changes
+                for bad_id in (original["id"], foreign_id, -1):
+                    with self.subTest(bad_id=bad_id):
+                        with self.assertRaisesRegex(ValueError, "Отчет не сохранен"):
+                            sync_report_rows(conn, table, self.report,
+                                             [changed, {**changed, "id": bad_id}])
+                        self.assertEqual(conn.total_changes, baseline)
+                        self.assertEqual(dict(conn.execute(
+                            f"SELECT * FROM {table} WHERE report_id=?", (self.report,)
+                        ).fetchone()), original)
+                with conn:
+                    sync_report_rows(conn, table, self.report, [changed])
+                self.assertEqual(conn.execute(
+                    f"SELECT name FROM {table} WHERE id=?", (original["id"],)
+                ).fetchone()[0], "Synthetic edit")
+
     def test_invalid_template_rows_are_rejected_before_any_write(self):
         template = db.execute("INSERT INTO templates(name) VALUES(?)", ("Synthetic template",))
         payload = {"work_item_id": None, "name": "Synthetic item", "unit": "шт.",

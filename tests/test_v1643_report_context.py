@@ -2,12 +2,13 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import sqlite3
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from src.uk728 import db
 from src.uk728.app import MainWindow
@@ -59,6 +60,22 @@ class ReportContextSafetyTests(unittest.TestCase):
         self.assertEqual(page.list.currentItem().data(256), self.report)
         self.assertEqual(page.notes.toPlainText(), "Synthetic pending edit")
         self.assertTrue(page._dirty_report)
+        self.assertEqual(self.window.page_header.save_status.property("state"), "error")
+        self.assertEqual(db.row("SELECT notes FROM reports WHERE id=?", (self.report,))[0], "")
+        page.flush_autosave()
+        self.assertEqual(db.row("SELECT notes FROM reports WHERE id=?", (self.report,))[0],
+                         "Synthetic pending edit")
+
+    def test_manual_sqlite_failure_keeps_pending_report(self):
+        page = self.page
+        page.notes.setPlainText("Synthetic pending edit")
+        with patch("src.uk728.reports_ui.connect", side_effect=sqlite3.OperationalError("synthetic locked database")):
+            with patch.object(QMessageBox, "warning") as warning:
+                page.save_manually()
+                warning.assert_called_once()
+        self.assertEqual(page.current_id, self.report)
+        self.assertTrue(page._dirty_report)
+        self.assertEqual(page.notes.toPlainText(), "Synthetic pending edit")
         self.assertEqual(self.window.page_header.save_status.property("state"), "error")
         self.assertEqual(db.row("SELECT notes FROM reports WHERE id=?", (self.report,))[0], "")
         page.flush_autosave()
