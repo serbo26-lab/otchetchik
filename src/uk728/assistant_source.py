@@ -72,8 +72,12 @@ def default_source_path() -> Path:
     return legacy if legacy.is_file() else regular
 
 
-def configured_source_path() -> Path:
-    record = db.row("SELECT value FROM app_meta WHERE key=?", (_CONFIG_KEY,))
+def configured_source_path(conn: sqlite3.Connection | None = None) -> Path:
+    query = "SELECT value FROM app_meta WHERE key=?"
+    if conn is None:
+        record = db.row(query, (_CONFIG_KEY,))
+    else:
+        record = conn.execute(query, (_CONFIG_KEY,)).fetchone()
     value = str(record["value"]).strip() if record else ""
     return Path(value) if value else default_source_path()
 

@@ -214,6 +214,7 @@ def _candidate(item: dict, already: bool) -> Candidate:
 
 def read_preview(report_id: int) -> Preview:
     with closing(db.connect()) as conn:
+        conn.execute("BEGIN")
         fingerprint, report = _report_digest(conn, report_id)
         house = conn.execute(
             "SELECT assistant_source_id FROM houses WHERE id=?", (report["house_id"],)
@@ -245,7 +246,7 @@ def read_preview(report_id: int) -> Preview:
                     "AND source LIKE 'assistant-work-list:%'", (report_id,),
                 )
             )
-    path = assistant_source.configured_source_path()
+        path = assistant_source.configured_source_path(conn).expanduser().resolve()
     list_id, period, digest, items = _source_snapshot(path, linked_id, int(report["year"]))
     candidates = tuple(
         _candidate(item, SOURCE_PREFIX + str(item["id"]) in existing)
@@ -296,6 +297,12 @@ def _verify_source(preview):
 
 
 def _verify_target(conn, preview):
+    current_path = assistant_source.configured_source_path(conn).expanduser().resolve()
+    if current_path != preview.source_path:
+        raise WorkListImportError(
+            "Подключённая база Ассистента изменена после предварительного просмотра. "
+            "Откройте импорт заново."
+        )
     before, report = _report_digest(conn, preview.report_id)
     house = conn.execute(
         "SELECT assistant_source_id FROM houses WHERE id=?", (report["house_id"],)
@@ -391,6 +398,7 @@ def apply_selected(preview: Preview, selections: dict[str, tuple[str, str]]) -> 
 
     _verify_source(preview)
     with closing(db.connect()) as conn:
+        conn.execute("BEGIN")
         _verify_target(conn, preview)
         selected, skipped = _select_new_rows(conn, preview, requested)
     if not selected:
