@@ -212,16 +212,17 @@ class CompaniesTab(BaseTab):
                 self.list.setCurrentRow(i); break
 
     def delete_company(self):
-        if not self.current_id:
+        record_id = self.current_id
+        if not record_id:
             return
         if db.row("SELECT id FROM companies WHERE id=? AND assistant_source_id IS NOT NULL",
-                  (self.current_id,)):
+                  (record_id,)):
             self.msg("Связанную УО нельзя удалить здесь. Изменения выполняются в Ассистенте.")
             return
         linked = db.row(
             "SELECT (SELECT COUNT(*) FROM houses WHERE company_id=?) + "
             "(SELECT COUNT(*) FROM reports WHERE company_id=?) AS total",
-            (self.current_id, self.current_id),
+            (record_id, record_id),
         )
         if linked and linked["total"]:
             QMessageBox.warning(
@@ -232,8 +233,19 @@ class CompaniesTab(BaseTab):
             return
         if QMessageBox.question(self, DELETE_QUESTION, "Удалить выбранную организацию без связанных домов и отчетов?") == QMessageBox.Yes:
             try:
-                make_backup("before_delete_company")
-                db.execute("DELETE FROM companies WHERE id=?", (self.current_id,))
+                if make_backup("before_delete_company") is None:
+                    raise RuntimeError("Не удалось создать резервную копию.")
+                with connect() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    deleted = conn.execute(
+                        "DELETE FROM companies WHERE id=? AND assistant_source_id IS NULL "
+                        "AND NOT EXISTS(SELECT 1 FROM houses WHERE company_id=?) "
+                        "AND NOT EXISTS(SELECT 1 FROM reports WHERE company_id=?)",
+                        (record_id, record_id, record_id),
+                    )
+                    if deleted.rowcount != 1:
+                        raise ValueError("Запись или ее связи изменились. Обновите список перед удалением.")
+                    conn.commit()
             except Exception as exc:
                 QMessageBox.warning(self, DELETE_CANCELLED, f"Не удалось сохранить резервную копию или удалить УО: {exc}")
                 return
@@ -662,13 +674,14 @@ class HousesTab(BaseTab):
                 self.list.setCurrentRow(i); break
 
     def delete_house(self):
-        if not self.current_id:
+        record_id = self.current_id
+        if not record_id:
             return
         if db.row("SELECT id FROM houses WHERE id=? AND assistant_source_id IS NOT NULL",
-                  (self.current_id,)):
+                  (record_id,)):
             self.msg("Связанный дом нельзя удалить из Отчётчика. Данные ведутся в Ассистенте.")
             return
-        linked = db.row("SELECT COUNT(*) AS total FROM reports WHERE house_id=?", (self.current_id,))
+        linked = db.row("SELECT COUNT(*) AS total FROM reports WHERE house_id=?", (record_id,))
         if linked and linked["total"]:
             QMessageBox.warning(
                 self, "Удаление невозможно",
@@ -678,8 +691,18 @@ class HousesTab(BaseTab):
             return
         if QMessageBox.question(self, DELETE_QUESTION, "Удалить выбранный дом без отчетов?") == QMessageBox.Yes:
             try:
-                make_backup("before_delete_house")
-                db.execute("DELETE FROM houses WHERE id=?", (self.current_id,))
+                if make_backup("before_delete_house") is None:
+                    raise RuntimeError("Не удалось создать резервную копию.")
+                with connect() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    deleted = conn.execute(
+                        "DELETE FROM houses WHERE id=? AND assistant_source_id IS NULL "
+                        "AND NOT EXISTS(SELECT 1 FROM reports WHERE house_id=?)",
+                        (record_id, record_id),
+                    )
+                    if deleted.rowcount != 1:
+                        raise ValueError("Запись или ее связи изменились. Обновите список перед удалением.")
+                    conn.commit()
             except Exception as exc:
                 QMessageBox.warning(self, DELETE_CANCELLED, f"Не удалось сохранить резервную копию или удалить дом: {exc}")
                 return

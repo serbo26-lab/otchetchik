@@ -119,6 +119,72 @@ class TemplateGuardAuditTests(AuditFixture):
         cls.qt = QApplication.instance() or QApplication([])
         cls.qt.setQuitOnLastWindowClosed(False)
 
+    def test_company_and_house_deletion_require_backup(self):
+        db.init_db()
+        company_id = db.execute("INSERT INTO companies(name) VALUES(?)", ("Synthetic UO",))
+        window = MainWindow()
+        self.addCleanup(window.close)
+        company = window.company_tab
+        company.refresh()
+        self.assertEqual(company.current_id, company_id)
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), \
+             patch.object(QMessageBox, "warning") as warning, \
+             patch("src.uk728.property_ui.make_backup", return_value=None):
+            company.delete_company()
+            warning.assert_called_once()
+        self.assertEqual(company.current_id, company_id)
+        self.assertIsNotNone(db.row("SELECT id FROM companies WHERE id=?", (company_id,)))
+        house_id = db.execute("INSERT INTO houses(company_id,address) VALUES(?,?)",
+                              (company_id, "Synthetic house"))
+        house = window.houses_tab
+        house.reload()
+        self.assertEqual(house.current_id, house_id)
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), \
+             patch.object(QMessageBox, "warning") as warning, \
+             patch("src.uk728.property_ui.make_backup", return_value=None):
+            house.delete_house()
+            warning.assert_called_once()
+        self.assertEqual(house.current_id, house_id)
+        self.assertIsNotNone(db.row("SELECT id FROM houses WHERE id=?", (house_id,)))
+
+    def test_company_and_house_deletion_recheck_links_after_backup(self):
+        db.init_db()
+        company_id = db.execute("INSERT INTO companies(name) VALUES(?)", ("Synthetic UO",))
+        window = MainWindow()
+        self.addCleanup(window.close)
+        company = window.company_tab
+        company.refresh()
+
+        def backup_and_add_house(reason):
+            result = paths.make_backup(reason)
+            db.execute("INSERT INTO houses(company_id,address) VALUES(?,?)",
+                       (company_id, "Synthetic new house"))
+            return result
+
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), \
+             patch.object(QMessageBox, "warning") as warning, \
+             patch("src.uk728.property_ui.make_backup", side_effect=backup_and_add_house):
+            company.delete_company()
+            warning.assert_called_once()
+        self.assertIsNotNone(db.row("SELECT id FROM companies WHERE id=?", (company_id,)))
+        house_id = db.row("SELECT id FROM houses WHERE company_id=?", (company_id,))[0]
+        house = window.houses_tab
+        house.reload()
+        self.assertEqual(house.current_id, house_id)
+
+        def backup_and_add_report(reason):
+            result = paths.make_backup(reason)
+            db.create_report(company_id, house_id, 2025)
+            return result
+
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), \
+             patch.object(QMessageBox, "warning") as warning, \
+             patch("src.uk728.property_ui.make_backup", side_effect=backup_and_add_report):
+            house.delete_house()
+            warning.assert_called_once()
+        self.assertEqual(db.row("SELECT company_id FROM houses WHERE id=?", (house_id,))[0], company_id)
+        self.assertIsNotNone(db.row("SELECT id FROM reports WHERE house_id=?", (house_id,)))
+
     def test_template_deletion_requires_backup(self):
         db.init_db()
         window = MainWindow()
