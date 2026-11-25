@@ -252,6 +252,65 @@ class DirectoryFlowTests(unittest.TestCase):
         self.assertEqual(tab.work_combo.findData(w1), -1)
         self.assertGreaterEqual(tab.work_combo.findData(w2), 0)
 
+    def test_subcategory_save_rejects_invalid_row_identity_and_empty_name(self):
+        page = self.window.categories_tab
+        parent = db.execute("INSERT INTO work_categories(name,section) VALUES(?,?)",
+                            ("Synthetic parent", "Содержание"))
+        other = db.execute("INSERT INTO work_categories(name,section) VALUES(?,?)",
+                           ("Synthetic other", "Содержание"))
+        child = db.execute("INSERT INTO work_categories(parent_id,name,section) VALUES(?,?,?)",
+                           (parent, "Synthetic child", "Содержание"))
+        foreign = db.execute("INSERT INTO work_categories(parent_id,name,section) VALUES(?,?,?)",
+                             (other, "Synthetic foreign", "Содержание"))
+        page.refresh()
+        page.list.setCurrentRow(next(i for i in range(page.list.count())
+                                     if page.list.item(i).data(Qt.UserRole) == parent))
+        page.notes.setPlainText("Synthetic pending edit")
+        for row_id, name in ((foreign, "Synthetic child"), (child, "   ")):
+            with self.subTest(row_id=row_id, name=name):
+                page.sub_table.set_value(0, 0, row_id)
+                page.sub_table.set_value(0, 1, name)
+                with patch.object(QMessageBox, "warning") as warning:
+                    self.assertIs(page.save(refresh_after=False), False)
+                    warning.assert_called_once()
+                self.assertEqual(db.row("SELECT notes FROM work_categories WHERE id=?", (parent,))[0], "")
+                self.assertEqual(db.row("SELECT parent_id FROM work_categories WHERE id=?", (foreign,))[0], other)
+                self.assertEqual(db.row("SELECT is_active FROM work_categories WHERE id=?", (child,))[0], 1)
+        page.sub_table.set_value(0, 0, child)
+        page.sub_table.set_value(0, 1, "Synthetic child")
+        page.add_subcategory()
+        page.sub_table.set_value(1, 0, child)
+        with patch.object(QMessageBox, "warning"):
+            self.assertIs(page.save(refresh_after=False), False)
+        page.sub_table.removeRow(1)
+        page.save(refresh_after=False)
+        self.assertEqual(db.row("SELECT notes FROM work_categories WHERE id=?", (parent,))[0],
+                         "Synthetic pending edit")
+
+    def test_subcategory_save_rejects_changed_composition_after_open(self):
+        page = self.window.categories_tab
+        parent = db.execute("INSERT INTO work_categories(name,section) VALUES(?,?)",
+                            ("Synthetic parent", "Содержание"))
+        page.refresh()
+        page.list.setCurrentRow(next(i for i in range(page.list.count())
+                                     if page.list.item(i).data(Qt.UserRole) == parent))
+        new_id = db.execute("INSERT INTO work_categories(parent_id,name,section) VALUES(?,?,?)",
+                            (parent, "Synthetic added externally", "Содержание"))
+        page.notes.setPlainText("Synthetic pending edit")
+        with patch.object(QMessageBox, "warning") as warning:
+            self.assertIs(page.save(refresh_after=False), False)
+            warning.assert_called_once()
+        self.assertEqual(db.row("SELECT is_active FROM work_categories WHERE id=?", (new_id,))[0], 1)
+        self.assertEqual(db.row("SELECT notes FROM work_categories WHERE id=?", (parent,))[0], "")
+        self.assertTrue(page.has_unsaved_changes())
+        page.notes.clear()
+        page.refresh()
+        self.assertEqual(page.sub_table.value(0, 0), str(new_id))
+        page.notes.setPlainText("Synthetic retried edit")
+        page.save(refresh_after=False)
+        self.assertEqual(db.row("SELECT notes FROM work_categories WHERE id=?", (parent,))[0],
+                         "Synthetic retried edit")
+
     def test_directory_validation_rejects_changes_before_saving(self):
         category = self.window.categories_tab
         category.add_category()
