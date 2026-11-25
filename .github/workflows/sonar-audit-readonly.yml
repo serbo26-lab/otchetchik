@@ -23,7 +23,7 @@ jobs:
 
           query = urllib.parse.urlencode({
               "componentKeys": "serbo26-lab_otchetchik",
-              "pullRequest": "47",
+              "branch": "main",
               "resolved": "false",
               "ps": 100,
           })
