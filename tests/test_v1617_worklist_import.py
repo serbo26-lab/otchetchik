@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from src.uk728 import assistant_source, db
 from src.uk728.assistant_work_list import (
@@ -411,6 +411,29 @@ class WorkListTransferTests(unittest.TestCase):
             self.assertIn("Стоимость не совпадает", dialog.table.item(3, 1).toolTip())
             self.assertEqual(dialog.table.item(2, 2).text(), "")
             self.assertFalse(dialog.apply_button.isEnabled())
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            self.application.processEvents()
+
+    def test_dialog_keeps_selection_on_storage_failure(self):
+        dialog = AssistantWorkListDialog(self.report_id)
+        try:
+            dialog._set_all(CONTENT)
+            selected = [choice.currentData() for choice in dialog.choices]
+            for error in (sqlite3.OperationalError("synthetic locked database"),
+                          RuntimeError("synthetic backup failure")):
+                with self.subTest(error=error):
+                    with patch("src.uk728.assistant_work_list_ui.apply_selected", side_effect=error):
+                        with patch.object(QMessageBox, "warning") as warning:
+                            with patch.object(QMessageBox, "information") as success:
+                                dialog._apply()
+                                warning.assert_called_once()
+                                success.assert_not_called()
+                    self.assertIsNone(dialog.import_result)
+                    self.assertEqual([choice.currentData() for choice in dialog.choices], selected)
+            self.assertEqual(db.row("SELECT COUNT(*) FROM report_content_items WHERE report_id=?",
+                                    (self.report_id,))[0], 0)
         finally:
             dialog.close()
             dialog.deleteLater()

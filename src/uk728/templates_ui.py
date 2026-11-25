@@ -1,6 +1,8 @@
 """Template composition editor."""
 from __future__ import annotations
 
+import sqlite3
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFormLayout, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem,
@@ -268,7 +270,10 @@ class TemplatesTab(BaseTab):
                     self.category.currentText(), self.notes.toPlainText(), rows,
                 )
                 conn.commit()
-        except ValueError as exc:
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            win = self.window()
+            if hasattr(win, "set_save_status"):
+                win.set_save_status("error")
             QMessageBox.warning(self, "Шаблон не сохранён", str(exc))
             return False
         # Reconcile hidden row IDs even when saving before a selection change.

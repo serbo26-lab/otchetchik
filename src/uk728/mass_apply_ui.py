@@ -1,6 +1,8 @@
 """Mass-application page and its read-only preview table."""
 from __future__ import annotations
 
+import sqlite3
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
@@ -374,8 +376,9 @@ class MassApplyTab(BaseTab):
         self.mark_dirty()
         try:
             with connect() as conn:
+                conn.execute("BEGIN")
                 plan = build_mass_plan(conn, self._inputs())
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, sqlite3.Error) as exc:
             self.status_label.setText(f"Проверьте условия: {exc}")
             return
         self._preview_plan = plan
