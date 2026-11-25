@@ -354,6 +354,36 @@ class WorkListTransferTests(unittest.TestCase):
         self.assertEqual(result.skipped, 2)
         self.assertEqual(len(db.load_report_bundle(self.report_id)["content"]), 2)
 
+    def test_connected_source_switch_cancels_import_before_backup(self):
+        preview = read_preview(self.report_id)
+        replacement = self.folder / "synthetic_other_assistant.db"
+        synthetic_source(replacement)
+        db.execute("UPDATE app_meta SET value=? WHERE key=?",
+                   (str(replacement), "assistant_database_path"))
+        with self.assertRaisesRegex(WorkListImportError, "Подключённая база"):
+            apply_selected(preview, {"item-content": (CONTENT, "м²")})
+        self.assertFalse(db.load_report_bundle(self.report_id)["content"])
+        self.assertFalse(self._backups())
+        fresh = read_preview(self.report_id)
+        self.assertEqual(fresh.source_path, replacement.resolve())
+        self.assertEqual(apply_selected(fresh, {"item-content": (CONTENT, "м²")}).added_content, 1)
+
+    def test_connected_source_switch_during_backup_cancels_import(self):
+        preview = read_preview(self.report_id)
+        replacement = self.folder / "synthetic_other_assistant.db"
+        synthetic_source(replacement)
+
+        def backup_and_switch(reason):
+            result = make_backup(reason)
+            db.execute("UPDATE app_meta SET value=? WHERE key=?",
+                       (str(replacement), "assistant_database_path"))
+            return result
+
+        with patch("src.uk728.assistant_work_list.make_backup", side_effect=backup_and_switch):
+            with self.assertRaisesRegex(WorkListImportError, "Подключённая база"):
+                apply_selected(preview, {"item-content": (CONTENT, "м²")})
+        self.assertFalse(db.load_report_bundle(self.report_id)["content"])
+
     def test_house_link_changed_during_backup_cancels_import(self):
         preview = read_preview(self.report_id)
 
