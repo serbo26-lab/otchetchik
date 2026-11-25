@@ -401,13 +401,10 @@ def apply_selected(preview: Preview, selections: dict[str, tuple[str, str]]) -> 
     if make_backup("before_work_list_import") is None:
         raise WorkListImportError("Невозможно создать защитную копию базы Отчётчика.")
 
+    _verify_source(preview)
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        fresh, _ = _report_digest(conn, preview.report_id)
-        if fresh != preview.report_digest:
-            raise WorkListImportError(
-                "Отчёт изменился перед сохранением. Импорт отменён."
-            )
+        _verify_target(conn, preview)
         added_content, added_repair = _write_selected_rows(conn, preview, selected)
         # Any newly imported information invalidates a previously checked
         # report. Never retain "Проверен" for data not yet reviewed.
