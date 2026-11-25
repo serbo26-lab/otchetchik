@@ -52,9 +52,19 @@ def _validate_row_names(table, rows):
             )
 
 
+def _validate_row_ids(rows, existing):
+    """Reject stale or repeated persisted IDs before modifying any section rows."""
+    seen = set()
+    for payload in rows:
+        row_id = int(payload.get("id") or 0)
+        if not row_id:
+            continue
+        if row_id not in existing or row_id in seen:
+            raise ValueError("Состав строк отчета изменился или содержит повторяющиеся идентификаторы. Отчет не сохранен.")
+        seen.add(row_id)
+
+
 def _update_existing_row(conn, table, report_id, keys, existing, row_id, values):
-    if row_id not in existing:
-        raise ValueError(f"Row {row_id} does not belong to report {report_id}")
     old = existing[row_id]
     changed = not same_business_data(old, values, keys)
     if changed or old["position"] != values["position"]:
@@ -85,6 +95,7 @@ def sync_report_rows(conn, table, report_id, rows):
         f"SELECT * FROM {table} WHERE report_id=?", (report_id,)).fetchall()}
     rows = list(rows)
     _validate_row_names(table, rows)
+    _validate_row_ids(rows, existing)
 
     kept, inserted = set(), []
     for row_index, payload in enumerate(rows):
