@@ -82,6 +82,46 @@ class ReportContextSafetyTests(unittest.TestCase):
         self.assertEqual(db.row("SELECT notes FROM reports WHERE id=?", (self.report,))[0],
                          "Synthetic pending edit")
 
+    def test_failed_report_read_disables_stale_editor_until_retry(self):
+        page = self.page
+        second = db.create_report(self.company, self.house, 2025,
+                                  "2025-07-01", "2025-12-31", True)
+        page.refresh()
+        page.notes.setPlainText("Synthetic first report edit")
+        target = next(i for i in range(page.list.count())
+                      if page.list.item(i).data(256) == second)
+        with patch("src.uk728.reports_ui.db.load_report_bundle",
+                   side_effect=sqlite3.OperationalError("synthetic read failure")):
+            page.list.setCurrentRow(target)
+        self.assertIsNone(page.current_id)
+        self.assertEqual(page.list.currentRow(), -1)
+        self.assertFalse(page.save_button.isEnabled())
+        self.assertFalse(page.report_tabs.isEnabled())
+        self.assertFalse(page._autosave_timer.isActive())
+        self.assertFalse(page._dirty_report)
+        self.assertEqual(self.window.page_header.save_status.property("state"), "error")
+        self.assertEqual(db.row("SELECT notes FROM reports WHERE id=?", (self.report,))[0],
+                         "Synthetic first report edit")
+        page.save(silent=True)
+        self.assertEqual(db.row("SELECT notes FROM reports WHERE id=?", (second,))[0], "")
+        page.list.setCurrentRow(target)
+        self.assertEqual(page.current_id, second)
+        self.assertTrue(page.save_button.isEnabled())
+        self.assertEqual(page.notes.toPlainText(), "")
+
+    def test_failed_report_population_disables_partially_loaded_editor(self):
+        page = self.page
+        with patch.object(page, "_populate_loaded_report", side_effect=ValueError("synthetic form failure")):
+            page._load_current()
+        self.assertIsNone(page.current_id)
+        self.assertFalse(page.save_button.isEnabled())
+        self.assertFalse(page.delete_report_btn.isEnabled())
+        self.assertFalse(page._loading_report)
+        self.assertEqual(page.list.currentRow(), -1)
+        page.list.setCurrentRow(0)
+        self.assertEqual(page.current_id, self.report)
+        self.assertTrue(page.save_button.isEnabled())
+
     def test_negative_save_notifications_do_not_announce_success(self):
         for message in ("Переход отменен: отчет не сохранен",
                         "Отчёт не сохранён", "Не удалось сохранить данные"):
