@@ -10,11 +10,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QComboBox, QFormLayout, QScrollArea
+from PySide6.QtCore import Qt, QCoreApplication, QEvent
+from PySide6.QtWidgets import QApplication, QComboBox, QFormLayout, QScrollArea, QWidget, QPushButton
 
 from src.uk728 import db
 from src.uk728.app import MainWindow
+from src.uk728.ui_shell import ActionFlowLayout
+from src.uk728.reports_ui import AddFromReferenceDialog
+from src.uk728.ui_style import apply_theme
 
 
 class ResponsiveWindowTests(unittest.TestCase):
@@ -78,6 +81,47 @@ class ResponsiveWindowTests(unittest.TestCase):
         self.qt.processEvents()
         self.assertTrue(w.mass_tab.apply_button.isVisible())
         self.assertGreater(w.mass_tab.apply_button.width(), 100)
+
+    def test_sidebar_scroll_is_discoverable_and_last_page_reachable(self):
+        w = self.window
+        w.resize(860, 520)
+        self.qt.processEvents()
+        nav = w.sidebar.navigation
+        self.assertEqual(nav.verticalScrollBarPolicy(), Qt.ScrollBarAsNeeded)
+        self.assertGreater(nav.verticalScrollBar().maximum(), 0)
+        nav.scrollToItem(nav.item(nav.count() - 1))
+        self.qt.processEvents()
+        self.assertTrue(nav.viewport().rect().contains(nav.visualItemRect(nav.item(nav.count() - 1))))
+        nav.setCurrentRow(nav.count() - 1)
+        self.assertIs(w.tabs.currentWidget(), w.backups_tab)
+
+    def test_flow_layout_queries_without_python_items_are_safe(self):
+        parent = QWidget()
+        self.addCleanup(parent.close)
+        flow = ActionFlowLayout(parent)
+        del flow._items
+        try:
+            self.assertEqual(flow.count(), 0)
+            self.assertIsNone(flow.itemAt(0))
+            self.assertIsNone(flow.takeAt(0))
+            self.assertGreaterEqual(flow.heightForWidth(200), 0)
+            self.assertGreaterEqual(flow.minimumSize().width(), 0)
+        finally:
+            flow._items = []
+        flow.addWidget(QPushButton("Synthetic action"))
+        self.assertEqual(flow.count(), 1)
+
+    def test_theme_switch_after_repeated_dialog_disposal(self):
+        for theme in ("light", "dark", "light"):
+            dialog = AddFromReferenceDialog("Содержание", self.window)
+            dialog.show()
+            self.qt.processEvents()
+            dialog.reject()
+            dialog.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            apply_theme(self.qt, theme)
+            self.qt.processEvents()
+        self.assertTrue(self.window.isVisible())
 
     def test_compact_mode_reflows_every_splitter_and_bulk_card(self):
         w = self.window
