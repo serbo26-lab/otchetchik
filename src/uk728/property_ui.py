@@ -1,6 +1,8 @@
 """Editors for management organizations and apartment buildings."""
 from __future__ import annotations
 
+import sqlite3
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFormLayout, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem,
@@ -23,10 +25,30 @@ from .ui_labels import (
 )
 
 
+COMPANY_RECORD_SQL = "SELECT * FROM companies WHERE id=?"
+HOUSE_RECORD_SQL = "SELECT * FROM houses WHERE id=?"
+
+
+def _require_record_snapshot(conn, query, record_id, expected):
+    record = conn.execute(query, (record_id,)).fetchone()
+    if record is None or dict(record) != expected:
+        raise ValueError("Запись изменилась после открытия. Операция отменена.")
+    return record
+
+
+def _property_save_error(page, exc):
+    win = page.window()
+    if hasattr(win, "set_save_status"):
+        win.set_save_status("error")
+    QMessageBox.warning(page, "Запись не сохранена", str(exc))
+    return False
+
+
 class CompaniesTab(BaseTab):
     def __init__(self):
         super().__init__()
         self.current_id: int | None = None
+        self._loaded_record = None
         root = QHBoxLayout(self)
         splitter = QSplitter()
         self.splitter = splitter
@@ -169,8 +191,9 @@ class CompaniesTab(BaseTab):
         next_id = item.data(Qt.UserRole) if item else None
         if not self._commit_form_before_load():
             return
-        self.current_id = next_id
-        r = db.row("SELECT * FROM companies WHERE id=?", (self.current_id,)) if self.current_id else None
+        r = db.row(COMPANY_RECORD_SQL, (next_id,)) if next_id else None
+        self.current_id = next_id if r is not None else None
+        self._loaded_record = dict(r) if r is not None else None
         if not r:
             self.update_form_state()
             self._remember_form_state()
@@ -213,6 +236,7 @@ class CompaniesTab(BaseTab):
 
     def delete_company(self):
         record_id = self.current_id
+        expected = self._loaded_record
         if not record_id:
             return
         if db.row("SELECT id FROM companies WHERE id=? AND assistant_source_id IS NOT NULL",
@@ -233,10 +257,13 @@ class CompaniesTab(BaseTab):
             return
         if QMessageBox.question(self, DELETE_QUESTION, "Удалить выбранную организацию без связанных домов и отчетов?") == QMessageBox.Yes:
             try:
+                with connect() as conn:
+                    _require_record_snapshot(conn, COMPANY_RECORD_SQL, record_id, expected)
                 if make_backup("before_delete_company") is None:
                     raise RuntimeError("Не удалось создать резервную копию.")
                 with connect() as conn:
                     conn.execute("BEGIN IMMEDIATE")
+                    _require_record_snapshot(conn, COMPANY_RECORD_SQL, record_id, expected)
                     deleted = conn.execute(
                         "DELETE FROM companies WHERE id=? AND assistant_source_id IS NULL "
                         "AND NOT EXISTS(SELECT 1 FROM houses WHERE company_id=?) "
@@ -250,8 +277,10 @@ class CompaniesTab(BaseTab):
                 QMessageBox.warning(self, DELETE_CANCELLED, f"Не удалось сохранить резервную копию или удалить УО: {exc}")
                 return
             self.current_id = None
-            self.refresh()
+            self._loaded_record = None
             self.update_form_state()
+            self._remember_form_state()
+            self.refresh()
 
     def save(self, *_args, refresh_after: bool = True):
         if not self.current_id:
@@ -260,24 +289,28 @@ class CompaniesTab(BaseTab):
         if (getattr(self, "_loaded_form_id", None) == self.current_id
                 and self._form_snapshot == self._form_signature()):
             return True
-        with connect() as conn:
-            source = conn.execute(
-                "SELECT assistant_source_id FROM companies WHERE id=?", (self.current_id,)
-            ).fetchone()
-            if source and source["assistant_source_id"]:
-                # Never override linked source identity through the local form.
-                conn.execute(
-                    "UPDATE companies SET reception_address=?,report_person=?,"
-                    "report_contact=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                    (self.addr.toPlainText(), self.person.text(), self.contact.text(),
-                     self.notes.toPlainText(), self.current_id),
-                )
-            else:
-                conn.execute(
-                    "UPDATE companies SET name=?, ogrn_inn=?, reception_address=?, report_person=?, report_contact=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                    (self.name.text(), self.ogrn.text(), self.addr.toPlainText(), self.person.text(), self.contact.text(), self.notes.toPlainText(), self.current_id),
-                )
-            conn.commit()
+        try:
+            with connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                source = _require_record_snapshot(conn, COMPANY_RECORD_SQL, self.current_id, self._loaded_record)
+                if source and source["assistant_source_id"]:
+                    # Never override linked source identity through the local form.
+                    conn.execute(
+                        "UPDATE companies SET reception_address=?,report_person=?,"
+                        "report_contact=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (self.addr.toPlainText(), self.person.text(), self.contact.text(),
+                         self.notes.toPlainText(), self.current_id),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE companies SET name=?, ogrn_inn=?, reception_address=?, report_person=?, report_contact=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (self.name.text(), self.ogrn.text(), self.addr.toPlainText(), self.person.text(), self.contact.text(), self.notes.toPlainText(), self.current_id),
+                    )
+                saved = dict(conn.execute(COMPANY_RECORD_SQL, (self.current_id,)).fetchone())
+                conn.commit()
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            return _property_save_error(self, exc)
+        self._loaded_record = saved
         self._remember_form_state()
         self.msg("Организация сохранена")
         if refresh_after:
@@ -288,6 +321,7 @@ class HousesTab(BaseTab):
     def __init__(self):
         super().__init__()
         self.current_id: int | None = None
+        self._loaded_record = None
         root = QHBoxLayout(self)
         splitter = QSplitter()
         self.splitter = splitter
@@ -627,8 +661,9 @@ class HousesTab(BaseTab):
         next_id = item.data(Qt.UserRole) if item else None
         if not self._commit_form_before_load():
             return
-        self.current_id = next_id
-        r = db.row("SELECT * FROM houses WHERE id=?", (self.current_id,)) if self.current_id else None
+        r = db.row(HOUSE_RECORD_SQL, (next_id,)) if next_id else None
+        self.current_id = next_id if r is not None else None
+        self._loaded_record = dict(r) if r is not None else None
         if not r:
             self.update_form_state()
             self._remember_form_state()
@@ -675,6 +710,7 @@ class HousesTab(BaseTab):
 
     def delete_house(self):
         record_id = self.current_id
+        expected = self._loaded_record
         if not record_id:
             return
         if db.row("SELECT id FROM houses WHERE id=? AND assistant_source_id IS NOT NULL",
@@ -691,10 +727,13 @@ class HousesTab(BaseTab):
             return
         if QMessageBox.question(self, DELETE_QUESTION, "Удалить выбранный дом без отчетов?") == QMessageBox.Yes:
             try:
+                with connect() as conn:
+                    _require_record_snapshot(conn, HOUSE_RECORD_SQL, record_id, expected)
                 if make_backup("before_delete_house") is None:
                     raise RuntimeError("Не удалось создать резервную копию.")
                 with connect() as conn:
                     conn.execute("BEGIN IMMEDIATE")
+                    _require_record_snapshot(conn, HOUSE_RECORD_SQL, record_id, expected)
                     deleted = conn.execute(
                         "DELETE FROM houses WHERE id=? AND assistant_source_id IS NULL "
                         "AND NOT EXISTS(SELECT 1 FROM reports WHERE house_id=?)",
@@ -707,8 +746,10 @@ class HousesTab(BaseTab):
                 QMessageBox.warning(self, DELETE_CANCELLED, f"Не удалось сохранить резервную копию или удалить дом: {exc}")
                 return
             self.current_id = None
-            self.refresh()
+            self._loaded_record = None
             self.update_form_state()
+            self._remember_form_state()
+            self.refresh()
 
     def _source_house_note(self, record):
         note = (
@@ -806,52 +847,54 @@ class HousesTab(BaseTab):
         else:
             total = to_float(self.area.text())
 
-        with connect() as conn:
-            source = conn.execute(
-                "SELECT assistant_source_id,assistant_area_missing,"
-                "assistant_residential_missing,assistant_non_residential_missing "
-                "FROM houses WHERE id=?", (self.current_id,)
-            ).fetchone()
-            if source and source["assistant_source_id"]:
-                # No sourced identity/period/agreement or known component may be
-                # modified from this form. Missing components and contract
-                # validity dates belong only to the Reporter's local database.
-                conn.execute(
-                    "UPDATE houses SET "
-                    "residential_area=CASE WHEN assistant_residential_missing=1 "
-                    "THEN ? ELSE residential_area END,"
-                    "non_residential_area=CASE WHEN assistant_non_residential_missing=1 "
-                    "THEN ? ELSE non_residential_area END,"
-                    "total_area=CASE WHEN assistant_area_missing=1 "
-                    "THEN ? ELSE total_area END,"
-                    "agreement_valid_from=?,agreement_valid_to=?,"
-                    "status=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                    (
-                        residential, non_residential, total,
-                        dates["agreement_valid_from"], dates["agreement_valid_to"],
-                        self.status.currentText(), self.notes.toPlainText(),
-                        self.current_id,
-                    ),
-                )
-            else:
-                conn.execute(
-                    "UPDATE houses SET company_id=?,address=?,total_area=?,"
-                    "residential_area=?,non_residential_area=?,"
-                    "management_start=?,management_end=?,"
-                    "management_agreement_number=?,management_agreement_date=?,"
-                    "agreement_valid_from=?,agreement_valid_to=?,"
-                    "status=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                    (
-                        self.company.currentData(), self.address.toPlainText(),
-                        total, residential, non_residential,
-                        dates["management_start"], dates["management_end"],
-                        self.agreement_number.text(), dates["agreement_date"],
-                        dates["agreement_valid_from"], dates["agreement_valid_to"],
-                        self.status.currentText(), self.notes.toPlainText(),
-                        self.current_id,
-                    ),
-                )
-            conn.commit()
+        try:
+            with connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                source = _require_record_snapshot(conn, HOUSE_RECORD_SQL, self.current_id, self._loaded_record)
+                if source and source["assistant_source_id"]:
+                    # No sourced identity/period/agreement or known component may be
+                    # modified from this form. Missing components and contract
+                    # validity dates belong only to the Reporter's local database.
+                    conn.execute(
+                        "UPDATE houses SET "
+                        "residential_area=CASE WHEN assistant_residential_missing=1 "
+                        "THEN ? ELSE residential_area END,"
+                        "non_residential_area=CASE WHEN assistant_non_residential_missing=1 "
+                        "THEN ? ELSE non_residential_area END,"
+                        "total_area=CASE WHEN assistant_area_missing=1 "
+                        "THEN ? ELSE total_area END,"
+                        "agreement_valid_from=?,agreement_valid_to=?,"
+                        "status=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (
+                            residential, non_residential, total,
+                            dates["agreement_valid_from"], dates["agreement_valid_to"],
+                            self.status.currentText(), self.notes.toPlainText(),
+                            self.current_id,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE houses SET company_id=?,address=?,total_area=?,"
+                        "residential_area=?,non_residential_area=?,"
+                        "management_start=?,management_end=?,"
+                        "management_agreement_number=?,management_agreement_date=?,"
+                        "agreement_valid_from=?,agreement_valid_to=?,"
+                        "status=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (
+                            source["company_id"], self.address.toPlainText(),
+                            total, residential, non_residential,
+                            dates["management_start"], dates["management_end"],
+                            self.agreement_number.text(), dates["agreement_date"],
+                            dates["agreement_valid_from"], dates["agreement_valid_to"],
+                            self.status.currentText(), self.notes.toPlainText(),
+                            self.current_id,
+                        ),
+                    )
+                saved = dict(conn.execute(HOUSE_RECORD_SQL, (self.current_id,)).fetchone())
+                conn.commit()
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            return _property_save_error(self, exc)
+        self._loaded_record = saved
         self._remember_form_state()
         self.msg("Дом сохранен")
         if refresh_after:
