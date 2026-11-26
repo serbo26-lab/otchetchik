@@ -108,10 +108,16 @@ def _reports(page):
 
 
 def _backups(page):
+    if page._restore_error:
+        return WorkflowHint("Отложите поврежденную заявку. Не перезапускайте программу до ее обработки.")
     if page.cancel_button.isEnabled():
         return WorkflowHint("Для восстановления перезапустите программу; до перезапуска его можно отменить.")
+    if page._check_failed:
+        return WorkflowHint("Проверьте копию повторно или выберите другую.")
+    if page._checked_path is not None:
+        return WorkflowHint("Копия проверена. Восстановление требуется только при необходимости.")
     if page.check_button.isEnabled():
-        return WorkflowHint("Нажмите «Проверить выбранную», прежде чем использовать копию.")
+        return WorkflowHint("Проверьте выбранную копию. При восстановлении она будет проверена повторно.")
     return WorkflowHint("Создайте копию либо выберите существующую для проверки.")
 
 

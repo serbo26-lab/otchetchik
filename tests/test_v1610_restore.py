@@ -209,6 +209,58 @@ class BackupRestorationTests(unittest.TestCase):
             page.cancel_pending()
         self.assertIsNone(pending_restore())
 
+    def test_created_copy_is_selected_and_check_state_follows_selection(self):
+        window = MainWindow()
+        self.addCleanup(window.close)
+        page = window.backups_tab
+        self.create_company("Synthetic one")
+        first = make_backup("manual")
+        self.create_company("Synthetic two")
+        page.backup_now()
+        selected = page._selected_path()
+        self.assertIsNotNone(selected)
+        self.assertNotEqual(selected, first)
+        page.check_backup()
+        self.assertEqual(page._checked_path, selected)
+        index = next(i for i in range(page.archive_list.count())
+                     if page.archive_list.item(i).data(0x0100) == str(first))
+        page.archive_list.setCurrentRow(index)
+        self.assertIsNone(page._checked_path)
+        self.assertIn(first.name, page.info.toPlainText())
+        self.assertNotIn("Копия проверена", page.info.toPlainText())
+        with patch("src.uk728.backups_ui.verify_backup", side_effect=ValueError("Synthetic damaged copy")), \
+             patch.object(QMessageBox, "warning"):
+            page.check_backup()
+        self.assertFalse(page.restore_button.isEnabled())
+        self.assertIn("Synthetic damaged copy", page.info.toPlainText())
+        page.check_backup()
+        self.assertTrue(page.restore_button.isEnabled())
+
+    def test_invalid_restore_request_can_be_quarantined_without_touching_db(self):
+        window = MainWindow()
+        self.addCleanup(window.close)
+        self.create_company("Synthetic unchanged")
+        page = window.backups_tab
+        marker = data_dir() / ".restore_request.json"
+        raw = '{"snapshot":"../../other.db"}'
+        marker.write_text(raw, encoding="utf-8")
+        page.refresh()
+        self.assertIn("повреждена", page.pending_message.text())
+        self.assertFalse(page.external_button.isEnabled())
+        self.assertTrue(page.cancel_button.isEnabled())
+        self.assertNotIn("Восстановление подготовлено", page.pending_message.text())
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.No):
+            page.cancel_pending()
+        self.assertTrue(marker.is_file())
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            page.cancel_pending()
+        self.assertFalse(marker.exists())
+        saved = list(data_dir().glob(".restore_request_invalid_*.json"))
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0].read_text(encoding="utf-8"), raw)
+        self.assertEqual(self.count_companies(), 1)
+        self.assertTrue(page.external_button.isEnabled())
+
     def test_pending_record_cannot_point_outside_backups_directory(self):
         marker = data_dir() / ".restore_request.json"
         marker.write_text('{"snapshot":"../../other.db"}', encoding="utf-8")
