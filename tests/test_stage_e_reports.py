@@ -207,12 +207,14 @@ class ReportWorkflowTests(TestCase):
                    ("Synthetic repair", "Текущий ремонт"))
         dialog = AddFromReferenceDialog("Содержание")
         self.addCleanup(dialog.close)
-        self.assertEqual(dialog.combo.count(), 1)
+        self.assertGreaterEqual(dialog.combo.findData(first), 0)
+        self.assertNotIn("Synthetic repair", [dialog.combo.itemText(i) for i in range(dialog.combo.count())])
         dialog.search.setText("not found")
         self.assertFalse(dialog.add_button.isEnabled())
         dialog.accept()
         self.assertNotEqual(dialog.result(), QDialog.Accepted)
         dialog.search.setText("synthetic group")
+        self.assertEqual(dialog.combo.count(), 1)
         self.assertTrue(dialog.add_button.isEnabled())
         dialog.add_button.click()
         self.assertEqual(dialog.selected_id, first)
@@ -226,13 +228,16 @@ class ReportWorkflowTests(TestCase):
             db.execute("UPDATE work_items SET is_active=0 WHERE id=?", (wid,))
             return QDialog.Accepted
 
-        with patch.object(AddFromReferenceDialog, "exec", autospec=True, side_effect=archive_and_accept), \
+        with patch.object(AddFromReferenceDialog, "exec", new=archive_and_accept), \
              patch.object(QMessageBox, "warning") as warning:
             self.page.add_from_reference("Содержание")
         warning.assert_called_once()
         self.assertEqual(self.page.content_table.rowCount(), 0)
 
     def test_template_action_requires_available_template_and_rechecks_section(self):
+        db.execute("DELETE FROM template_items")
+        db.execute("DELETE FROM templates")
+        self.page.reload_template_combo()
         combo = self.page.content_template_combo
         button = self.page._template_apply_buttons[combo]
         self.assertFalse(button.isEnabled())
