@@ -12,7 +12,10 @@ from PySide6.QtWidgets import (
 )
 
 from . import assistant_source, db
-from .backup_restore import verify_backup, pending_restore, stage_restore, cancel_restore
+from .backup_restore import (
+    verify_backup, pending_restore, stage_restore, cancel_restore,
+    quarantine_invalid_restore_request,
+)
 from .paths import data_dir, make_backup
 from .ui_components import ContentCard, action_panel
 from .ui_editors import BaseTab, selectable_label
@@ -23,6 +26,9 @@ class BackupsTab(BaseTab):
     def __init__(self, *, main_window_type: type | None = None):
         super().__init__()
         self._main_window_type = main_window_type
+        self._restore_error = ""
+        self._checked_path = None
+        self._check_failed = False
         layout = QVBoxLayout(self)
         assistant_card = ContentCard(
             "Общая база ГИС ЖКХ Ассистента",
@@ -54,7 +60,7 @@ class BackupsTab(BaseTab):
         self.archive_list = QListWidget()
         self.archive_list.setMinimumHeight(165)
         self.archive_list.setMaximumHeight(320)
-        self.archive_list.currentItemChanged.connect(self.update_controls)
+        self.archive_list.currentItemChanged.connect(self._selection_changed)
         overview.add_widget(self.archive_list)
         self.empty_archive_hint = selectable_label(
             "Резервных копий пока нет. Нажмите «Создать копию», "
@@ -123,6 +129,10 @@ class BackupsTab(BaseTab):
             summary += "\n" + message
         self.assistant_summary.setText(summary)
         self.assistant_sync_button.setEnabled(ready)
+        self.assistant_sync_button.setToolTip(
+            "Прочитать актуальные сведения из Ассистента." if ready else
+            "Сначала выберите доступный файл базы Ассистента."
+        )
 
     def _apply_assistant_sync(self, path: Path | None = None, *, remember: bool = False):
         win = self.window()
@@ -180,18 +190,44 @@ class BackupsTab(BaseTab):
         item = self.archive_list.currentItem()
         return Path(item.data(Qt.UserRole)) if item else None
 
+    def _selection_changed(self, *_args):
+        self._checked_path = None
+        self._check_failed = False
+        self._show_archive_context()
+        self.update_controls()
+
+    def _show_archive_context(self):
+        source = self._selected_path()
+        text = f"Папка данных: {data_dir()}\nРезервных копий: {self.archive_list.count()}."
+        if source is not None:
+            text += f"\nВыбрана копия: {source.name}. Целостность еще не проверена."
+        self.info.setPlainText(text)
+
     def update_controls(self, *_args):
+        self._restore_error = ""
         try:
             request = pending_restore()
         except ValueError as exc:
-            request = {"selected_name": f"Ошибка заявки: {exc}"}
+            request = None
+            self._restore_error = str(exc)
         selected = self._selected_path() is not None
+        pending = request is not None or bool(self._restore_error)
         self.check_button.setEnabled(selected)
-        self.restore_button.setEnabled(selected and request is None)
-        self.external_button.setEnabled(request is None)
-        self.cancel_button.setEnabled(request is not None)
-        self.cancel_panel.setVisible(request is not None)
-        if request:
+        self.check_button.setToolTip("Проверить целостность выбранной копии." if selected else "Выберите копию.")
+        self.restore_button.setEnabled(selected and not pending and not self._check_failed)
+        self.external_button.setEnabled(not pending)
+        self.cancel_button.setEnabled(pending)
+        self.cancel_panel.setVisible(pending)
+        self.cancel_button.setText("Отложить поврежденную заявку" if self._restore_error else
+                                   "Отменить подготовленное восстановление")
+        self._update_restore_hint(selected, pending)
+        if self._restore_error:
+            self.pending_message.setText(
+                "Заявка на восстановление повреждена: " + self._restore_error +
+                " Не перезапускайте программу. Отложите поврежденную заявку; "
+                "ее файл и все копии будут сохранены."
+            )
+        elif request:
             self.pending_message.setText(
                 "Восстановление подготовлено: "
                 f"{request.get('selected_name', 'неизвестная копия')}. "
@@ -203,6 +239,21 @@ class BackupsTab(BaseTab):
                 "Для восстановления выберите копию. После подтверждения "
                 "перезапустите программу: открытая база не заменяется."
             )
+
+    def _update_restore_hint(self, selected, pending):
+        if pending:
+            reason = "Сначала обработайте текущую заявку восстановления."
+        elif not selected:
+            reason = "Выберите резервную копию."
+        elif self._check_failed:
+            reason = "Копия не прошла проверку. Проверьте повторно или выберите другую."
+        else:
+            reason = "Проверить копию и подготовить восстановление после подтверждения."
+        self.restore_button.setToolTip(reason)
+        self.external_button.setToolTip(
+            "Сначала обработайте текущую заявку восстановления." if pending else
+            "Выбрать резервную копию вне архива."
+        )
 
     def refresh(self):
         self.update_assistant_status()
@@ -226,13 +277,7 @@ class BackupsTab(BaseTab):
         self.archive_list.blockSignals(False)
         self.archive_list.setVisible(bool(backups))
         self.empty_archive_hint.setVisible(not backups)
-        self.update_controls()
-        self.info.setPlainText(
-            f"Папка данных: {data_dir()}\n"
-            f"Резервных копий в архиве: {len(backups)}\n"
-            "Перед восстановлением проверяется целостность и структура базы. "
-            "Последняя текущая база также будет сохранена защитной копией."
-        )
+        self._selection_changed()
 
     def backup_now(self):
         try:
@@ -243,6 +288,11 @@ class BackupsTab(BaseTab):
             QMessageBox.warning(self, "Резервная копия не создана", str(exc))
             return
         self.refresh()
+        for index in range(self.archive_list.count()):
+            if self.archive_list.item(index).data(Qt.UserRole) == str(path):
+                self.archive_list.setCurrentRow(index)
+                break
+        self.archive_list.setFocus()
         self.msg(f"Резервная копия создана: {path.name}")
 
     def check_backup(self):
@@ -252,8 +302,15 @@ class BackupsTab(BaseTab):
         try:
             result = verify_backup(source)
         except Exception as exc:
+            self._checked_path = None
+            self._check_failed = True
+            self.info.setPlainText(f"Копия не прошла проверку: {source.name}\n{exc}")
+            self.update_controls()
             QMessageBox.warning(self, "Копия не прошла проверку", str(exc))
             return
+        self._checked_path = source
+        self._check_failed = False
+        self.update_controls()
         self.info.setPlainText(
             f"Копия проверена: {source.name}\n"
             f"УО: {result['companies']} · домов: {result['houses']} · "
@@ -276,7 +333,8 @@ class BackupsTab(BaseTab):
             "После следующего запуска текущая база будет заменена "
             "данными выбранной копии. Сначала программа создаст "
             "отдельную защитную копию текущей базы.\n\n"
-            "Подготовить восстановление?"
+            "Подготовить восстановление?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if answer != QMessageBox.Yes:
             return
@@ -295,7 +353,7 @@ class BackupsTab(BaseTab):
 
     def restore_selected(self):
         path = self._selected_path()
-        if path:
+        if path and self.restore_button.isEnabled():
             self._confirm_restore(path)
 
     def choose_external(self):
@@ -307,19 +365,41 @@ class BackupsTab(BaseTab):
             self._confirm_restore(Path(filename))
 
     def cancel_pending(self):
+        if self._restore_error:
+            self._quarantine_invalid_request()
+            return
         if QMessageBox.question(
             self, "Отменить восстановление?",
             "Отменить подготовленное восстановление? "
-            "Текущая база останется без изменений."
+            "Текущая база останется без изменений.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         ) != QMessageBox.Yes:
             return
         try:
             cancel_restore()
         except Exception as exc:
             QMessageBox.warning(self, "Не удалось отменить", str(exc))
+            self.update_controls()
             return
         self.refresh()
         self.msg("Восстановление отменено.")
+
+    def _quarantine_invalid_request(self):
+        if QMessageBox.question(
+            self, "Отложить поврежденную заявку?",
+            "Файл заявки будет сохранен под другим именем. База и резервные копии "
+            "не изменятся. Отложить заявку?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ) != QMessageBox.Yes:
+            return
+        try:
+            path = quarantine_invalid_restore_request()
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Не удалось отложить заявку", str(exc))
+            self.update_controls()
+            return
+        self.refresh()
+        self.msg(f"Поврежденная заявка отложена: {path.name}")
 
     def show_data_path(self):
         folder = data_dir()

@@ -203,6 +203,18 @@ def cancel_restore() -> bool:
     return True
 
 
+def quarantine_invalid_restore_request() -> Path:
+    """Preserve an unreadable request without following its untrusted paths."""
+    marker = _marker_path()
+    try:
+        pending_restore()
+    except ValueError:
+        target = marker.with_name(".restore_request_invalid_" + uuid.uuid4().hex + ".json")
+        os.replace(marker, target)
+        return target
+    raise ValueError("Заявка изменилась. Обновите список и повторите действие.")
+
+
 def _verify_pending_snapshot(snapshot, record):
     if not snapshot.is_file() or _sha256(snapshot) != record.get("sha256"):
         raise ValueError("Подготовленная копия была изменена или пропала. Текущая база не затронута.")
