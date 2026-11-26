@@ -5,6 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -93,7 +94,7 @@ class BackupRestorationTests(unittest.TestCase):
         self.create_company("Synthetic original")
         source = make_backup("manual")
         preview = verify_backup(source, include_digest=True)
-        with sqlite3.connect(source) as conn:
+        with closing(sqlite3.connect(source)) as conn, conn:
             conn.execute("UPDATE companies SET name='Synthetic changed'")
         with self.assertRaisesRegex(ValueError, "изменилась после подтверждения"):
             stage_restore(source, expected_digest=preview["logical_digest"])
@@ -109,7 +110,7 @@ class BackupRestorationTests(unittest.TestCase):
 
         def backup_and_change(reason):
             guard = make_backup(reason)
-            with sqlite3.connect(staged) as conn:
+            with closing(sqlite3.connect(staged)) as conn, conn:
                 conn.execute("UPDATE companies SET name='Synthetic changed'")
             return guard
 
