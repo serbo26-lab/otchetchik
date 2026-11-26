@@ -500,9 +500,11 @@ class BaseTab(QWidget):
         next_id = item.data(Qt.UserRole) if item else None
         if not self._commit_form_before_load():
             return
+        self._record_load_failed = False
         try:
             populate(next_id)
         except Exception as exc:
+            self._record_load_failed = True
             self.current_id = None
             self._clear_record_selection()
             self.update_form_state()
@@ -549,6 +551,7 @@ class BaseTab(QWidget):
             return
         previous = getattr(self, "_form_snapshot", None)
         self._remember_form_state()
+        self._record_load_failed = False
         try:
             self.refresh()
         except Exception as exc:
@@ -556,7 +559,8 @@ class BaseTab(QWidget):
             self._handle_save_error("Не удалось обновить данные", exc)
             return
         win = self.window()
-        if hasattr(win, "set_save_status") and not self.has_unsaved_changes():
+        if (hasattr(win, "set_save_status") and not self._record_load_failed
+                and not self.has_unsaved_changes()):
             win.set_save_status("saved")
 
     def _clear_record_selection(self):

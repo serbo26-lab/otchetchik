@@ -293,19 +293,22 @@ class MainWindow(QMainWindow):
         self.page_header.show_page(index)
         self.set_save_status("idle")
         current = self.tabs.widget(index)
-        if hasattr(current, "reload"):
-            try:
+        try:
+            # reload() already refreshes the dependent record list. Only
+            # pages without that hook need the separate refresh() call.
+            if hasattr(current, "reload"):
                 current.reload()
-            except Exception as exc:
-                self.statusBar().showMessage(f"Не удалось обновить список: {exc}", 8000)
-        if isinstance(current, BaseTab):
-            try:
+            elif isinstance(current, BaseTab):
                 current.refresh()
-            except Exception as exc:
-                self.statusBar().showMessage(f"Не удалось обновить вкладку: {exc}", 8000)
-        self._apply_company_context(current)
+            if self.page_header.save_status.property("state") != "error":
+                self._apply_company_context(current)
+        except Exception as exc:
+            self.set_save_status("error", "Локально: ошибка загрузки")
+            self.statusBar().showMessage(f"Не удалось обновить вкладку: {exc}", 8000)
         self.refresh_context()
-        if isinstance(current, ReportsTab) and current.current_id and not current._dirty_report:
+        if (isinstance(current, ReportsTab) and current.current_id
+                and not current._dirty_report
+                and self.page_header.save_status.property("state") != "error"):
             self.set_save_status("saved")
 
     def _refresh_sidebar_company(self, current):
@@ -368,12 +371,8 @@ class MainWindow(QMainWindow):
     def reload_after_assistant_sync(self):
         """Update all selectors after committing only local mirrored records."""
         self.company_tab.refresh()
-        if self.company_tab.current_id:
-            self.company_tab._load_current()
         self.houses_tab.reload_companies()
         self.houses_tab.refresh()
-        if self.houses_tab.current_id:
-            self.houses_tab._load_current()
         self.reports_tab.reload_filters()
         self.mass_tab.reload()
         self._apply_company_context(self.tabs.currentWidget())

@@ -593,6 +593,28 @@ class DirectoryFlowTests(unittest.TestCase):
         self.assertEqual(db.row("SELECT notes FROM companies WHERE id=?", (cid,))[0],
                          "Synthetic retry")
 
+    def test_failed_conflict_reload_never_announces_saved(self):
+        company = self.window.company_tab
+        company.add_company()
+        cid = company.current_id
+        company.notes.setPlainText("Synthetic local edit")
+        db.execute("UPDATE companies SET notes=? WHERE id=?", ("Synthetic external edit", cid))
+
+        def failed_read(_ident):
+            raise sqlite3.OperationalError("Synthetic read failure")
+
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), \
+             patch.object(QMessageBox, "warning") as warning, \
+             patch.object(company, "_populate_selected_record", side_effect=failed_read):
+            company.save_manually()
+        warning.assert_called_once()
+        self.assertIsNone(company.current_id)
+        self.assertFalse(company.save_button.isEnabled())
+        self.assertEqual(self.window.page_header.save_status.property("state"), "error")
+        company.refresh()
+        self.assertEqual(company.current_id, cid)
+        self.assertEqual(company.notes.toPlainText(), "Synthetic external edit")
+
     def test_work_conflict_reload_preserves_external_rows(self):
         page = self.window.works_tab
         row_id = db.execute("INSERT INTO work_items(name,category) VALUES(?,?)",
