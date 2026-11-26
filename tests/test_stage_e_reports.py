@@ -110,7 +110,7 @@ class ReportWorkflowTests(TestCase):
         page.year_filter.setValue(2026)
         page.refresh()
         self.assertEqual(page.current_id, rid)
-        self.assertEqual(page.management_cost.text(), "75")
+        self.assertEqual(float(page.management_cost.text()), 75.0)
 
     def test_export_controls_follow_review_and_clear_stale_results(self):
         page = self.page
