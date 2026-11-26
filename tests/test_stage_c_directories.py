@@ -152,6 +152,56 @@ class DirectoryFlowTests(unittest.TestCase):
         work.save()
         self.assertEqual(len(db.rows("SELECT id FROM work_items WHERE is_active=1")), previous_count + 2)
 
+    def test_template_deletion_rejects_external_changes_before_backup(self):
+        tab = self.window.templates_tab
+        tab.add_template()
+        tid = tab.current_id
+        tab.notes.setPlainText("Synthetic pending edit")
+        db.execute("UPDATE templates SET notes=? WHERE id=?", ("Synthetic external edit", tid))
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), \
+             patch.object(QMessageBox, "warning") as warning, \
+             patch("src.uk728.templates_ui.make_backup") as backup:
+            tab.delete_template()
+            warning.assert_called_once()
+            backup.assert_not_called()
+        self.assertEqual(tab.current_id, tid)
+        self.assertTrue(tab.has_unsaved_changes())
+        self.assertEqual(tab.notes.toPlainText(), "Synthetic pending edit")
+        self.assertEqual(db.row("SELECT notes FROM templates WHERE id=?", (tid,))[0],
+                         "Synthetic external edit")
+        tab.notes.clear()
+        tab.refresh()
+
+    def test_template_deletion_rechecks_composition_after_backup(self):
+        from src.uk728.paths import make_backup
+
+        tab = self.window.templates_tab
+        tab.add_template()
+        tid = tab.current_id
+
+        def backup_and_add_item(reason):
+            result = make_backup(reason)
+            db.execute(
+                "INSERT INTO template_items(template_id,name,unit,unit_price,plan_qty) VALUES(?,?,?,?,?)",
+                (tid, "Synthetic external item", "шт.", 5, 2),
+            )
+            return result
+
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), \
+             patch.object(QMessageBox, "warning") as warning, \
+             patch("src.uk728.templates_ui.make_backup", side_effect=backup_and_add_item):
+            tab.delete_template()
+            warning.assert_called_once()
+        self.assertEqual(tab.current_id, tid)
+        self.assertIsNotNone(db.row("SELECT id FROM templates WHERE id=?", (tid,)))
+        self.assertEqual(db.row("SELECT name FROM template_items WHERE template_id=?", (tid,))[0],
+                         "Synthetic external item")
+        tab.refresh()
+        self.assertEqual(tab.table.rowCount(), 1)
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            tab.delete_template()
+        self.assertIsNone(db.row("SELECT id FROM templates WHERE id=?", (tid,)))
+
     def test_template_deletion_preserves_remaining_template_items(self):
         tab = self.window.templates_tab
         db.execute("DELETE FROM templates")

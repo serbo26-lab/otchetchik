@@ -204,22 +204,46 @@ class TemplatesTab(BaseTab):
             if self.list.item(i).data(Qt.UserRole) == tid:
                 self.list.setCurrentRow(i); break
 
+    def _require_template_snapshot(self, conn, template_id, expected):
+        if (self.current_id != template_id or expected is None
+                or self._loaded_template_snapshot != expected
+                or read_template_snapshot(conn, template_id) != expected):
+            raise ValueError(
+                "Шаблон изменился после открытия. Операция отменена, введенные данные сохранены в форме."
+            )
+
     def delete_template(self):
-        if self.current_id and QMessageBox.question(self, DELETE_QUESTION, "Удалить шаблон?") == QMessageBox.Yes:
-            try:
-                if make_backup("before_delete_template") is None:
-                    raise RuntimeError("Не удалось создать резервную копию.")
-                db.execute("DELETE FROM templates WHERE id=?", (self.current_id,))
-            except Exception as exc:
-                QMessageBox.warning(self, DELETE_CANCELLED, f"Не удалось сохранить резервную копию или удалить шаблон: {exc}")
-                return
-            # Clear the deleted editor and its snapshot before refresh can
-            # select another template and populate its rows.
-            self.current_id = None
-            self._loaded_template_snapshot = None
-            self.update_form_state()
-            self._remember_form_state()
-            self.refresh()
+        template_id = self.current_id
+        expected = self._loaded_template_snapshot
+        if not template_id:
+            return
+        if QMessageBox.question(
+            self, DELETE_QUESTION,
+            "Удалить шаблон и все его строки? Несохраненные изменения будут отброшены.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ) != QMessageBox.Yes:
+            return
+        try:
+            with connect() as conn:
+                conn.execute("BEGIN")
+                self._require_template_snapshot(conn, template_id, expected)
+            if make_backup("before_delete_template") is None:
+                raise RuntimeError("Не удалось создать резервную копию.")
+            with connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self._require_template_snapshot(conn, template_id, expected)
+                conn.execute("DELETE FROM templates WHERE id=?", (template_id,))
+                conn.commit()
+        except Exception as exc:
+            QMessageBox.warning(self, DELETE_CANCELLED, f"Не удалось сохранить резервную копию или удалить шаблон: {exc}")
+            return
+        # Clear the deleted editor and its snapshot before refresh can
+        # select another template and populate its rows.
+        self.current_id = None
+        self._loaded_template_snapshot = None
+        self.update_form_state()
+        self._remember_form_state()
+        self.refresh()
 
     def add_work_to_template(self):
         if not self.current_id:
@@ -291,11 +315,7 @@ class TemplatesTab(BaseTab):
         try:
             with connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                if (self._loaded_template_snapshot is None
-                        or read_template_snapshot(conn, self.current_id) != self._loaded_template_snapshot):
-                    raise ValueError(
-                        "Шаблон изменился после открытия. Запись отменена, введенные данные сохранены в форме."
-                    )
+                self._require_template_snapshot(conn, self.current_id, self._loaded_template_snapshot)
                 inserted = save_template(
                     conn, self.current_id, self.name.text(),
                     self.category.currentText(), self.notes.toPlainText(), rows,
