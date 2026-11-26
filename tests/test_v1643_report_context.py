@@ -66,6 +66,52 @@ class ReportContextSafetyTests(unittest.TestCase):
         self.assertEqual(db.row("SELECT notes FROM reports WHERE id=?", (self.report,))[0],
                          "Synthetic pending edit")
 
+    def test_report_save_rejects_external_rows_and_preserves_pending_edits(self):
+        page = self.page
+        page.notes.setPlainText("Synthetic pending edit")
+        added = db.execute(
+            "INSERT INTO report_content_items(report_id,name) VALUES(?,?)",
+            (self.report, "Synthetic external work"),
+        )
+        with self.assertRaisesRegex(ValueError, "изменился"):
+            page.flush_autosave()
+        self.assertTrue(page._dirty_report)
+        self.assertEqual(page.notes.toPlainText(), "Synthetic pending edit")
+        self.assertIsNotNone(db.row("SELECT id FROM report_content_items WHERE id=?", (added,)))
+        self.assertEqual(db.row("SELECT notes FROM reports WHERE id=?", (self.report,))[0], "")
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.No):
+            page.save_manually()
+        self.assertTrue(page._dirty_report)
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            page.save_manually()
+        self.assertFalse(page._dirty_report)
+        self.assertEqual(page.content_table.rowCount(), 1)
+        page.notes.setPlainText("Synthetic retry")
+        page.flush_autosave()
+        page.notes.setPlainText("Synthetic second save")
+        page.flush_autosave()
+        self.assertEqual(db.row("SELECT notes FROM reports WHERE id=?", (self.report,))[0],
+                         "Synthetic second save")
+        self.assertIsNotNone(db.row("SELECT id FROM report_content_items WHERE id=?", (added,)))
+
+    def test_report_save_rejects_external_financial_edit_but_not_house_edit(self):
+        page = self.page
+        db.execute("UPDATE houses SET address=? WHERE id=?", ("Synthetic renamed house", self.house))
+        page.notes.setPlainText("Synthetic first edit")
+        page.flush_autosave()
+        db.execute("UPDATE report_financials SET accrued=45 WHERE report_id=? AND payer_type=?",
+                   (self.report, "Собственники"))
+        page.notes.setPlainText("Synthetic pending edit")
+        with self.assertRaisesRegex(ValueError, "изменился"):
+            page.flush_autosave()
+        self.assertEqual(db.row("SELECT accrued FROM report_financials WHERE report_id=? AND payer_type=?",
+                                (self.report, "Собственники"))[0], 45)
+        self.assertEqual(db.row("SELECT notes FROM reports WHERE id=?", (self.report,))[0],
+                         "Synthetic first edit")
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            page.save_manually()
+        self.assertFalse(page._dirty_report)
+
     def test_manual_sqlite_failure_keeps_pending_report(self):
         page = self.page
         page.notes.setPlainText("Synthetic pending edit")
