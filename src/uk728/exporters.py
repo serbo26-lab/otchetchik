@@ -390,16 +390,16 @@ def export_pdf(report_id: int, *, bundle: dict[str, Any] | None = None) -> Path:
     section = ParagraphStyle("SectionRU", parent=normal, fontName=font_name, fontSize=9, leading=11, spaceBefore=6, spaceAfter=4)
 
     elems = []
-    def P(txt, st=normal):
+    def paragraph(txt, st=normal):
         return Paragraph(escape(str(txt)).replace("\n", "<br/>"), st)
-    elems += [P(REPORT_TITLE, title), P(REPORT_SUBTITLE, title), P(f"по адресу: {house.get('address','')}", title), P(f"за {report.get('year','____')} год", title)]
+    elems += [paragraph(REPORT_TITLE, title), paragraph(REPORT_SUBTITLE, title), paragraph(f"по адресу: {house.get('address','')}", title), paragraph(f"за {report.get('year','____')} год", title)]
     line = _period_line(report)
     if line:
-        elems.append(P(line, title))
-    elems += [P(company.get("name", ""), title), P(f"Адрес приема населения: {company.get('reception_address','')}", normal), P(f"ОГРН/ИНН: {company.get('ogrn_inn','')}", normal), P(f"Лицо, уполномоченное давать разъяснения: {company.get('report_person','')}", normal), P(str(company.get("report_contact", "")), normal), P(f"Общая площадь жилых и нежилых помещений: {money(house.get('total_area',0))} м²", normal), P(f"Дата размещения отчета: {format_date(report.get('publish_date')) or '________________'}", normal), Spacer(1, 4)]
+        elems.append(paragraph(line, title))
+    elems += [paragraph(company.get("name", ""), title), paragraph(f"Адрес приема населения: {company.get('reception_address','')}", normal), paragraph(f"ОГРН/ИНН: {company.get('ogrn_inn','')}", normal), paragraph(f"Лицо, уполномоченное давать разъяснения: {company.get('report_person','')}", normal), paragraph(str(company.get("report_contact", "")), normal), paragraph(f"Общая площадь жилых и нежилых помещений: {money(house.get('total_area',0))} м²", normal), paragraph(f"Дата размещения отчета: {format_date(report.get('publish_date')) or '________________'}", normal), Spacer(1, 4)]
 
     def add_table(data, col_widths=None):
-        table = Table([[P(x) for x in row] for row in data], colWidths=col_widths, repeatRows=1)
+        table = Table([[paragraph(x) for x in row] for row in data], colWidths=col_widths, repeatRows=1)
         table.setStyle(TableStyle([
             ("GRID", (0, 0), (-1, -1), 0.4, colors.black),
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e9eef7")),
@@ -408,27 +408,27 @@ def export_pdf(report_id: int, *, bundle: dict[str, Any] | None = None) -> Path:
         ]))
         elems.extend([table, Spacer(1, 5)])
 
-    elems.append(P(CONTENT_HEADING, section))
+    elems.append(paragraph(CONTENT_HEADING, section))
     data = [["N", "Наименование", "Ед.", "Цена", "Кол-во", COST_LABEL, "Выполнено", COST_LABEL]] + _content_rows(bundle)
     add_table(data, [10*mm, 54*mm, 13*mm, 20*mm, 20*mm, 24*mm, 20*mm, 25*mm])
 
     elems.extend([
-        P(REPAIR_HEADING, section),
-        P(f"Остаток (перерасход, сальдо) на 1 января отчетного периода: {balance_text(report.get('repair_start_balance'))}"),
-        P(f"Общий объем денежных средств, подлежащий внесению собственниками за текущий ремонт: {money(report.get('repair_accrual'))} руб."),
-        P(f"Стоимость работ по текущему ремонту, выполненных за отчетный период: {money(report.get('repair_work_cost'))} руб."),
-        P(f"Остаток (перерасход, сальдо) на 31 декабря отчетного периода: {balance_text(report.get('repair_end_balance'))}"),
+        paragraph(REPAIR_HEADING, section),
+        paragraph(f"Остаток (перерасход, сальдо) на 1 января отчетного периода: {balance_text(report.get('repair_start_balance'))}"),
+        paragraph(f"Общий объем денежных средств, подлежащий внесению собственниками за текущий ремонт: {money(report.get('repair_accrual'))} руб."),
+        paragraph(f"Стоимость работ по текущему ремонту, выполненных за отчетный период: {money(report.get('repair_work_cost'))} руб."),
+        paragraph(f"Остаток (перерасход, сальдо) на 31 декабря отчетного периода: {balance_text(report.get('repair_end_balance'))}"),
     ])
     data = [["N", "Наименование", "Основание", COST_LABEL, "Объем", "Акт/ссылка"]] + _repair_rows(bundle)
     add_table(data, [10*mm, 48*mm, 34*mm, 24*mm, 28*mm, 42*mm])
 
-    elems.extend([P(MANAGEMENT_HEADING, section), P(f"{money(_management_cost(bundle))} руб.")])
+    elems.extend([paragraph(MANAGEMENT_HEADING, section), paragraph(f"{money(_management_cost(bundle))} руб.")])
 
-    elems.append(P(CLAIMS_HEADING, section))
+    elems.append(paragraph(CLAIMS_HEADING, section))
     claims = bundle["claims"] or {}
     add_table([["N", "Претензий", "Исков / судебных приказов", "Поступило, руб."], [1, claims.get("pretensions_count", 0), claims.get("lawsuits_count", 0), money(claims.get("recovered_amount", 0))]], [12*mm, 50*mm, 74*mm, 50*mm])
 
-    elems.append(P(FINANCIAL_HEADING, section))
+    elems.append(paragraph(FINANCIAL_HEADING, section))
     data = [["N", PAYMENT_TYPE_LABEL, "Задолженность на начало", "Начислено", "Поступило", "Задолженность на 1 января следующего периода"]] + _financial_table_rows(bundle)
     add_table(data, [10*mm, 62*mm, 30*mm, 28*mm, 28*mm, 28*mm])
     with _new_export_path(out_path) as target:
