@@ -36,6 +36,34 @@ def _require_record_snapshot(conn, query, record_id, expected):
     return record
 
 
+def _delete_reason(record, *, company):
+    if record is None:
+        return "Сначала выберите запись."
+    if record["assistant_source_id"] is not None:
+        return "Запись из Ассистента. Удаление возможно только в Ассистенте."
+    if company:
+        linked = db.row(
+            "SELECT (SELECT COUNT(*) FROM houses WHERE company_id=?) + "
+            "(SELECT COUNT(*) FROM reports WHERE company_id=?) AS total",
+            (record["id"], record["id"]),
+        )
+        if linked and linked["total"]:
+            return "У организации есть дома или отчёты. Удаление недоступно."
+    else:
+        linked = db.row("SELECT COUNT(*) AS total FROM reports WHERE house_id=?", (record["id"],))
+        if linked and linked["total"]:
+            return "У дома есть отчёты. При прекращении управления измените статус дома."
+    return ""
+
+
+def _update_delete_action(page, record, *, company):
+    reason = _delete_reason(record, company=company)
+    page.delete_button.setEnabled(not reason)
+    page.delete_button.setToolTip(reason or page.delete_button.text())
+    page.delete_hint.setText(reason if record is not None else "")
+    page.delete_hint.setVisible(bool(reason and record is not None))
+
+
 class CompaniesTab(BaseTab):
     def __init__(self):
         super().__init__()
@@ -57,6 +85,9 @@ class CompaniesTab(BaseTab):
         left_l.addWidget(selector, 1)
         self.delete_button = QPushButton("Удалить организацию")
         self.delete_button.clicked.connect(self.delete_company)
+        self.delete_hint = selectable_label("")
+        self.delete_hint.setObjectName("CardSubtitle")
+        left_l.addWidget(self.delete_hint)
         left_l.addWidget(action_panel("Удаление выбранной УО", self.delete_button, purpose="danger"))
         splitter.addWidget(left)
 
@@ -144,7 +175,7 @@ class CompaniesTab(BaseTab):
         self.name.setToolTip("Название УО изменяется в ГИС ЖКХ Ассистенте." if source_linked else "")
         self.ogrn.setToolTip("ОГРН изменяется в ГИС ЖКХ Ассистенте." if source_linked else "")
         self.source_note.setVisible(source_linked)
-        self.delete_button.setEnabled(has_record and not source_linked)
+        _update_delete_action(self, link, company=True)
         self.sign_button.setEnabled(has_record)
         self.refresh_sign_summary()
         if hasattr(self, "editor_stack"):
@@ -221,6 +252,8 @@ class CompaniesTab(BaseTab):
         for i in range(self.list.count()):
             if self.list.item(i).data(Qt.UserRole) == cid:
                 self.list.setCurrentRow(i); break
+        self.name.setFocus()
+        self.name.selectAll()
 
     def delete_company(self):
         record_id = self.current_id
@@ -239,11 +272,15 @@ class CompaniesTab(BaseTab):
         if linked and linked["total"]:
             QMessageBox.warning(
                 self, "Удаление невозможно",
-                "У организации есть дома или отчеты. Сначала перенесите связанные объекты "
-                "в другую УО или удалите их отдельно. Связи не будут потеряны.",
+                "У организации есть дома или отчеты. Удаление недоступно. "
+                "Связанные сведения и отчеты останутся без изменений.",
             )
             return
-        if QMessageBox.question(self, DELETE_QUESTION, "Удалить выбранную организацию без связанных домов и отчетов?") == QMessageBox.Yes:
+        if QMessageBox.question(
+            self, DELETE_QUESTION,
+            "Удалить выбранную организацию без связанных домов и отчетов? Несохраненные изменения будут отброшены.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ) == QMessageBox.Yes:
             try:
                 with connect() as conn:
                     _require_record_snapshot(conn, COMPANY_RECORD_SQL, record_id, expected)
@@ -330,6 +367,9 @@ class HousesTab(BaseTab):
         left_l.addWidget(houses, 1)
         self.delete_button = QPushButton("Удалить дом")
         self.delete_button.clicked.connect(self.delete_house)
+        self.delete_hint = selectable_label("")
+        self.delete_hint.setObjectName("CardSubtitle")
+        left_l.addWidget(self.delete_hint)
         left_l.addWidget(action_panel("Удаление выбранного дома", self.delete_button, purpose="danger"))
         splitter.addWidget(left)
 
@@ -549,7 +589,7 @@ class HousesTab(BaseTab):
         if source_linked:
             self.source_note.setText(self._source_house_note(record))
         self.source_note.setVisible(source_linked)
-        self.delete_button.setEnabled(has_record and not source_linked)
+        _update_delete_action(self, record, company=False)
         self.org_sign_button.setEnabled(has_record)
         self.house_sign_button.setEnabled(has_record)
         self.refresh_sign_summary()
@@ -599,6 +639,8 @@ class HousesTab(BaseTab):
     def reload(self):
         # Обновляет список УО после изменений на вкладке "Управляющие организации",
         # но сохраняет текущий выбранный дом и фильтр.
+        if not self._commit_form_before_load():
+            return
         self.reload_companies()
         self.refresh()
 
@@ -674,6 +716,8 @@ class HousesTab(BaseTab):
         for i in range(self.list.count()):
             if self.list.item(i).data(Qt.UserRole) == hid:
                 self.list.setCurrentRow(i); break
+        self.address.setFocus()
+        self.address.selectAll()
 
     def delete_house(self):
         record_id = self.current_id
@@ -692,7 +736,11 @@ class HousesTab(BaseTab):
                 "Если дом выбыл из управления, установите соответствующий статус.",
             )
             return
-        if QMessageBox.question(self, DELETE_QUESTION, "Удалить выбранный дом без отчетов?") == QMessageBox.Yes:
+        if QMessageBox.question(
+            self, DELETE_QUESTION,
+            "Удалить выбранный дом без отчетов? Несохраненные изменения будут отброшены.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ) == QMessageBox.Yes:
             try:
                 with connect() as conn:
                     _require_record_snapshot(conn, HOUSE_RECORD_SQL, record_id, expected)
@@ -759,6 +807,9 @@ class HousesTab(BaseTab):
                 problem = f"«{label}»: площадь не может быть отрицательной."
             if problem:
                 QMessageBox.warning(self, "Проверьте площади", problem)
+                if field.isEnabled():
+                    field.setFocus()
+                    field.selectAll()
                 return False
         return True
 
@@ -777,6 +828,9 @@ class HousesTab(BaseTab):
                     self, "Проверьте дату",
                     f"«{label}»: укажите ДД.ММ.ГГГГ либо оставьте пустым.",
                 )
+                if edit.isEnabled():
+                    edit.setFocus()
+                    edit.selectAll()
                 return None
             dates[key] = iso_date(raw)
         if (dates["agreement_valid_from"] and dates["agreement_valid_to"]
@@ -785,6 +839,8 @@ class HousesTab(BaseTab):
                 self, "Проверьте срок",
                 "Дата окончания действия договора раньше начала его действия.",
             )
+            self.agreement_valid_to.setFocus()
+            self.agreement_valid_to.selectAll()
             return None
         return dates
 

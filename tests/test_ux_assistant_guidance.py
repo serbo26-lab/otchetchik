@@ -7,9 +7,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
-from src.uk728 import db
+from src.uk728 import db, signatories
 from src.uk728.app import MainWindow
 from src.uk728.ui_workflow import recommend_next
 
@@ -48,6 +48,69 @@ class AssistantGuidanceTests(unittest.TestCase):
         self.window.refresh_context()
         self.assertTrue(self.window.page_header.next_button.isHidden())
         self.assertIn("Сохранить дом", self.window.page_header.recommendation.text())
+
+    def test_property_delete_reasons_follow_dependencies(self):
+        company = self.window.company_tab
+        company.add_company()
+        cid = company.current_id
+        self.assertTrue(company.delete_button.isEnabled())
+        self.window.navigate(1)
+        house = self.window.houses_tab
+        house.add_house()
+        hid = house.current_id
+        self.assertTrue(house.delete_button.isEnabled())
+        self.window.navigate(0)
+        self.assertFalse(company.delete_button.isEnabled())
+        self.assertIn("дома или отчёты", company.delete_hint.text())
+        db.create_report(cid, hid, 2026)
+        self.window.navigate(1)
+        self.assertFalse(house.delete_button.isEnabled())
+        self.assertIn("есть отчёты", house.delete_hint.text())
+        db.execute("DELETE FROM reports WHERE house_id=?", (hid,))
+        house.refresh()
+        self.assertTrue(house.delete_button.isEnabled())
+        self.assertTrue(house.delete_hint.isHidden())
+
+    def test_signatory_save_failure_keeps_dialog_and_values(self):
+        cid = db.execute("INSERT INTO companies(name) VALUES(?)", ("Synthetic UO",))
+        calls = []
+        def persist(values):
+            calls.append(values)
+            if len(calls) == 1:
+                raise ValueError("Synthetic duplicate")
+            return signatories.save_local_signatory(values, company_id=cid)
+        editor = signatories.PersonEditor(organization=True, persist=persist)
+        self.addCleanup(editor.close)
+        editor.fields["full_name"].setText("Synthetic person")
+        editor.fields["valid_from"].setText("01.01.2026")
+        editor.basis.setCurrentText("Устав")
+        editor.show()
+        with patch.object(QMessageBox, "warning") as warning:
+            editor._save()
+        warning.assert_called_once()
+        self.assertTrue(editor.isVisible())
+        self.assertEqual(editor.fields["full_name"].text(), "Synthetic person")
+        self.assertIsNone(editor.saved_id)
+        editor._save()
+        self.assertEqual(editor.result(), QDialog.DialogCode.Accepted)
+        self.assertEqual(len(signatories.list_signatories(company_id=cid)), 1)
+
+    def test_signatory_commands_distinguish_read_only_and_local(self):
+        cid = db.execute("INSERT INTO companies(name) VALUES(?)", ("Synthetic UO",))
+        local = signatories.save_local_signatory(
+            {"full_name": "Synthetic local", "valid_from": "2026-01-01", "basis_kind": "Устав"},
+            company_id=cid,
+        )
+        db.execute("INSERT INTO signatories(company_id,assistant_source_id,data_json) VALUES(?,?,?)",
+                   (cid, "synthetic-source", '{"full_name":"Synthetic imported"}'))
+        dialog = signatories.SignatoryListDialog(company_id=cid)
+        self.addCleanup(dialog.close)
+        self.assertEqual(dialog.list.item(0).data(256), local)
+        self.assertEqual(dialog.edit_button.text(), "Изменить")
+        self.assertTrue(dialog.delete_button.isEnabled())
+        dialog.list.setCurrentRow(1)
+        self.assertEqual(dialog.edit_button.text(), "Просмотреть")
+        self.assertFalse(dialog.delete_button.isEnabled())
 
     def test_report_guidance_follows_section_and_review(self):
         cid = db.execute("INSERT INTO companies(name) VALUES(?)", ("Synthetic UO",))
