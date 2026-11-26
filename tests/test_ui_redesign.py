@@ -41,6 +41,24 @@ class ShellTests(unittest.TestCase):
             self.assertEqual(self.window._last_tab, index)
         self.assertEqual(self.window.sidebar.navigation.currentRow(), 0)
 
+    def test_navigation_refreshes_each_destination_only_once(self):
+        for page in (self.window.houses_tab, self.window.works_tab,
+                     self.window.templates_tab, self.window.reports_tab):
+            with self.subTest(page=type(page).__name__):
+                self.window.navigate(0)
+                with patch.object(page, "refresh", wraps=page.refresh) as refresh:
+                    self.window.navigate(self.window.tabs.indexOf(page))
+                    self.assertEqual(refresh.call_count, 1)
+
+    def test_failed_destination_reload_is_not_retried_or_marked_saved(self):
+        page = self.window.reports_tab
+        with patch.object(page, "reload", side_effect=RuntimeError("Synthetic read failure")), \
+             patch.object(page, "refresh") as refresh:
+            self.window.navigate(6)
+            refresh.assert_not_called()
+        self.assertEqual(self.window.page_header.save_status.property("state"), "error")
+        self.assertIn("загрузки", self.window.page_header.save_status.text())
+
     def test_change_theme_without_internal_scaling(self):
         old_theme = self.window._theme
         self.window.switch_theme()
