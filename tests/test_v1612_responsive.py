@@ -294,6 +294,47 @@ class ResponsiveWindowTests(unittest.TestCase):
                 if label_item and field_item and field_item.widget():
                     self.assertIs(label_item.widget().buddy(), field_item.widget())
 
+    def _assert_action_reachable(self, button):
+        self.qt.processEvents()
+        parent = button.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QScrollArea):
+                parent.ensureWidgetVisible(button, 0, 0)
+                self.qt.processEvents()
+            parent = parent.parentWidget()
+        self.assertTrue(button.isVisible(), button.text())
+        self.assertTrue(button.visibleRegion().contains(button.rect().center()),
+                        f"Центр команды недоступен: {button.text()}")
+
+    def test_previously_clipped_primary_actions_are_reachable(self):
+        w = self.window
+        cid = db.execute("INSERT INTO companies(name) VALUES(?)", ("Учебная УО",))
+        hid = db.execute("INSERT INTO houses(company_id,address) VALUES(?,?)", (cid, "Учебный дом"))
+        db.create_report(cid, hid, 2026)
+        for theme in ("light", "dark"):
+            apply_theme(self.qt, theme)
+            for width, height in ((1366, 900), (1100, 700), (860, 520)):
+                w.resize(width, height)
+                self.qt.processEvents()
+                w.navigate(0)
+                self._assert_action_reachable(w.company_tab.add_button)
+                w.navigate(1)
+                self._assert_action_reachable(w.houses_tab.add_button)
+                w.navigate(2)
+                self._assert_action_reachable(w.categories_tab.add_sub_button)
+                w.navigate(6)
+                page = w.reports_tab
+                page.company_filter.setCurrentIndex(page.company_filter.findData(cid))
+                page.house_filter.setCurrentIndex(page.house_filter.findData(hid))
+                page.report_tabs.setCurrentIndex(0)
+                self._assert_action_reachable(page.show_period)
+                page.report_tabs.setCurrentIndex(5)
+                self._assert_action_reachable(page.review_button)
+                w.navigate(7)
+                make = next(b for b in w.backups_tab.findChildren(QPushButton)
+                            if b.text() == "Создать копию")
+                self._assert_action_reachable(make)
+
     def test_navigating_resized_windows_does_not_lose_edits(self):
         w = self.window
         cat = w.categories_tab
