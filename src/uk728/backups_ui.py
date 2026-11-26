@@ -62,6 +62,13 @@ class BackupsTab(BaseTab):
         )
         self.empty_archive_hint.setObjectName("CardSubtitle")
         overview.add_widget(self.empty_archive_hint)
+        storage = ContentCard("Локальная папка данных")
+        self.storage_path_label = selectable_label(str(data_dir()))
+        storage.add_widget(self.storage_path_label)
+        open_data = QPushButton("Открыть папку data")
+        open_data.clicked.connect(self.show_data_path)
+        storage.add_widget(action_panel("Данные программы", open_data))
+        layout.addWidget(storage)
         layout.addWidget(overview)
 
         make = QPushButton("Создать копию")
@@ -77,19 +84,20 @@ class BackupsTab(BaseTab):
         self.external_button = external
         refresh = QPushButton("Обновить список")
         refresh.clicked.connect(self.refresh)
-        open_data = QPushButton("Открыть папку data")
-        open_data.clicked.connect(self.show_data_path)
-        layout.addWidget(action_panel(
-            "Работа с копиями", make, check, restore, external, refresh, open_data,
-            primary=make
+        overview.add_widget(action_panel(
+            "Создание и проверка копий", make, check, refresh, primary=make
+        ))
+        overview.add_widget(action_panel(
+            "Восстановление базы", restore, external, purpose="danger"
         ))
         self.pending_message = selectable_label("")
         self.pending_message.setObjectName("CardSubtitle")
-        layout.addWidget(self.pending_message)
+        overview.add_widget(self.pending_message)
         cancel = QPushButton("Отменить подготовленное восстановление")
         cancel.clicked.connect(self.cancel_pending)
         self.cancel_button = cancel
-        layout.addWidget(action_panel("Отмена восстановления", cancel))
+        self.cancel_panel = action_panel("Отмена восстановления", cancel)
+        overview.add_widget(self.cancel_panel)
         self.info = QTextEdit()
         self.info.setReadOnly(True)
         self.info.setMaximumHeight(125)
@@ -182,6 +190,7 @@ class BackupsTab(BaseTab):
         self.restore_button.setEnabled(selected and request is None)
         self.external_button.setEnabled(request is None)
         self.cancel_button.setEnabled(request is not None)
+        self.cancel_panel.setVisible(request is not None)
         if request:
             self.pending_message.setText(
                 "Восстановление подготовлено: "

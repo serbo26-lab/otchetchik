@@ -57,6 +57,20 @@ class CommonUxTests(TestCase):
             self.assertIn("normal", purposes)
         self.assertGreaterEqual(len(self.window.reports_tab.findChildren(ContentCard)), 4)
 
+    def test_related_actions_share_one_group_and_restore_is_separate(self):
+        works = self.window.works_tab
+        groups = works.findChildren(ActionPanel)
+        self.assertTrue(any(works.add_manual_button in group.findChildren(QPushButton)
+                            and works.add_from_category_button in group.findChildren(QPushButton)
+                            for group in groups))
+        backups = self.window.backups_tab
+        groups = backups.findChildren(ActionPanel)
+        restore_group = next(group for group in groups
+                             if backups.restore_button in group.findChildren(QPushButton))
+        self.assertEqual(restore_group.property("purpose"), "danger")
+        self.assertNotIn(backups.check_button, restore_group.findChildren(QPushButton))
+        self.assertTrue(backups.cancel_panel.isHidden())
+
     def test_context_describes_current_page_not_unrelated_reports(self):
         # A default report selector should not contaminate the company context.
         self.window.refresh_context()
