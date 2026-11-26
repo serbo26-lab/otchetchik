@@ -424,6 +424,28 @@ class BaseTab(QWidget):
         self.current_id = selected_id
         return True
 
+    def _replace_record_list(self, records, make_item, *, auto_select=False):
+        """Rebuild a list without transient selection events or stale binding."""
+        target_id = self.current_id
+        blocked = self.list.blockSignals(True)
+        try:
+            self.list.clear()
+            select_row = -1
+            for record in records:
+                item = make_item(record)
+                item.setData(Qt.UserRole, record["id"])
+                self.list.addItem(item)
+                if record["id"] == target_id:
+                    select_row = self.list.count() - 1
+        finally:
+            self.list.blockSignals(blocked)
+        if select_row >= 0:
+            self.list.setCurrentRow(select_row)
+        elif auto_select and self.list.count():
+            self.list.setCurrentRow(0)
+        else:
+            self._load_current()
+
     def _load_selected_record(self, populate):
         """Only a fully populated editor may remain bound to a selected record."""
         item = self.list.currentItem()

@@ -140,24 +140,11 @@ class TemplatesTab(BaseTab):
     def refresh(self):
         if not self._commit_form_before_load():
             return
-        target_id = self.current_id
         records = db.named_rows("SELECT * FROM templates ORDER BY name")
-        self.list.blockSignals(True)
-        self.list.clear()
-        select_row = -1
-        for r in records:
-            item = QListWidgetItem(f"{r['name']} · {r['category']}")
-            item.setData(Qt.UserRole, r["id"])
-            self.list.addItem(item)
-            if target_id is not None and r["id"] == target_id:
-                select_row = self.list.count() - 1
-        self.list.blockSignals(False)
-        if select_row >= 0:
-            self.list.setCurrentRow(select_row)
-        elif self.list.count() == 1 and target_id is None:
-            self.list.setCurrentRow(0)
-        else:
-            self._load_current()
+        self._replace_record_list(
+            records, lambda record: QListWidgetItem(f"{record['name']} · {record['category']}"),
+            auto_select=len(records) == 1 and self.current_id is None,
+        )
 
     def _load_current(self):
         self._load_selected_record(self._populate_selected_record)
