@@ -144,9 +144,7 @@ class CompaniesTab(BaseTab):
 
     def update_form_state(self):
         has_record = self.current_id is not None
-        link = db.row(
-            "SELECT assistant_source_id FROM companies WHERE id=?", (self.current_id,)
-        ) if has_record else None
+        link = self._loaded_record if has_record else None
         source_linked = bool(link and link["assistant_source_id"])
         set_widgets_enabled(self.form_widgets + [self.save_button], has_record)
         self.name.setEnabled(has_record and not source_linked)
@@ -163,11 +161,14 @@ class CompaniesTab(BaseTab):
             self._clear_form()
 
     def refresh(self):
+        if not self._commit_form_before_load():
+            return
         target_id = self.current_id
+        records = db.named_rows("SELECT * FROM companies ORDER BY name, id")
         self.list.blockSignals(True)
         self.list.clear()
         select_row = -1
-        for r in db.named_rows("SELECT * FROM companies ORDER BY name, id"):
+        for r in records:
             linked = bool(r["assistant_source_id"])
             item = QListWidgetItem(
                 ("Ассистент · " if linked else "") + (r["name"] or UNNAMED_LABEL)
@@ -185,12 +186,15 @@ class CompaniesTab(BaseTab):
             self.list.setCurrentRow(select_row)
         elif self.list.count() == 1 and target_id is None:
             self.list.setCurrentRow(0)
+        else:
+            self._load_current()
 
     def _load_current(self):
-        item = self.list.currentItem()
-        next_id = item.data(Qt.UserRole) if item else None
-        if not self._commit_form_before_load():
-            return
+        self._load_selected_record(self._populate_selected_record)
+
+    def _populate_selected_record(self, next_id):
+        self.current_id = None
+        self._loaded_record = None
         r = db.row(COMPANY_RECORD_SQL, (next_id,)) if next_id else None
         self.current_id = next_id if r is not None else None
         self._loaded_record = dict(r) if r is not None else None
@@ -480,10 +484,7 @@ class HousesTab(BaseTab):
             numeric_error(v, "Площадь") is None and to_float(v) >= 0
             for v in values
         )
-        row = db.row(
-            "SELECT assistant_source_id,assistant_area_missing "
-            "FROM houses WHERE id=?", (self.current_id,),
-        ) if self.current_id else None
+        row = self._loaded_record if self.current_id else None
         # Assistant's charge_area already represents the total premises area.
         # Editing optional local breakdown fields must never replace that
         # authoritative total in the UI while the database remains unchanged.
@@ -547,12 +548,7 @@ class HousesTab(BaseTab):
 
     def update_form_state(self):
         has_record = self.current_id is not None
-        record = db.row(
-            "SELECT assistant_source_id,assistant_area_missing,"
-            "assistant_residential_missing,assistant_non_residential_missing,"
-            "residential_area,non_residential_area "
-            "FROM houses WHERE id=?", (self.current_id,),
-        ) if has_record else None
+        record = self._loaded_record if has_record else None
         source_linked = bool(record and record["assistant_source_id"])
         set_widgets_enabled(self.form_widgets + [self.save_button], has_record)
         self.company.setEnabled(False)
@@ -623,9 +619,9 @@ class HousesTab(BaseTab):
         self.refresh()
 
     def refresh(self):
+        if not self._commit_form_before_load():
+            return
         target_id = self.current_id
-        self.list.blockSignals(True)
-        self.list.clear()
         cid = self.company_filter.currentData()
         if hasattr(self, "add_button"):
             self.add_button.setEnabled(cid is not None)
@@ -633,6 +629,8 @@ class HousesTab(BaseTab):
             result = db.rows("SELECT * FROM houses WHERE company_id=? ORDER BY address", (cid,))
         else:
             result = []
+        self.list.blockSignals(True)
+        self.list.clear()
         select_row = -1
         for r in result:
             source_tag = "Ассистент · " if r["assistant_source_id"] else ""
@@ -652,15 +650,14 @@ class HousesTab(BaseTab):
         elif self.list.count() > 0:
             self.list.setCurrentRow(0)
         else:
-            self.current_id = None
-            self.update_form_state()
-            self._remember_form_state()
+            self._load_current()
 
     def _load_current(self):
-        item = self.list.currentItem()
-        next_id = item.data(Qt.UserRole) if item else None
-        if not self._commit_form_before_load():
-            return
+        self._load_selected_record(self._populate_selected_record)
+
+    def _populate_selected_record(self, next_id):
+        self.current_id = None
+        self._loaded_record = None
         r = db.row(HOUSE_RECORD_SQL, (next_id,)) if next_id else None
         self.current_id = next_id if r is not None else None
         self._loaded_record = dict(r) if r is not None else None

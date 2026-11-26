@@ -138,11 +138,14 @@ class TemplatesTab(BaseTab):
         self.refresh()
 
     def refresh(self):
+        if not self._commit_form_before_load():
+            return
         target_id = self.current_id
+        records = db.named_rows("SELECT * FROM templates ORDER BY name")
         self.list.blockSignals(True)
         self.list.clear()
         select_row = -1
-        for r in db.named_rows("SELECT * FROM templates ORDER BY name"):
+        for r in records:
             item = QListWidgetItem(f"{r['name']} · {r['category']}")
             item.setData(Qt.UserRole, r["id"])
             self.list.addItem(item)
@@ -153,30 +156,20 @@ class TemplatesTab(BaseTab):
             self.list.setCurrentRow(select_row)
         elif self.list.count() == 1 and target_id is None:
             self.list.setCurrentRow(0)
+        else:
+            self._load_current()
 
     def _load_current(self):
-        item = self.list.currentItem()
-        next_id = item.data(Qt.UserRole) if item else None
-        if not self._commit_form_before_load():
-            return
-        try:
-            snapshot = None
-            if next_id is not None:
-                with connect() as conn:
-                    conn.execute("BEGIN")
-                    snapshot = read_template_snapshot(conn, next_id)
-        except (OSError, sqlite3.Error) as exc:
-            self.current_id = None
-            self._loaded_template_snapshot = None
-            blocked = self.list.blockSignals(True)
-            try:
-                self.list.setCurrentRow(-1)
-            finally:
-                self.list.blockSignals(blocked)
-            self.update_form_state()
-            self._remember_form_state()
-            QMessageBox.warning(self, "Не удалось открыть шаблон", str(exc))
-            return
+        self._load_selected_record(self._populate_selected_record)
+
+    def _populate_selected_record(self, next_id):
+        self.current_id = None
+        self._loaded_template_snapshot = None
+        snapshot = None
+        if next_id is not None:
+            with connect() as conn:
+                conn.execute("BEGIN")
+                snapshot = read_template_snapshot(conn, next_id)
         self._loaded_template_snapshot = snapshot
         self.current_id = next_id if snapshot is not None else None
         if snapshot is None:

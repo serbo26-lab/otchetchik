@@ -491,6 +491,63 @@ class DirectoryFlowTests(unittest.TestCase):
         self.assertTrue(work.has_unsaved_changes())
         work.refresh()
 
+    def test_failed_directory_load_disables_old_editor(self):
+        cid = db.execute("INSERT INTO companies(name) VALUES(?)", ("Synthetic UO",))
+        hid = db.execute("INSERT INTO houses(company_id,address) VALUES(?,?)",
+                         (cid, "Synthetic house"))
+        company = self.window.company_tab
+        company.refresh()
+        house = self.window.houses_tab
+        house.reload()
+        category = self.window.categories_tab
+        category.add_category()
+        category_id = category.current_id
+        for page, record_id, target in (
+            (company, cid, "src.uk728.property_ui.db.row"),
+            (house, hid, "src.uk728.property_ui.db.row"),
+            (category, category_id, "src.uk728.directory_ui.connect"),
+        ):
+            with self.subTest(record_id=record_id, editor=type(page).__name__):
+                with patch(target, side_effect=sqlite3.OperationalError("Synthetic read failure")), \
+                     patch.object(QMessageBox, "warning") as warning:
+                    page._load_current()
+                    warning.assert_called_once()
+                self.assertIsNone(page.current_id)
+                self.assertEqual(page.list.currentRow(), -1)
+                self.assertFalse(page.save_button.isEnabled())
+                self.assertFalse(page.delete_button.isEnabled())
+                self.assertFalse(page.has_unsaved_changes())
+                row = next(i for i in range(page.list.count())
+                           if page.list.item(i).data(Qt.UserRole) == record_id)
+                page.list.setCurrentRow(row)
+                self.assertEqual(page.current_id, record_id)
+                self.assertTrue(page.save_button.isEnabled())
+
+    def test_refresh_clears_externally_removed_directory_records(self):
+        company = self.window.company_tab
+        company.add_company()
+        cid = company.current_id
+        db.execute("DELETE FROM companies WHERE id=?", (cid,))
+        company.refresh()
+        self.assertIsNone(company.current_id)
+        self.assertFalse(company.save_button.isEnabled())
+
+        template = self.window.templates_tab
+        template.add_template()
+        tid = template.current_id
+        db.execute("DELETE FROM templates WHERE id=?", (tid,))
+        template.refresh()
+        self.assertIsNone(template.current_id)
+        self.assertFalse(template.delete_button.isEnabled())
+
+        category = self.window.categories_tab
+        category.add_category()
+        cat_id = category.current_id
+        db.execute("UPDATE work_categories SET is_active=0 WHERE id=?", (cat_id,))
+        category.refresh()
+        self.assertIsNone(category.current_id)
+        self.assertFalse(category.save_button.isEnabled())
+
     def test_property_save_and_delete_reject_stale_record(self):
         company_id = db.execute("INSERT INTO companies(name) VALUES(?)", ("Synthetic UO",))
         company = self.window.company_tab
