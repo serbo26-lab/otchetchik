@@ -177,8 +177,8 @@ class ClickComboBox(QComboBox):
             event.ignore()
 
     def eventFilter(self, obj, event):
-        if (obj is self.lineEdit() and event.type() == QEvent.MouseButtonPress
-                and event.button() == Qt.LeftButton and self.isEnabled()):
+        if (event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton
+                and obj is self.lineEdit() and self.isEnabled()):
             QTimer.singleShot(0, self.showPopup)
         return super().eventFilter(obj, event)
 
