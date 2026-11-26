@@ -14,6 +14,7 @@ from unittest.mock import patch
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from src.uk728 import assistant_source, db
+from src.uk728.app import MainWindow
 from src.uk728.assistant_work_list import (
     CONTENT, REPAIR, SKIP, WorkListImportError, apply_selected, read_preview,
 )
@@ -140,6 +141,39 @@ class WorkListTransferTests(unittest.TestCase):
             "черновик" in x for x in inspect_report(bundle)["errors"]
         ))
         self.assertEqual(len(self._backups()), 1)
+
+    def test_sync_refresh_and_worklist_transfer_keep_local_report_and_source_separate(self):
+        original = db.load_report_bundle(self.report_id)["report"]
+        apply_selected(read_preview(self.report_id), {"item-content": (CONTENT, "м²")})
+        window = MainWindow()
+        self.addCleanup(window.close)
+        page = window.reports_tab
+        page.reload_filters()
+        page.company_filter.setCurrentIndex(page.company_filter.findData(original["company_id"]))
+        page.house_filter.setCurrentIndex(page.house_filter.findData(original["house_id"]))
+        page.year_filter.setValue(2025)
+        page.refresh()
+        self.assertEqual(page.current_id, self.report_id)
+        page.content_table.set_value(0, 7, "25")
+        page.notes.setPlainText("Учебное локальное примечание")
+        page.flush_autosave()
+        with sqlite3.connect(self.source) as conn:
+            conn.execute("UPDATE houses SET charge_area='900',management_start_date='2021-07-01'")
+        digest = hashlib.sha256(self.source.read_bytes()).digest()
+        window.backups_tab._apply_assistant_sync()
+        home = db.row("SELECT * FROM houses WHERE id=?", (original["house_id"],))
+        self.assertEqual(home["total_area"], 900)
+        self.assertEqual(home["management_start"], "2021-07-01")
+        saved = db.load_report_bundle(self.report_id)
+        self.assertEqual(saved["report"]["notes"], "Учебное локальное примечание")
+        self.assertEqual(saved["content"][0]["actual_qty"], 25)
+        self.assertEqual(saved["content"][0]["actual_cost"], 125)
+        retry = read_preview(self.report_id)
+        self.assertTrue(retry.items[0].already_imported)
+        result = apply_selected(retry, {"item-content": (CONTENT, "м²")})
+        self.assertEqual(result.added_content, 0)
+        self.assertEqual(db.load_report_bundle(self.report_id), saved)
+        self.assertEqual(hashlib.sha256(self.source.read_bytes()).digest(), digest)
 
     def test_repeat_import_does_not_duplicate_or_overwrite_manual_edits(self):
         preview = read_preview(self.report_id)
