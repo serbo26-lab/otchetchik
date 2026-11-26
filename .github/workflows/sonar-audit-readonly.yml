@@ -1,46 +1,40 @@
 name: Read public Sonar issues (temporary audit)
-
 on:
   push:
     branches: ['audit/sonar-remaining-issues']
-
 permissions:
   contents: read
-
 jobs:
   inspect:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Read public issue details
+      - name: Read full project issues and candidate PR
         shell: bash
         run: |
           python3 - <<'PY'
           import json
           import urllib.parse
           import urllib.request
-          import urllib.error
 
-          query = urllib.parse.urlencode({
-              "componentKeys": "serbo26-lab_otchetchik",
-              "pullRequest": "80",
-              "resolved": "false",
-              "ps": 100,
-          })
-          url = "https://sonarcloud.io/api/issues/search?" + query
-          request = urllib.request.Request(url, headers={"Accept": "application/json"})
-          try:
+          def read(path, **params):
+              url = "https://sonarcloud.io/api/" + path + "?" + urllib.parse.urlencode(params)
+              request = urllib.request.Request(url, headers={"Accept": "application/json"})
               with urllib.request.urlopen(request, timeout=30) as response:
-                  data = json.load(response)
-          except urllib.error.HTTPError as exc:
-              print("Public API HTTP status:", exc.code)
-              print("No authentication will be attempted.")
-              raise SystemExit(1)
-          print("Audit target: PR 80 V1.6.76")
-          print("Total:", data.get("total", data.get("paging", {}).get("total")))
-          for issue in data.get("issues", []):
-              print(json.dumps({
-                  key: issue.get(key)
-                  for key in ("key", "rule", "component", "line", "message", "severity", "status")
-              }, ensure_ascii=False))
+                  return json.load(response)
+
+          project = "serbo26-lab_otchetchik"
+          for target, extra in [("main", {}), ("PR 99", {"pullRequest": "99"})]:
+              print("Audit target:", target)
+              page = 1
+              while True:
+                  data = read("issues/search", componentKeys=project, resolved="false", ps=100, p=page, **extra)
+                  total = data.get("total", data.get("paging", {}).get("total", 0))
+                  print("Total:", total, "Page:", page)
+                  for issue in data.get("issues", []):
+                      print(json.dumps({key: issue.get(key) for key in
+                          ("key", "rule", "component", "line", "message", "severity", "status")}, ensure_ascii=False))
+                  if page * 100 >= total:
+                      break
+                  page += 1
           PY
