@@ -52,6 +52,66 @@ class ReportWorkflowTests(TestCase):
         self.assertTrue(self.page.delete_report_btn.isEnabled())
         self.assertTrue(self.page.create_report_btn.isEnabled())
 
+    def test_direct_report_workflow_all_sections_without_directory_or_template(self):
+        page = self.page
+        before = db.load_report_bundle(self.report_id)
+        page.year_filter.setValue(2026)
+
+        def accept_period(dialog):
+            dialog.year.setValue(2026)
+            dialog.fill_full_year()
+            dialog.accept()
+            return dialog.result()
+
+        with patch.object(CreateReportDialog, "exec", new=accept_period):
+            page.create_report()
+        rid = page.current_id
+        self.assertIsNotNone(rid)
+        self.assertNotEqual(rid, self.report_id)
+        page._go_to_report_section(1)
+        page.add_blank_report_row("Содержание")
+        for col, value in ((2, "Учебная уборка"), (3, "шт."), (4, "10"), (5, "2"), (7, "1")):
+            page.content_table.set_value(0, col, value)
+        page._go_to_report_section(2)
+        page.repair_start.setText("10")
+        page.repair_accrual.setText("100")
+        page.repair_work_cost.setText("60")
+        page.repair_end.setText("50")
+        page.add_blank_report_row("Текущий ремонт")
+        for col, value in ((2, "Учебный ремонт"), (3, "Решение ОСС"), (4, "60"), (5, "1 шт."), (6, "Учебный акт")):
+            page.repair_table.set_value(0, col, value)
+        page._go_to_report_section(3)
+        page.add_blank_report_row("Управление")
+        for col, value in ((2, "Учебная услуга"), (3, "усл."), (4, "100"), (5, "1")):
+            page.management_table.set_value(0, col, value)
+        page.management_cost.setText("75")
+        page._go_to_report_section(4)
+        page.claim_pret.setText("1")
+        page.claim_lawsuits.setText("1")
+        page.claim_amount.setText("5")
+        for col, value in ((2, "10"), (3, "100"), (4, "80"), (5, "30")):
+            page.finance_table.set_value(0, col, value)
+        page._go_to_report_section(5)
+        result = page.run_review()
+        self.assertFalse(result["errors"])
+        self.assertTrue(page.export_buttons["all"].isEnabled())
+        saved = db.load_report_bundle(rid)
+        self.assertEqual(saved["report"]["year"], 2026)
+        self.assertEqual(saved["content"][0]["actual_cost"], 10)
+        self.assertEqual(saved["repair"][0]["cost"], 60)
+        self.assertEqual(saved["management"][0]["cost"], 100)
+        self.assertEqual(saved["report"]["management_cost"], 75)
+        self.assertEqual(saved["claims"]["recovered_amount"], 5)
+        self.assertEqual(saved["financials"][0]["debt_end"], 30)
+        self.assertEqual(db.load_report_bundle(self.report_id), before)
+        page.year_filter.setValue(2025)
+        page.refresh()
+        self.assertEqual(page.current_id, self.report_id)
+        page.year_filter.setValue(2026)
+        page.refresh()
+        self.assertEqual(page.current_id, rid)
+        self.assertEqual(float(page.management_cost.text()), 75.0)
+
     def test_export_controls_follow_review_and_clear_stale_results(self):
         page = self.page
         self.assertTrue(all(not button.isEnabled() for button in page.export_buttons.values()))
