@@ -159,12 +159,15 @@ class PersonEditor(QDialog):
     """One signed-party record; supports both manual and imported readonly."""
 
     def __init__(self, person: dict | None = None, *,
-                 organization: bool = False, readonly: bool = False, parent=None):
+                 organization: bool = False, readonly: bool = False, parent=None,
+                 persist=None):
         super().__init__(parent)
         self.original = person or {}
         self.organization = organization
         self.readonly = readonly
         self.result_data: dict | None = None
+        self.persist = persist
+        self.saved_id = None
         self.setWindowTitle(
             ("Просмотр: " if readonly else "Реквизиты: ") +
             ("подписант УО" if organization else "представитель дома")
@@ -283,10 +286,17 @@ class PersonEditor(QDialog):
             gender={0: "", 1: "male", 2: "female"}[self.gender.currentIndex()],
         )
         try:
-            self.result_data = _normalize(data, organization=self.organization)
+            normalized = _normalize(data, organization=self.organization)
         except ValueError as exc:
             QMessageBox.warning(self, "Проверьте подписанта", str(exc))
             return
+        if self.persist is not None:
+            try:
+                self.saved_id = self.persist(normalized)
+            except (sqlite3.DatabaseError, ValueError, OSError) as exc:
+                QMessageBox.warning(self, "Не удалось сохранить", str(exc))
+                return
+        self.result_data = normalized
         self.accept()
 
 
@@ -362,20 +372,21 @@ class SignatoryListDialog(QDialog):
     def _selection_state(self, *_args):
         record = self._selected()
         self.edit_button.setEnabled(record is not None)
-        self.delete_button.setEnabled(
-            bool(record and record["assistant_source_id"] is None)
+        linked = bool(record and record["assistant_source_id"] is not None)
+        self.edit_button.setText("Просмотреть" if linked else "Изменить")
+        self.delete_button.setEnabled(bool(record and not linked))
+        self.delete_button.setToolTip(
+            "Запись из Ассистента доступна только для просмотра." if linked else
+            "Удалить выбранную локальную запись." if record else "Сначала выберите запись."
         )
 
     def add_person(self):
-        editor = PersonEditor(organization=self.organization, parent=self)
-        if editor.exec() != QDialog.DialogCode.Accepted:
-            return
-        try:
-            new_id = save_local_signatory(editor.result_data, **self._owner())
-        except (sqlite3.DatabaseError, ValueError) as exc:
-            QMessageBox.warning(self, "Не удалось сохранить", str(exc))
-            return
-        self.refresh(new_id)
+        editor = PersonEditor(
+            organization=self.organization, parent=self,
+            persist=lambda values: save_local_signatory(values, **self._owner()),
+        )
+        if editor.exec() == QDialog.DialogCode.Accepted:
+            self.refresh(editor.saved_id)
 
     def open_selected(self):
         record = self._selected()
@@ -385,17 +396,12 @@ class SignatoryListDialog(QDialog):
         editor = PersonEditor(
             record, organization=self.organization,
             readonly=readonly, parent=self,
+            persist=None if readonly else lambda values: save_local_signatory(
+                values, existing_id=record["id"], **self._owner()
+            ),
         )
-        if editor.exec() != QDialog.DialogCode.Accepted or readonly:
-            return
-        try:
-            save_local_signatory(
-                editor.result_data, existing_id=record["id"], **self._owner()
-            )
-        except (sqlite3.DatabaseError, ValueError) as exc:
-            QMessageBox.warning(self, "Не удалось сохранить", str(exc))
-            return
-        self.refresh(record["id"])
+        if editor.exec() == QDialog.DialogCode.Accepted and not readonly:
+            self.refresh(editor.saved_id)
 
     def delete_selected(self):
         record = self._selected()
@@ -404,12 +410,13 @@ class SignatoryListDialog(QDialog):
         if QMessageBox.question(
             self, "Удаление подписанта",
             f"Удалить локальную запись «{record['full_name']}»? "
-            "Ранее созданные отчёты останутся без изменений."
+            "Ранее созданные отчёты останутся без изменений.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         ) != QMessageBox.StandardButton.Yes:
             return
         try:
             delete_local_signatory(record["id"], **self._owner())
-        except (sqlite3.DatabaseError, ValueError, OSError) as exc:
+        except (sqlite3.DatabaseError, ValueError, OSError, RuntimeError) as exc:
             QMessageBox.warning(self, "Не удалось удалить", str(exc))
             return
         self.refresh()
