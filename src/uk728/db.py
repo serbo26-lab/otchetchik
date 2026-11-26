@@ -477,20 +477,37 @@ def create_report(company_id: int, house_id: int, year: int, period_start: str |
         return rid
 
 
+REPORT_EDITOR_KEYS = ("report", "content", "repair", "management", "financials", "claims")
+
+
+def read_report_editor_snapshot(conn, report_id: int) -> dict[str, Any]:
+    """Read only the rows owned by this report in the caller's transaction."""
+    report = conn.execute("SELECT * FROM reports WHERE id=?", (report_id,)).fetchone()
+    if report is None:
+        raise ValueError("Отчет не найден")
+    content = conn.execute("SELECT * FROM report_content_items WHERE report_id=? ORDER BY position, id", (report_id,)).fetchall()
+    repair = conn.execute("SELECT * FROM report_repair_items WHERE report_id=? ORDER BY position, id", (report_id,)).fetchall()
+    management = conn.execute("SELECT * FROM report_management_items WHERE report_id=? ORDER BY position, id", (report_id,)).fetchall()
+    financials = conn.execute("SELECT * FROM report_financials WHERE report_id=? ORDER BY CASE payer_type WHEN 'Собственники' THEN 1 ELSE 2 END", (report_id,)).fetchall()
+    claims = conn.execute("SELECT * FROM report_claims WHERE report_id=?", (report_id,)).fetchone()
+    return {
+        "report": dict(report),
+        "content": [dict(x) for x in content],
+        "repair": [dict(x) for x in repair],
+        "management": [dict(x) for x in management],
+        "financials": [dict(x) for x in financials],
+        "claims": dict(claims) if claims else {},
+    }
+
+
 def load_report_bundle(report_id: int) -> dict[str, Any]:
     """Read all report sections from one SQLite snapshot."""
     with closing(connect()) as conn:
         conn.execute("BEGIN")
-        report = conn.execute("SELECT * FROM reports WHERE id=?", (report_id,)).fetchone()
-        if not report:
-            raise ValueError("Отчет не найден")
+        snapshot = read_report_editor_snapshot(conn, report_id)
+        report = snapshot["report"]
         company = conn.execute("SELECT * FROM companies WHERE id=?", (report["company_id"],)).fetchone()
         house = conn.execute("SELECT * FROM houses WHERE id=?", (report["house_id"],)).fetchone()
-        content = conn.execute("SELECT * FROM report_content_items WHERE report_id=? ORDER BY position, id", (report_id,)).fetchall()
-        repair = conn.execute("SELECT * FROM report_repair_items WHERE report_id=? ORDER BY position, id", (report_id,)).fetchall()
-        management = conn.execute("SELECT * FROM report_management_items WHERE report_id=? ORDER BY position, id", (report_id,)).fetchall()
-        financials = conn.execute("SELECT * FROM report_financials WHERE report_id=? ORDER BY CASE payer_type WHEN 'Собственники' THEN 1 ELSE 2 END", (report_id,)).fetchall()
-        claims = conn.execute("SELECT * FROM report_claims WHERE report_id=?", (report_id,)).fetchone()
         # The previous report is contextual evidence, not a claim that its
         # balances were actually copied. Review can flag uncertain continuity.
         previous = conn.execute(
@@ -502,13 +519,8 @@ def load_report_bundle(report_id: int) -> dict[str, Any]:
              report["year"], report["period_start"]),
         ).fetchone()
         return {
-            "report": dict(report),
+            **snapshot,
             "company": dict(company) if company else {},
             "house": dict(house) if house else {},
-            "content": [dict(x) for x in content],
-            "repair": [dict(x) for x in repair],
-            "management": [dict(x) for x in management],
-            "financials": [dict(x) for x in financials],
-            "claims": dict(claims) if claims else {},
             "previous_report": dict(previous) if previous else {},
         }

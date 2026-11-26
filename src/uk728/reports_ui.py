@@ -37,6 +37,10 @@ from .ui_labels import (
 )
 
 
+class ReportChangedError(ValueError):
+    """The persisted report no longer matches the loaded editor."""
+
+
 class AddFromReferenceDialog(QDialog):
     def __init__(self, category: str, parent=None):
         super().__init__(parent)
@@ -106,6 +110,7 @@ class ReportsTab(BaseTab):
         self._loading_report = False
         self._saving_report = False
         self._dirty_report = False
+        self._loaded_report_snapshot = None
         self._review_dirty = True
         self._review_snapshot = None
         self._report_tab_index = 0
@@ -891,11 +896,13 @@ class ReportsTab(BaseTab):
             return
         self._invalidate_review()
         self._loading_report = True
+        self._loaded_report_snapshot = None
         try:
             self.current_id = None
             if new_id is not None:
                 bundle = db.load_report_bundle(new_id)
                 self._populate_loaded_report(bundle)
+                self._loaded_report_snapshot = {key: bundle[key] for key in db.REPORT_EDITOR_KEYS}
                 self.current_id = new_id
         except Exception as exc:
             self._clear_failed_report_load(exc)
@@ -1172,6 +1179,18 @@ class ReportsTab(BaseTab):
     def save_manually(self):
         try:
             self.save()
+        except ReportChangedError as exc:
+            answer = QMessageBox.question(
+                self, "Отчет изменился",
+                f"{exc}\n\nОткрыть актуальные данные из базы? "
+                "Несохраненные изменения в редакторе будут отброшены. "
+                "Выберите «Нет», чтобы оставить их на экране.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if answer == QMessageBox.Yes:
+                self._autosave_timer.stop()
+                self._dirty_report = False
+                self._load_current()
         except (ValueError, OSError, sqlite3.Error) as exc:
             win = self.window()
             if hasattr(win, "set_save_status"):
@@ -1312,10 +1331,21 @@ class ReportsTab(BaseTab):
             win.set_save_status("saving")
         try:
             with connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    current = db.read_report_editor_snapshot(conn, rid)
+                except ValueError as exc:
+                    raise ReportChangedError("Отчет больше не существует.") from exc
+                if self._loaded_report_snapshot != current:
+                    raise ReportChangedError(
+                        "Отчет изменился после открытия. Сохранение отменено."
+                    )
                 self._save_report_fields(conn, rid)
                 inserted_rows = self._sync_report_sections(conn, rid)
                 self._sync_finance_and_claims(conn, rid)
+                saved_snapshot = db.read_report_editor_snapshot(conn, rid)
                 conn.commit()
+                self._loaded_report_snapshot = saved_snapshot
                 self._reconcile_report_ids(inserted_rows)
         except Exception:
             win = self.window()
