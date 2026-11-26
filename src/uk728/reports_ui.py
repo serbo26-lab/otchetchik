@@ -27,7 +27,7 @@ from .ui_editors import (
     selectable_label, COMMON_UNITS, COMMON_PAYER_TYPES, COMMON_REPAIR_BASIS,
     numeric_error, distinct_texts, ClickComboBox, SafeSpinBox,
     EditableComboDelegate, CopyPasteTable, BaseTab, form_scroll,
-    restore_combo_selection, row_get, normalize_section, work_display, fill_combo,
+    restore_combo_selection, row_get, normalize_section, work_display, fill_combo, polish_form,
 )
 from .ui_labels import (
     COST_LABEL, REPORT_YEAR_LABEL, CREATE_TITLE, WORK_ID_LABEL, NOTES_LABEL,
@@ -131,10 +131,12 @@ class CreateReportDialog(QDialog):
         self.period_start = QLineEdit(); self.period_end = QLineEdit()
         self.period_start.setPlaceholderText(DATE_FORMAT_HINT)
         self.period_end.setPlaceholderText(DATE_FORMAT_HINT)
-        self.show_period = QCheckBox("Выводить строку фактического периода управления в отчете")
+        self.show_period = QCheckBox("Показывать период управления в отчете")
+        self.show_period.setToolTip("Выводить строку фактического периода управления, в том числе за полный год.")
         form.addRow(selectable_label(REPORT_YEAR_LABEL), self.year)
         form.addRow(selectable_label("Период управления с"), self.period_start)
         form.addRow(selectable_label("Период управления по"), self.period_end)
+        polish_form(form)
         layout.addLayout(form)
         full_btn = QPushButton("Заполнить полный год")
         full_btn.clicked.connect(self.fill_full_year)
@@ -457,8 +459,11 @@ class ReportsTab(BaseTab):
         self.year = SafeSpinBox(); self.year.setRange(2000, 2100); self.year.setValue(2026)
         self.period_start = QLineEdit(); self.period_start.setPlaceholderText(DATE_FORMAT_HINT)
         self.period_end = QLineEdit(); self.period_end.setPlaceholderText(DATE_FORMAT_HINT)
-        fast = QPushButton("Заполнить полный год 01.01–31.12"); fast.clicked.connect(self.fill_full_year)
-        self.show_period = QCheckBox("Выводить строку: Фактический период управления с ... по ...")
+        fast = QPushButton("Полный год (01.01–31.12)")
+        fast.setToolTip("Заполнить даты с 1 января по 31 декабря выбранного года.")
+        fast.clicked.connect(self.fill_full_year)
+        self.show_period = QCheckBox("Показывать период управления в отчете")
+        self.show_period.setToolTip("Выводить строку фактического периода управления, в том числе за полный год.")
         self.publish = QLineEdit(); self.publish.setPlaceholderText("дд.мм.гггг")
         self.status = ClickComboBox(); self.status.addItems(["Черновик", "Проверен", "Размещен", "Архив"])
         self.notes = QTextEdit(); self.notes.setFixedHeight(80)
@@ -470,6 +475,7 @@ class ReportsTab(BaseTab):
         form.addRow(selectable_label("Дата размещения отчета"), self.publish)
         form.addRow(selectable_label("Статус"), self.status)
         form.addRow(selectable_label(NOTES_LABEL), self.notes)
+        polish_form(form)
         card.add_layout(form)
         layout.addWidget(card)
         self._next_report_action(layout, "Перейти к содержанию", 1)
@@ -531,6 +537,7 @@ class ReportsTab(BaseTab):
             form.addRow(selectable_label(label), widget)
         balance_card = ContentCard("Остаток и начисления текущего ремонта",
                                    "Сведения о фонде текущего ремонта заполняются отдельно от перечня работ.")
+        polish_form(form)
         balance_card.add_layout(form)
         layout.addWidget(balance_card)
         template_row = QHBoxLayout()
@@ -581,6 +588,7 @@ class ReportsTab(BaseTab):
         self.management_cost = QLineEdit()
         self.management_cost.setPlaceholderText("Можно ввести вручную или посчитать из строк ниже")
         form.addRow(selectable_label("Итоговая сумма для официального раздела 3, руб."), self.management_cost)
+        polish_form(form)
         box_l.addLayout(form)
         recalc_row = QHBoxLayout()
         recalc = QPushButton("Посчитать из строк ниже"); recalc.clicked.connect(self.recalc_management_total)
@@ -641,6 +649,7 @@ class ReportsTab(BaseTab):
         form.addRow(selectable_label("Количество направленных претензий"), self.claim_pret)
         form.addRow(selectable_label("Количество исков / заявлений на судебный приказ"), self.claim_lawsuits)
         form.addRow(selectable_label("Сумма поступивших средств, руб."), self.claim_amount)
+        polish_form(form)
         layout.addWidget(claims)
         self.finance_table = CopyPasteTable(2, 6)
         self.finance_table.setHorizontalHeaderLabels(["ID", "Плательщик", "Долг на начало", "Начислено", "Поступило", "Долг на 1 января следующего периода"])

@@ -170,6 +170,16 @@ class ResponsiveWindowTests(unittest.TestCase):
                 form.rowWrapPolicy(), QFormLayout.RowWrapPolicy.WrapLongRows
             )
 
+    def test_report_forms_wrap_long_labels_and_preserve_fields(self):
+        page = self.window.reports_tab
+        forms = page.report_tabs.findChildren(QFormLayout)
+        self.assertGreaterEqual(len(forms), 4)
+        for form in forms:
+            self.assertEqual(form.rowWrapPolicy(), QFormLayout.RowWrapPolicy.WrapLongRows)
+            self.assertEqual(form.fieldGrowthPolicy(), QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        self.assertIn("период управления", page.show_period.text())
+        self.assertIn("полный год", page.show_period.toolTip())
+
     def test_navigating_resized_windows_does_not_lose_edits(self):
         w = self.window
         cat = w.categories_tab
