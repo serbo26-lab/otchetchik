@@ -461,29 +461,32 @@ def _sync_people(conn, people, mapping):
         hid = int(owner["id"]) if owner else None
         if (cid is None) == (hid is None):
             raise AssistantSourceError("Не удалось сопоставить подписанта с владельцем.")
-        old = conn.execute(
-            "SELECT id,company_id,house_id,data_json FROM signatories "
-            "WHERE assistant_source_id=?", (src_id,),
-        ).fetchone()
-        if old and (old["company_id"] != cid or old["house_id"] != hid):
-            raise AssistantSourceError(
-                "В Ассистенте изменена принадлежность подписанта. "
-                "Автоматический перенос истории запрещён."
-            )
-        data = json.dumps(person["data"], ensure_ascii=False)
-        if old:
-            if old["data_json"] != data:
-                conn.execute(
-                    "UPDATE signatories SET data_json=?,"
-                    "updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                    (data, old["id"]),
-                )
-        else:
-            conn.execute(
-                "INSERT INTO signatories(company_id,house_id,"
-                "assistant_source_id,data_json) VALUES(?,?,?,?)",
-                (cid, hid, src_id, data),
-            )
+        _sync_person_record(conn, src_id, cid, hid, person["data"])
+
+
+def _sync_person_record(conn, src_id, cid, hid, person_data):
+    old = conn.execute(
+        "SELECT id,company_id,house_id,data_json FROM signatories "
+        "WHERE assistant_source_id=?", (src_id,),
+    ).fetchone()
+    if old and (old["company_id"] != cid or old["house_id"] != hid):
+        raise AssistantSourceError(
+            "В Ассистенте изменена принадлежность подписанта. "
+            "Автоматический перенос истории запрещён."
+        )
+    data = json.dumps(person_data, ensure_ascii=False)
+    if old is None:
+        conn.execute(
+            "INSERT INTO signatories(company_id,house_id,"
+            "assistant_source_id,data_json) VALUES(?,?,?,?)",
+            (cid, hid, src_id, data),
+        )
+    elif old["data_json"] != data:
+        conn.execute(
+            "UPDATE signatories SET data_json=?,"
+            "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (data, old["id"]),
+        )
 
 
 def _save_sync_metadata(conn, path, digest, save_path):

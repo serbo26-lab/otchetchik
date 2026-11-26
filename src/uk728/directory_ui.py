@@ -193,7 +193,7 @@ class CategoriesTab(BaseTab):
                 if make_backup("before_category_deletion") is None:
                     raise RuntimeError("Не удалось создать резервную копию.")
                 with connect() as conn:
-                    conn.execute("BEGIN IMMEDIATE")
+                    conn.execute(db.BEGIN_IMMEDIATE_SQL)
                     self._check_subcategory_context(conn, category_id, expected)
                     conn.execute("UPDATE work_categories SET is_active=0 WHERE id=? OR parent_id=?", (category_id, category_id))
                     conn.commit()
@@ -296,7 +296,7 @@ class CategoriesTab(BaseTab):
                 if make_backup("before_subcategory_deletion") is None:
                     raise RuntimeError("Не удалось создать резервную копию перед удалением подкатегорий.")
             with connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(db.BEGIN_IMMEDIATE_SQL)
                 self._check_subcategory_context(conn, self.current_id, self._loaded_category_snapshot)
                 conn.execute(
                     "UPDATE work_categories SET name=?, section=?, unit=?, default_price=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -550,7 +550,7 @@ class WorksTab(BaseTab):
                 if make_backup("before_work_deletion") is None:
                     raise RuntimeError("Не удалось создать резервную копию справочника перед удалением.")
             with connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(db.BEGIN_IMMEDIATE_SQL)
                 current = {int(row["id"]): dict(row) for row in conn.execute(
                     "SELECT * FROM work_items WHERE is_active=1"
                 )}

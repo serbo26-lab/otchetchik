@@ -93,6 +93,20 @@ def logical_connection_digest(conn: sqlite3.Connection) -> bytes:
     return digest.digest()
 
 
+def _matching_latest_backup(src: Path) -> Path | None:
+    candidates = list((data_dir() / "backups").glob("reporting_728_*.db"))
+    if not candidates:
+        return None
+    try:
+        latest = max(candidates, key=lambda p: p.stat().st_mtime_ns)
+        if _logical_digest(src) == _logical_digest(latest):
+            return latest
+    except (OSError, sqlite3.DatabaseError):
+        # Never skip a protective backup on a failed comparison.
+        pass
+    return None
+
+
 def make_backup(reason: str = "auto", *, reuse_existing: bool = False) -> Path | None:
     src = db_path()
     if not src.exists():
@@ -100,16 +114,9 @@ def make_backup(reason: str = "auto", *, reuse_existing: bool = False) -> Path |
     # Manual copies, schema changes, restores and destructive actions always
     # get their own guard. Routine sync and timer backups are content-aware.
     if reason in ("auto", "before_assistant_sync"):
-        folder = data_dir() / "backups"
-        candidates = list(folder.glob("reporting_728_*.db"))
-        if candidates:
-            latest = max(candidates, key=lambda p: p.stat().st_mtime_ns)
-            try:
-                if _logical_digest(src) == _logical_digest(latest):
-                    return latest if reuse_existing else None
-            except (OSError, sqlite3.DatabaseError):
-                # Never skip a protective backup on a failed comparison.
-                pass
+        matching = _matching_latest_backup(src)
+        if matching is not None:
+            return matching if reuse_existing else None
     # SQLite uses WAL: copying only the .db file can omit committed data
     # that is still stored in the -wal journal. The online backup API
     # creates a consistent snapshot, including those committed transactions.

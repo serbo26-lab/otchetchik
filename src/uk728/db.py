@@ -9,6 +9,7 @@ from .paths import db_path, make_backup
 from .utils import full_year_period
 
 SCHEMA_VERSION = 12
+BEGIN_IMMEDIATE_SQL = "BEGIN IMMEDIATE"
 
 TEXT_DEFAULT_EMPTY = "TEXT NOT NULL DEFAULT ''"
 INTEGER_DEFAULT_ZERO = "INTEGER NOT NULL DEFAULT 0"
