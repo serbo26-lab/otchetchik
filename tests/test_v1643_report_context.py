@@ -46,6 +46,57 @@ class ReportContextSafetyTests(unittest.TestCase):
         self.page.year_filter.setValue(2025)
         self.assertEqual(self.page.current_id, self.report)
 
+    def test_three_section_templates_and_2025_report_survive_window_reopen(self):
+        w = self.window
+        template = w.templates_tab
+        sections = ("Содержание", "Текущий ремонт", "Управление")
+        ids = []
+        for section in sections:
+            wid = db.execute(
+                "INSERT INTO work_items(name,category,unit,default_price) VALUES(?,?,?,?)",
+                ("Учебная работа " + section, section, "шт.", 10),
+            )
+            template.add_template()
+            ids.append(template.current_id)
+            template.name.setText("Учебный шаблон " + section)
+            template.category.setCurrentText(section)
+            template.reload_work_combo()
+            self.assertGreaterEqual(template.work_combo.findData(wid), 0)
+            template.work_combo.setCurrentIndex(template.work_combo.findData(wid))
+            template.add_work_to_template()
+            template.table.set_value(0, 5, "2")
+            template.save(refresh_after=False)
+        page = self.page
+        page.reload_template_combo()
+        combos = (page.content_template_combo, page.repair_template_combo, page.management_template_combo)
+        for index, (section, combo) in enumerate(zip(sections, combos)):
+            self.assertGreaterEqual(combo.findData(ids[index]), 0)
+            self.assertTrue(all(combo.findData(tid) == -1 for tid in ids if tid != ids[index]))
+            combo.setCurrentIndex(combo.findData(ids[index]))
+            with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+                page.apply_template(section, combo)
+        page.management_cost.setText("15")
+        page.notes.setPlainText("Учебный отчет после закрытия")
+        self.assertTrue(w.close())
+        w.timer.stop()
+        w.context_timer.stop()
+        self.assertFalse(page._dirty_report)
+        saved = db.load_report_bundle(self.report)
+        reopened = MainWindow()
+        self.addCleanup(reopened.close)
+        reopened.navigate(6)
+        new_page = reopened.reports_tab
+        new_page.company_filter.setCurrentIndex(new_page.company_filter.findData(self.company))
+        new_page.house_filter.setCurrentIndex(new_page.house_filter.findData(self.house))
+        new_page.year_filter.setValue(2025)
+        self.assertEqual(new_page.current_id, self.report)
+        self.assertEqual(saved["report"]["period_start"], "2025-01-01")
+        self.assertEqual(saved["report"]["period_end"], "2025-06-30")
+        self.assertEqual(saved["report"]["management_cost"], 15)
+        self.assertEqual(new_page.notes.toPlainText(), "Учебный отчет после закрытия")
+        self.assertEqual([len(saved[key]) for key in ("content", "repair", "management")], [1, 1, 1])
+        self.assertEqual(db.load_report_bundle(self.report), saved)
+
     def test_failed_filter_changes_keep_old_context_and_pending_values(self):
         page = self.page
         page.notes.setPlainText("Synthetic pending edit")
