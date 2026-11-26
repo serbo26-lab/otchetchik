@@ -152,6 +152,63 @@ class DirectoryFlowTests(unittest.TestCase):
         work.save()
         self.assertEqual(len(db.rows("SELECT id FROM work_items WHERE is_active=1")), previous_count + 2)
 
+    def test_directory_chain_from_new_company_to_persisted_template(self):
+        w = self.window
+        company = w.company_tab
+        company.add_company()
+        cid = company.current_id
+        company.name.setText("Учебная УО для цепочки")
+        w.navigate(1)
+        house = w.houses_tab
+        house.company_filter.setCurrentIndex(house.company_filter.findData(cid))
+        house.add_house()
+        first = house.current_id
+        house.address.setPlainText("Учебный дом А")
+        house.area.setText("100")
+        house.add_house()
+        second = house.current_id
+        house.address.setPlainText("Учебный дом Б")
+        house.area.setText("300")
+        w.navigate(2)
+        category = w.categories_tab
+        category.add_category()
+        category_id = category.current_id
+        category.name.setText("Учебная категория цепочки")
+        category.section.setCurrentText("Содержание")
+        category.unit.setCurrentText("м²")
+        category.price.setText("5")
+        category.add_subcategory()
+        category.sub_table.set_value(0, 1, "Учебная подкатегория")
+        w.navigate(3)
+        works = w.works_tab
+        works.category_combo.setCurrentIndex(works.category_combo.findData(category_id))
+        works.add_from_category()
+        row = works.table.rowCount() - 1
+        works.table.set_value(row, 3, "Учебная работа цепочки")
+        w.navigate(4)
+        work = db.row("SELECT id FROM work_items WHERE name=?", ("Учебная работа цепочки",))
+        self.assertIsNotNone(work)
+        template = w.templates_tab
+        template.add_template()
+        tid = template.current_id
+        template.name.setText("Учебный шаблон цепочки")
+        template.category.setCurrentText("Содержание")
+        template.work_combo.setCurrentIndex(template.work_combo.findData(work["id"]))
+        template.add_work_to_template()
+        template.table.set_value(0, 5, "12")
+        w.navigate(6)
+        self.assertEqual(w.tabs.currentIndex(), 6)
+        self.assertEqual(db.row("SELECT name FROM companies WHERE id=?", (cid,))["name"],
+                         "Учебная УО для цепочки")
+        self.assertEqual(db.row("SELECT total_area FROM houses WHERE id=?", (first,))["total_area"], 100)
+        self.assertEqual(db.row("SELECT total_area FROM houses WHERE id=?", (second,))["total_area"], 300)
+        saved = db.row("SELECT work_item_id,plan_qty FROM template_items WHERE template_id=?", (tid,))
+        self.assertEqual(saved["work_item_id"], work["id"])
+        self.assertEqual(saved["plan_qty"], 12)
+        w.navigate(4)
+        self.assertEqual(template.current_id, tid)
+        self.assertEqual(template.table.value(0, 2), "Учебная работа цепочки")
+
     def test_template_deletion_rejects_external_changes_before_backup(self):
         tab = self.window.templates_tab
         tab.add_template()
