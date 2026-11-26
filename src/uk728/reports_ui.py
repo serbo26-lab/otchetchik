@@ -331,6 +331,9 @@ class ReportsTab(BaseTab):
     def _invalidate_review(self):
         self._review_dirty = True
         self._review_snapshot = None
+        if hasattr(self, "export_result"):
+            self.export_result.clear()
+            self.export_result.hide()
         if hasattr(self, "review_status"):
             self.review_text.clear()
             self.review_status.setText(
@@ -713,6 +716,10 @@ class ReportsTab(BaseTab):
             "Выгрузить все", self.export_buttons["all"],
             primary=self.export_buttons["all"]
         ))
+        self.export_result = selectable_label("")
+        self.export_result.setObjectName("CardSubtitle")
+        self.export_result.hide()
+        export_card.add_widget(self.export_result)
         layout.addWidget(export_card)
         self.report_tabs.addTab(w, "Проверка и выгрузка")
 
@@ -1646,28 +1653,51 @@ class ReportsTab(BaseTab):
             return
         # Export reads the saved report but does not modify SQLite. A new
         # database copy for every Word/Excel/PDF export is unnecessary.
+        paths, failures = self._generate_export_files(kind, rid, bundle)
+        self._show_export_result(paths, failures)
+
+    @staticmethod
+    def _generate_export_files(kind, rid, bundle):
         paths = []
-        try:
-            for fmt, export_func in (
-                ("xlsx", export_xlsx),
-                ("docx", export_docx),
-                ("pdf", export_pdf),
-            ):
-                if kind in (fmt, "all"):
-                    paths.append(export_func(rid, bundle=bundle))
-        except Exception as exc:
-            QMessageBox.critical(
-                self, "Ошибка экспорта",
-                f"Не удалось завершить выгрузку.\n\n{exc}\n\n"
-                "Уже созданные файлы, если они есть, не удалялись."
-            )
-            return
+        failures = []
+        for fmt, label, export_func in (
+            ("xlsx", "Excel", export_xlsx),
+            ("docx", "Word", export_docx),
+            ("pdf", "PDF", export_pdf),
+        ):
+            if kind not in (fmt, "all"):
+                continue
+            try:
+                paths.append((label, export_func(rid, bundle=bundle)))
+            except Exception as exc:
+                failures.append((label, str(exc)))
+        return paths, failures
+
+    def _show_export_result(self, paths, failures):
+        details = []
+        if paths:
+            details.append("Файлы сформированы:\n" + "\n".join(
+                f"{label}: {path}" for label, path in paths
+            ))
+        if failures:
+            details.append("Не удалось сформировать:\n" + "\n".join(
+                f"{label}: {error}" for label, error in failures
+            ))
+            details.append("Созданные файлы сохранены. После устранения причины выберите только неудачный формат."
+                           if paths else "После устранения причины повторите выгрузку.")
+        summary = f"Последняя выгрузка: успешно — {len(paths)}, ошибок — {len(failures)}."
+        if failures:
+            summary += " Не сформированы: " + ", ".join(label for label, _ in failures) + "."
+        self.export_result.setText(summary)
+        self.export_result.show()
         msg = QMessageBox(self)
-        msg.setIcon(QMessageBox.Information)
-        msg.setWindowTitle("Готово")
-        msg.setText("Файлы сформированы:\n" + "\n".join(str(path) for path in paths))
-        open_button = msg.addButton("Открыть папку", QMessageBox.ActionRole)
-        msg.addButton("Закрыть", QMessageBox.AcceptRole)
+        msg.setIcon(QMessageBox.Warning if failures else QMessageBox.Information)
+        msg.setWindowTitle("Результат выгрузки" if failures else "Готово")
+        msg.setText("\n\n".join(details))
+        open_button = msg.addButton("Открыть папку", QMessageBox.ActionRole) if paths else None
+        close_button = msg.addButton("Закрыть", QMessageBox.AcceptRole)
+        msg.setDefaultButton(close_button)
         msg.exec()
-        if msg.clickedButton() == open_button and paths:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths[0].parent)))
+        if open_button is not None and msg.clickedButton() == open_button:
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths[0][1].parent))):
+                QMessageBox.warning(self, "Не удалось открыть папку", str(paths[0][1].parent))
