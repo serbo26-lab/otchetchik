@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QDialog
 
 from src.uk728 import db
 from src.uk728.app import MainWindow
-from src.uk728.reports_ui import AddFromReferenceDialog
+from src.uk728.reports_ui import AddFromReferenceDialog, CreateReportDialog
 from src.uk728.report_review import inspect_report, bundle_fingerprint
 
 
@@ -199,6 +199,55 @@ class ReportWorkflowTests(TestCase):
         self.assertEqual(saved["report"]["notes"], "Synthetic pending change")
         self.assertEqual(len(saved["content"]), 1)
         self.assertEqual(int(self.page.content_table.value(0, 0)), saved["content"][0]["id"])
+
+    def test_creation_period_validation_and_full_year_reset(self):
+        dialog = CreateReportDialog(2025)
+        self.addCleanup(dialog.close)
+        self.assertTrue(dialog.create_button.isEnabled())
+        dialog.period_start.setText("31.12.2025")
+        dialog.period_end.setText("01.01.2025")
+        self.assertFalse(dialog.create_button.isEnabled())
+        self.assertIn("раньше", dialog.period_hint.text())
+        dialog.accept()
+        self.assertNotEqual(dialog.result(), QDialog.Accepted)
+        dialog.period_start.setText("01.07.2025")
+        dialog.period_end.setText("01.01.2026")
+        self.assertFalse(dialog.create_button.isEnabled())
+        dialog.period_end.setText("31.12.2025")
+        self.assertTrue(dialog.create_button.isEnabled())
+        dialog.show_period.setChecked(True)
+        self.assertEqual(dialog.values(), (2025, "2025-07-01", "2025-12-31", True))
+        dialog.fill_full_year()
+        self.assertEqual(dialog.values(), (2025, "2025-01-01", "2025-12-31", False))
+
+    def test_duplicate_create_keeps_dialog_values_for_retry(self):
+        page = self.page
+        with patch("src.uk728.reports_ui.CreateReportDialog") as factory, \
+             patch.object(QMessageBox, "warning") as warning:
+            dialog = factory.return_value
+            dialog.exec.side_effect = [QDialog.Accepted, QDialog.Accepted]
+            dialog.values.side_effect = [(2025, "2025-01-01", "2025-12-31", False),
+                                         (2025, "2025-07-01", "2025-12-31", True)]
+            page.create_report()
+        warning.assert_called_once()
+        self.assertEqual(dialog.exec.call_count, 2)
+        self.assertNotEqual(page.current_id, self.report_id)
+        self.assertEqual(db.load_report_bundle(page.current_id)["report"]["period_start"], "2025-07-01")
+
+    def test_manual_save_reveals_invalid_finance_cell_without_losing_edit(self):
+        page = self.page
+        page.finance_table.set_value(0, 3, "not a number")
+        with patch.object(QMessageBox, "warning") as warning:
+            page.save_manually()
+        warning.assert_called_once()
+        self.assertEqual(page.report_tabs.currentIndex(), 4)
+        self.assertEqual(page.finance_table.currentRow(), 0)
+        self.assertEqual(page.finance_table.currentColumn(), 3)
+        self.assertEqual(page.finance_table.value(0, 3), "not a number")
+        self.assertTrue(page._dirty_report)
+        page.finance_table.set_value(0, 3, "250")
+        page.flush_autosave()
+        self.assertEqual(db.load_report_bundle(self.report_id)["financials"][0]["accrued"], 250)
 
     def test_reference_search_and_empty_selection(self):
         first = db.execute("INSERT INTO work_items(name,category,group_name) VALUES(?,?,?)",
