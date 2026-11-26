@@ -28,7 +28,7 @@ from .backup_restore import apply_pending_restore
 from .backups_ui import BackupsTab
 from .ui_style import apply_theme
 from .ui_shell import NavigationSidebar, PageChrome, PAGES
-from .ui_workflow import recommend_next
+from .ui_workflow import recommend_next, workflow_help
 from .ui_translation import install_dialog_translation
 from .templates_ui import TemplatesTab
 from .mass_apply_ui import MassApplyTab, MassPreviewTable
@@ -335,9 +335,9 @@ class MainWindow(QMainWindow):
         """Show only the active page's selection and its meaningful next step."""
         try:
             current = self.tabs.currentWidget()
-            context, guidance = describe_context(current)
+            context, _ = describe_context(current)
             self.page_header.set_context(context)
-            self.page_header.guide.setText(guidance)
+            self.page_header.guide.setText(workflow_help(current))
             self._refresh_sidebar_company(current)
             self._update_next_action(current)
             self._refresh_editor_save_status(current)

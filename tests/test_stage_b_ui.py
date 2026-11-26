@@ -90,6 +90,22 @@ class CommonUxTests(TestCase):
         self.window.refresh_context()
         self.assertIn("Отчетный год", self.window.page_header.context.text())
 
+    def test_expanded_help_does_not_recommend_disabled_mass_action(self):
+        self.window.navigate(5)
+        page = self.window.mass_tab
+        self.window.refresh_context()
+        self.assertFalse(page.preview_button.isEnabled())
+        self.assertIn(page.preview_button.toolTip(), self.window.page_header.recommendation.text())
+        help_text = self.window.page_header.guide.text()
+        self.assertIn("Общий порядок:", help_text)
+        self.assertIn("Предпросмотр не меняет базу", help_text)
+        self.assertNotIn("Шаг 4:", help_text)
+        self.window.navigate(7)
+        self.window.refresh_context()
+        self.assertIn("Создайте копию", self.window.page_header.recommendation.text())
+        self.assertIn("разные операции", self.window.page_header.guide.text())
+        self.assertNotIn("перезапустите", self.window.page_header.guide.text().lower())
+
     def test_long_table_values_have_tooltips_after_edits(self):
         table = CopyPasteTable(1, 2)
         self.addCleanup(table.deleteLater)
