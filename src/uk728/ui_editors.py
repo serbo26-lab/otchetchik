@@ -50,6 +50,8 @@ def polish_form(form: QFormLayout, *, label_width: int = 165) -> None:
             label.setToolTip(title)
         field_item = form.itemAt(row, QFormLayout.ItemRole.FieldRole)
         field = field_item.widget() if field_item is not None else None
+        if isinstance(label, QLabel) and field is not None:
+            label.setBuddy(field)
         if isinstance(field, QComboBox):
             field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             field.setMinimumWidth(160)
