@@ -29,6 +29,7 @@ from .backups_ui import BackupsTab
 from .ui_style import apply_theme
 from .ui_shell import NavigationSidebar, PageChrome, PAGES
 from .ui_workflow import recommend_next
+from .ui_translation import install_dialog_translation
 from .templates_ui import TemplatesTab
 from .mass_apply_ui import MassApplyTab, MassPreviewTable
 from .directory_ui import CategoriesTab, WorksTab
@@ -66,6 +67,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        install_dialog_translation(QApplication.instance())
         self.setWindowTitle(APP_TITLE)
         self.resize(1320, 850)
         self.setMinimumSize(860, 520)
@@ -418,6 +420,7 @@ def install_exception_hook():
 
 def main():
     app = QApplication(sys.argv)
+    install_dialog_translation(app)
     install_exception_hook()
     try:
         # A restore is only safe before opening SQLite through any app page.
