@@ -24,7 +24,7 @@ jobs:
                   return json.load(response)
 
           project = "serbo26-lab_otchetchik"
-          for target, extra in [("main", {}), ("PR 99", {"pullRequest": "99"})]:
+          for target, extra in [("main", {})] + [(f"PR {n}", {"pullRequest": str(n)}) for n in range(88, 102)]:
               print("Audit target:", target)
               page = 1
               while True:
