@@ -596,9 +596,11 @@ class HousesTab(BaseTab):
         self._recalculate_area()
         if hasattr(self, "editor_stack"):
             self.editor_stack.setCurrentIndex(1 if has_record else 0)
-            self.editor_stack.empty_add_button.setEnabled(
-                self.company_filter.currentData() is not None
-            )
+            can_add = self.company_filter.currentData() is not None
+            self.editor_stack.empty_add_button.setEnabled(can_add)
+            hint = "Добавить дом выбранной УО." if can_add else "Сначала выберите управляющую организацию."
+            self.editor_stack.empty_add_button.setToolTip(hint)
+            self.add_button.setToolTip(hint)
         if not has_record:
             self._clear_form()
 

@@ -80,6 +80,8 @@ class TemplatesTab(BaseTab):
                           widths={3: 110, 4: 120, 5: 145})
         self.table.setItemDelegateForColumn(3, EditableComboDelegate(lambda: distinct_texts("work_items", "unit", COMMON_UNITS), self.table))
         self.table.context_add_handler = self.add_work_to_template
+        self.table.context_add_button = self.add_item_button
+        self.work_combo.currentIndexChanged.connect(self._update_add_item_action)
         composition = table_card("4. Состав шаблона", self.table,
                                  subtitle="Проверьте цену и количество в каждой строке.")
         right_l.addWidget(composition, 1)
@@ -110,7 +112,7 @@ class TemplatesTab(BaseTab):
         self.delete_button.setEnabled(has_record)
         if hasattr(self, "editor_stack"):
             self.editor_stack.setCurrentIndex(1 if has_record else 0)
-        self.add_item_button.setEnabled(bool(has_record and self.work_combo.currentData() is not None))
+        self._update_add_item_action()
         if not has_record:
             self.name.clear(); self.notes.clear(); self.table.setRowCount(0)
 
@@ -127,10 +129,17 @@ class TemplatesTab(BaseTab):
             self.work_combo.addItem(work_display(r), r["id"])
         restore_combo_selection(self.work_combo, old_data, old_text)
         self.work_combo.blockSignals(False)
-        if hasattr(self, "add_item_button"):
-            self.add_item_button.setEnabled(
-                self.current_id is not None and self.work_combo.currentData() is not None
-            )
+        self._update_add_item_action()
+
+    def _update_add_item_action(self, *_args):
+        if not hasattr(self, "add_item_button"):
+            return
+        available = self.current_id is not None and self.work_combo.currentData() is not None
+        self.add_item_button.setEnabled(available)
+        self.add_item_button.setToolTip(
+            "Добавить выбранную работу или перейти к уже добавленной строке."
+            if available else "Выберите шаблон и работу соответствующего раздела."
+        )
 
     def reload(self):
         # После изменения справочника работ новые строки должны сразу появляться
