@@ -138,28 +138,32 @@ def _split_cents(total: Decimal, areas: list[Decimal]) -> list[Decimal]:
     return [Decimal(value) * CENT for value in allocated]
 
 
-def _choose_action(inputs, reports, report_id, matches, existing):
+def _report_skip_action(inputs, reports, report_id):
     if len(reports) > 1:
-        action = "skip_many_reports"
-    elif report_id is not None and reports[0]["company_id"] != inputs["company_id"]:
-        action = "skip_other_company"
-    elif report_id is not None and str(reports[0]["status"] or "") in ("Размещен", "Размещён", "Архив"):
-        action = "skip_protected_report"
-    elif len(matches) > 1:
-        action = "skip_ambiguous"
-    elif existing and int(existing["is_manual"] or 0) and not inputs["override_manual"]:
-        action = "skip_manual"
-    elif existing and not inputs["update_existing"]:
-        action = "skip_exists"
-    elif existing:
-        action = "update"
-    elif report_id is None and not inputs["create_missing"]:
-        action = "skip_report"
-    elif report_id is None:
-        action = "create"
-    else:
-        action = "insert"
-    return action
+        return "skip_many_reports"
+    if report_id is not None:
+        if reports[0]["company_id"] != inputs["company_id"]:
+            return "skip_other_company"
+        if str(reports[0]["status"] or "") in ("Размещен", "Размещён", "Архив"):
+            return "skip_protected_report"
+    return None
+
+
+def _choose_action(inputs, reports, report_id, matches, existing):
+    report_skip = _report_skip_action(inputs, reports, report_id)
+    if report_skip:
+        return report_skip
+    if len(matches) > 1:
+        return "skip_ambiguous"
+    if existing and int(existing["is_manual"] or 0) and not inputs["override_manual"]:
+        return "skip_manual"
+    if existing and not inputs["update_existing"]:
+        return "skip_exists"
+    if existing:
+        return "update"
+    if report_id is None:
+        return "create" if inputs["create_missing"] else "skip_report"
+    return "insert"
 
 
 def _check_area_action(mode, area, action):
