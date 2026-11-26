@@ -286,7 +286,7 @@ class ReportsTab(BaseTab):
             table.setFocus()
 
     def _delete_selected_report_rows(self, table):
-        count = len({cell.row() for cell in table.selectedIndexes()})
+        count = len(table.selected_visible_rows())
         if count == 0:
             self.msg("Выделите строки, которые требуется удалить.")
             return
@@ -548,6 +548,8 @@ class ReportsTab(BaseTab):
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         # The official finance section has fixed payers; arbitrary insertion
         # from the generic context menu would violate the payer layout.
+        self.finance_table.allow_context_add = False
+        self.finance_table.allow_context_delete = False
         self.finance_table.context_add_handler = lambda: self.msg(
             "В разделе 5 предусмотрены строки для собственников и нанимателей."
         )

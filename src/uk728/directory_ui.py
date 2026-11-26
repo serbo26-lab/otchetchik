@@ -334,8 +334,10 @@ class WorksTab(BaseTab):
         sources.add_layout(top)
         self.add_from_category_button = QPushButton("Добавить из выбранной категории")
         self.add_from_category_button.clicked.connect(self.add_from_category)
-        sources.add_widget(action_panel("Добавление из категории", self.add_from_category_button,
-                                        primary=self.add_from_category_button))
+        self.add_manual_button = QPushButton("Добавить работу вручную")
+        self.add_manual_button.clicked.connect(self.add_row)
+        sources.add_widget(action_panel("Добавление работ", self.add_from_category_button,
+                                        self.add_manual_button, primary=self.add_manual_button))
         root.addWidget(sources)
 
         self.table = CopyPasteTable(0, 8)
@@ -364,10 +366,6 @@ class WorksTab(BaseTab):
         self.work_match_count.setObjectName("CardSubtitle")
         search_row.addWidget(self.work_match_count)
         entries.body.insertLayout(2, search_row)
-        self.add_manual_button = QPushButton("Добавить работу вручную")
-        self.add_manual_button.clicked.connect(self.add_row)
-        entries.add_widget(action_panel("Добавление строки", self.add_manual_button,
-                                       primary=self.add_manual_button))
         root.addWidget(entries, 1)
         delete = QPushButton(DELETE_ROWS_TEXT)
         delete.clicked.connect(self.table.delete_selected_rows)

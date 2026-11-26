@@ -239,6 +239,8 @@ class CopyPasteTable(QTableWidget):
         self.context_add_handler = None
         self.context_delete_handler = None
         self.allow_paste_append = False
+        self.allow_context_add = True
+        self.allow_context_delete = True
         self.protected_columns: set[int] = set()
 
     def _sync_cell_tooltip(self, item):
@@ -252,7 +254,9 @@ class CopyPasteTable(QTableWidget):
         # а не только при попадании в маленькую стрелку редактора.
         idx = self.indexAt(event.position().toPoint() if hasattr(event, "position") else event.pos())
         super().mousePressEvent(event)
-        if idx.isValid() and isinstance(self.itemDelegateForColumn(idx.column()), EditableComboDelegate):
+        if (event.button() == Qt.LeftButton and idx.isValid()
+                and idx.flags() & Qt.ItemIsEditable
+                and isinstance(self.itemDelegateForColumn(idx.column()), EditableComboDelegate)):
             self.setCurrentCell(idx.row(), idx.column())
             QTimer.singleShot(0, lambda ix=idx: self.edit(ix))
 
@@ -273,18 +277,21 @@ class CopyPasteTable(QTableWidget):
         act_paste = QAction("Вставить", self)
         act_paste.triggered.connect(self.paste_selection)
         menu.addAction(act_paste)
-        act_add = QAction(ADD_ROW_TEXT, self)
-        act_add.triggered.connect(
-            self.context_add_handler if self.context_add_handler is not None
-            else lambda: self.insertRow(self.rowCount())
-        )
-        menu.addAction(act_add)
-        act_del = QAction(DELETE_ROWS_TEXT, self)
-        act_del.triggered.connect(
-            self.context_delete_handler if self.context_delete_handler is not None
-            else self.delete_selected_rows
-        )
-        menu.addAction(act_del)
+        if self.allow_context_add:
+            act_add = QAction(ADD_ROW_TEXT, menu)
+            act_add.triggered.connect(
+                self.context_add_handler if self.context_add_handler is not None
+                else lambda: self.insertRow(self.rowCount())
+            )
+            menu.addAction(act_add)
+        if self.allow_context_delete:
+            act_del = QAction(DELETE_ROWS_TEXT, menu)
+            act_del.triggered.connect(
+                self.context_delete_handler if self.context_delete_handler is not None
+                else self.delete_selected_rows
+            )
+            act_del.setEnabled(bool(self.selected_visible_rows()))
+            menu.addAction(act_del)
         menu.exec(self.viewport().mapToGlobal(pos))
 
     def copy_selection(self):
@@ -297,10 +304,13 @@ class CopyPasteTable(QTableWidget):
         r = ranges[0]
         lines = []
         for row in range(r.topRow(), r.bottomRow() + 1):
+            if self.isRowHidden(row):
+                continue
             vals = []
             for col in range(r.leftColumn(), r.rightColumn() + 1):
-                item = self.item(row, col)
-                vals.append(item.text() if item else "")
+                if not self.isColumnHidden(col):
+                    item = self.item(row, col)
+                    vals.append(item.text() if item else "")
             lines.append("\t".join(vals))
         QGuiApplication.clipboard().setText("\n".join(lines))
 
@@ -314,7 +324,10 @@ class CopyPasteTable(QTableWidget):
                                 "За один раз можно вставить не более 1000 строк.")
             return
         start_row = self.currentRow() if self.currentRow() >= 0 else 0
-        start_col = self.currentColumn() if self.currentColumn() >= 0 else 0
+        start_col = next((column for column in range(max(0, self.currentColumn()), self.columnCount())
+                          if not self.isColumnHidden(column)), None)
+        if start_col is None:
+            return
         for offset, line in enumerate(lines):
             row = start_row + offset
             if not self._prepare_paste_row(row):
@@ -342,8 +355,12 @@ class CopyPasteTable(QTableWidget):
                 continue
             self.setItem(row, col, QTableWidgetItem(value))
 
+    def selected_visible_rows(self):
+        return sorted({i.row() for i in self.selectedIndexes() if not self.isRowHidden(i.row())},
+                      reverse=True)
+
     def delete_selected_rows(self, confirmed: bool = False):
-        rows = sorted({i.row() for i in self.selectedIndexes()}, reverse=True)
+        rows = self.selected_visible_rows()
         if not rows:
             return False
         if not confirmed and QMessageBox.question(

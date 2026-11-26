@@ -84,6 +84,38 @@ class SharedEditorBehaviorTests(unittest.TestCase):
                 self.assertEqual(combo.currentText(), "Two")
                 self.assertEqual(combo.toolTip(), "Two")
 
+    def test_copy_does_not_include_hidden_identifiers_or_filtered_rows(self):
+        table = ui_editors.CopyPasteTable(2, 3)
+        self.addCleanup(table.close)
+        table.setColumnHidden(0, True)
+        for row, values in enumerate((("77", "Visible A", "10"), ("88", "Hidden B", "20"))):
+            for column, value in enumerate(values):
+                table.set_value(row, column, value)
+        table.selectAll()
+        table.setRowHidden(1, True)
+        clipboard = QGuiApplication.clipboard()
+        self.addCleanup(clipboard.clear)
+        table.copy_selection()
+        self.assertEqual(clipboard.text(), "Visible A\t10")
+        self.assertEqual(table.selected_visible_rows(), [0])
+        table.delete_selected_rows(confirmed=True)
+        self.assertEqual(table.rowCount(), 1)
+        self.assertEqual(table.value(0, 0), "88")
+
+    def test_empty_table_paste_begins_at_first_visible_field(self):
+        table = ui_editors.CopyPasteTable(0, 3)
+        self.addCleanup(table.close)
+        table.setColumnHidden(0, True)
+        table.allow_paste_append = True
+        clipboard = QGuiApplication.clipboard()
+        self.addCleanup(clipboard.clear)
+        clipboard.setText("Synthetic work\t15")
+        table.paste_selection()
+        self.assertEqual(table.rowCount(), 1)
+        self.assertEqual(table.value(0, 0), "")
+        self.assertEqual(table.value(0, 1), "Synthetic work")
+        self.assertEqual(table.value(0, 2), "15")
+
     def test_paste_keeps_hidden_and_protected_columns_and_append_policy(self):
         table = ui_editors.CopyPasteTable(1, 4)
         self.addCleanup(table.close)
