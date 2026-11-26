@@ -128,24 +128,11 @@ class CategoriesTab(BaseTab):
     def refresh(self):
         if not self._commit_form_before_load():
             return
-        target_id = self.current_id
         records = db.named_rows("SELECT * FROM work_categories WHERE parent_id IS NULL AND is_active=1 ORDER BY name")
-        self.list.blockSignals(True)
-        self.list.clear()
-        select_row = -1
-        for r in records:
-            item = QListWidgetItem(r["name"] or UNNAMED_LABEL)
-            item.setData(Qt.UserRole, r["id"])
-            self.list.addItem(item)
-            if target_id is not None and r["id"] == target_id:
-                select_row = self.list.count() - 1
-        self.list.blockSignals(False)
-        if select_row >= 0:
-            self.list.setCurrentRow(select_row)
-        elif self.list.count() and target_id is None:
-            self.list.setCurrentRow(0)
-        else:
-            self._load_current()
+        self._replace_record_list(
+            records, lambda record: QListWidgetItem(record["name"] or UNNAMED_LABEL),
+            auto_select=self.current_id is None,
+        )
 
     def _load_current(self):
         self._load_selected_record(self._populate_selected_record)

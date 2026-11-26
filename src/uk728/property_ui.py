@@ -152,34 +152,26 @@ class CompaniesTab(BaseTab):
         if not has_record:
             self._clear_form()
 
+    @staticmethod
+    def _company_list_item(record):
+        linked = bool(record["assistant_source_id"])
+        item = QListWidgetItem(
+            ("Ассистент · " if linked else "") + (record["name"] or UNNAMED_LABEL)
+        )
+        item.setToolTip(
+            "Данные УО из общей базы (только чтение)" if linked
+            else "Локальная организация Отчётчика"
+        )
+        return item
+
     def refresh(self):
         if not self._commit_form_before_load():
             return
-        target_id = self.current_id
         records = db.named_rows("SELECT * FROM companies ORDER BY name, id")
-        self.list.blockSignals(True)
-        self.list.clear()
-        select_row = -1
-        for r in records:
-            linked = bool(r["assistant_source_id"])
-            item = QListWidgetItem(
-                ("Ассистент · " if linked else "") + (r["name"] or UNNAMED_LABEL)
-            )
-            item.setToolTip(
-                "Данные УО из общей базы (только чтение)" if linked
-                else "Локальная организация Отчётчика"
-            )
-            item.setData(Qt.UserRole, r["id"])
-            self.list.addItem(item)
-            if target_id is not None and r["id"] == target_id:
-                select_row = self.list.count() - 1
-        self.list.blockSignals(False)
-        if select_row >= 0:
-            self.list.setCurrentRow(select_row)
-        elif self.list.count() == 1 and target_id is None:
-            self.list.setCurrentRow(0)
-        else:
-            self._load_current()
+        self._replace_record_list(
+            records, self._company_list_item,
+            auto_select=len(records) == 1 and self.current_id is None,
+        )
 
     def _load_current(self):
         self._load_selected_record(self._populate_selected_record)
@@ -610,39 +602,25 @@ class HousesTab(BaseTab):
         self.reload_companies()
         self.refresh()
 
+    @staticmethod
+    def _house_list_item(record):
+        source_tag = "Ассистент · " if record["assistant_source_id"] else ""
+        item = QListWidgetItem(
+            f"{source_tag}{record['address'] or 'Без адреса'} · "
+            f"{money(record['total_area'])} м²"
+        )
+        item.setToolTip("Источник: ГИС ЖКХ Ассистент (только чтение)"
+                        if record["assistant_source_id"] else "Локальный дом")
+        return item
+
     def refresh(self):
         if not self._commit_form_before_load():
             return
-        target_id = self.current_id
         cid = self.company_filter.currentData()
         if hasattr(self, "add_button"):
             self.add_button.setEnabled(cid is not None)
-        if cid:
-            result = db.rows("SELECT * FROM houses WHERE company_id=? ORDER BY address", (cid,))
-        else:
-            result = []
-        self.list.blockSignals(True)
-        self.list.clear()
-        select_row = -1
-        for r in result:
-            source_tag = "Ассистент · " if r["assistant_source_id"] else ""
-            item = QListWidgetItem(
-                f"{source_tag}{r['address'] or 'Без адреса'} · "
-                f"{money(r['total_area'])} м²"
-            )
-            item.setToolTip("Источник: ГИС ЖКХ Ассистент (только чтение)"
-                            if r["assistant_source_id"] else "Локальный дом")
-            item.setData(Qt.UserRole, r["id"])
-            self.list.addItem(item)
-            if target_id is not None and r["id"] == target_id:
-                select_row = self.list.count() - 1
-        self.list.blockSignals(False)
-        if select_row >= 0:
-            self.list.setCurrentRow(select_row)
-        elif self.list.count() > 0:
-            self.list.setCurrentRow(0)
-        else:
-            self._load_current()
+        records = db.rows("SELECT * FROM houses WHERE company_id=? ORDER BY address", (cid,)) if cid else []
+        self._replace_record_list(records, self._house_list_item, auto_select=True)
 
     def _load_current(self):
         self._load_selected_record(self._populate_selected_record)
