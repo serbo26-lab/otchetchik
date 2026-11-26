@@ -192,6 +192,40 @@ class MassWorkflowTests(TestCase):
         self.ui.preview()
         self.assertEqual(self.ui._preview_plan["summary"]["cost"], 120)
 
+    def test_monthly_apply_edit_report_and_repeat_preserves_manual_quantity(self):
+        self._set_mode("monthly")
+        self.ui.rate.setText("6,76")
+        self.ui.months.setText("12")
+        self.ui.preview()
+        self.assertEqual(self.ui._preview_plan["summary"]["cost"], 32448)
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            self.ui.apply()
+        rid = db.row("SELECT id FROM reports WHERE house_id=? AND year=2025", (self.house_1,))["id"]
+        page = self.window.reports_tab
+        page.reload_filters()
+        page.company_filter.setCurrentIndex(page.company_filter.findData(self.company_id))
+        page.house_filter.setCurrentIndex(page.house_filter.findData(self.house_1))
+        page.year_filter.setValue(2025)
+        page.refresh()
+        self.assertEqual(page.current_id, rid)
+        page.content_table.set_value(0, 7, "50")
+        page.flush_autosave()
+        row = db.row("SELECT * FROM report_content_items WHERE report_id=?", (rid,))
+        self.assertEqual(row["actual_qty"], 50)
+        self.assertEqual(row["actual_cost"], 4056)
+        self.assertEqual(row["is_manual"], 1)
+        self.ui.update_existing.setChecked(True)
+        self.ui.rate.setText("7")
+        self.ui.preview()
+        actions = {r["house_id"]: r["action"] for r in self.ui._preview_plan["rows"]}
+        self.assertEqual(actions[self.house_1], "skip_manual")
+        self.assertEqual(actions[self.house_2], "update")
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            self.ui.apply()
+        records = db.rows("SELECT * FROM report_content_items WHERE work_item_id=?", (self.work_id,))
+        self.assertEqual(len(records), 2)
+        self.assertEqual(db.row("SELECT actual_qty FROM report_content_items WHERE id=?", (row["id"],))["actual_qty"], 50)
+
     def test_split_total_uses_only_actionable_houses(self):
         self._set_mode("split")
         self.ui.total.setText("1000")
