@@ -170,11 +170,13 @@ class SharedEditorBehaviorTests(unittest.TestCase):
         clipboard = QGuiApplication.clipboard()
         self.addCleanup(clipboard.clear)
         clipboard.setText("ignored\thidden\tfirst\nignored\thidden\tsecond")
-        table.paste_selection()
+        with patch.object(QMessageBox, "warning") as warning:
+            table.paste_selection()
+        warning.assert_called_once()
         self.assertEqual(table.rowCount(), 1)
         self.assertEqual(table.value(0, 1), "protected")
         self.assertEqual(table.value(0, 2), "hidden")
-        self.assertEqual(table.value(0, 3), "first")
+        self.assertEqual(table.value(0, 3), "")
         table.allow_paste_append = True
         table.context_add_handler = lambda: table.insertRow(table.rowCount())
         table.paste_selection()
@@ -182,8 +184,31 @@ class SharedEditorBehaviorTests(unittest.TestCase):
         self.assertEqual(table.value(1, 3), "second")
         table.setRowCount(1)
         table.context_add_handler = lambda: None
-        table.paste_selection()
+        with patch.object(QMessageBox, "warning") as warning:
+            table.paste_selection()
+        warning.assert_called_once()
         self.assertEqual(table.rowCount(), 1)
+
+    def test_paste_rejects_column_overflow_and_failed_row_reservation(self):
+        table = ui_editors.CopyPasteTable(1, 2)
+        self.addCleanup(table.close)
+        table.allow_paste_append = True
+        table.set_value(0, 0, "Original")
+        table.setCurrentCell(0, 0)
+        clipboard = QGuiApplication.clipboard()
+        self.addCleanup(clipboard.clear)
+        clipboard.setText("A\tB\tC")
+        with patch.object(QMessageBox, "warning") as warning:
+            table.paste_selection()
+        warning.assert_called_once()
+        self.assertEqual(table.value(0, 0), "Original")
+        table.context_add_handler = lambda: table.insertRow(1) if table.rowCount() == 1 else None
+        clipboard.setText("A\nB\nC")
+        with patch.object(QMessageBox, "warning") as warning:
+            table.paste_selection()
+        warning.assert_called_once()
+        self.assertEqual(table.rowCount(), 1)
+        self.assertEqual(table.value(0, 0), "Original")
 
 
 

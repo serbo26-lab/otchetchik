@@ -86,6 +86,7 @@ def empty_record_editor(
 SECTION_CONTENT = "Содержание"
 SECTION_REPAIR = "Текущий ремонт"
 SECTION_MANAGEMENT = "Управление"
+PASTE_TABLE_TITLE = "Вставка таблицы"
 DELETE_ROWS_TITLE = "Удаление строк"
 DELETE_ROWS_TEXT = "Удалить выбранные строки"
 ADD_ROW_TEXT = "Добавить строку"
@@ -341,7 +342,7 @@ class CopyPasteTable(QTableWidget):
             return
         lines = text.splitlines()
         if len(lines) > 1000:
-            QMessageBox.warning(self, "Вставка таблицы",
+            QMessageBox.warning(self, PASTE_TABLE_TITLE,
                                 "За один раз можно вставить не более 1000 строк.")
             return
         start_row = self.currentRow() if self.currentRow() >= 0 else 0
@@ -349,21 +350,39 @@ class CopyPasteTable(QTableWidget):
                           if not self.isColumnHidden(column)), None)
         if start_col is None:
             return
+        if any(len(line.split("\t")) > self.columnCount() - start_col for line in lines):
+            self._paste_warning("Вставляемые данные выходят за пределы столбцов.")
+            return
         if any(self.isRowHidden(row) for row in range(self.rowCount())):
             self._paste_visible_rows(start_row, start_col, lines)
             return
+        if not self._reserve_paste_rows(start_row + len(lines)):
+            return
         for offset, line in enumerate(lines):
-            row = start_row + offset
+            self._paste_line(start_row + offset, start_col, line)
+
+    def _paste_warning(self, reason):
+        QMessageBox.warning(self, PASTE_TABLE_TITLE, reason + " Данные не изменены.")
+
+    def _reserve_paste_rows(self, end):
+        original = self.rowCount()
+        if end > original and not self.allow_paste_append:
+            self._paste_warning("Недостаточно строк. В этой таблице нельзя добавлять строки вставкой.")
+            return False
+        for row in range(original, end):
             if not self._prepare_paste_row(row):
-                break
-            self._paste_line(row, start_col, line)
+                while self.rowCount() > original:
+                    self.removeRow(self.rowCount() - 1)
+                self._paste_warning("Не удалось подготовить все необходимые строки.")
+                return False
+        return True
 
     def _paste_visible_rows(self, start_row, start_col, lines):
         visible_rows = [row for row in range(start_row, self.rowCount())
                         if not self.isRowHidden(row)]
         if len(lines) > len(visible_rows):
             QMessageBox.warning(
-                self, "Вставка таблицы",
+                self, PASTE_TABLE_TITLE,
                 "Недостаточно видимых строк. Уточните выделение или снимите фильтр. "
                 "Данные не изменены.",
             )

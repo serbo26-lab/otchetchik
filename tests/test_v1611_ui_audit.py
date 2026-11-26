@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
 
 from src.uk728 import db
 from src.uk728.app import MainWindow, SafeSpinBox
@@ -183,7 +183,9 @@ class FieldAndLayoutAudit(unittest.TestCase):
         self.assertFalse(bool(payer.flags() & Qt.ItemFlag.ItemIsEditable))
         page.finance_table.setCurrentCell(0, 1)
         QGuiApplication.clipboard().setText("Случайный плательщик\t250\nПлательщик 2\t10\nТретий\t1")
-        page.finance_table.paste_selection()
+        with patch.object(QMessageBox, "warning") as warning:
+            page.finance_table.paste_selection()
+        warning.assert_called_once()
         self.assertEqual(page.finance_table.rowCount(), 2)
         self.assertEqual(page.finance_table.value(0, 1), "Собственники")
         self.assertEqual(page.finance_table.value(1, 1), "Наниматели")
