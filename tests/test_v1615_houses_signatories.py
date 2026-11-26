@@ -9,6 +9,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -108,6 +109,45 @@ class HouseFieldsAndSignatoriesV1615Tests(unittest.TestCase):
                 "SELECT data_json FROM signatories WHERE assistant_source_id='person-uo'"
             ).fetchone()["data_json"]
         self.assertNotIn("private-image", value)
+
+    def test_partial_sync_preserves_unmodified_mirror_rows(self):
+        assistant_source.synchronize(self.source)
+        stamp = "2000-01-01 00:00:00"
+        for table in ("companies", "houses", "signatories"):
+            db.execute(f"UPDATE {table} SET updated_at=?", (stamp,))
+        company_before = dict(db.row("SELECT * FROM companies WHERE assistant_source_id='uo-test'"))
+        signers_before = [dict(row) for row in db.rows("SELECT * FROM signatories ORDER BY id")]
+        with closing(sqlite3.connect(self.source)) as conn, conn:
+            conn.execute("UPDATE houses SET address='Synthetic changed house'")
+        result = assistant_source.synchronize(self.source)
+        self.assertFalse(result.unchanged)
+        self.assertEqual(dict(db.row("SELECT * FROM companies WHERE assistant_source_id='uo-test'")), company_before)
+        self.assertEqual([dict(row) for row in db.rows("SELECT * FROM signatories ORDER BY id")], signers_before)
+        updated = dict(db.row("SELECT * FROM houses WHERE assistant_source_id='house-test'"))
+        self.assertEqual(updated["address"], "Synthetic changed house")
+        self.assertNotEqual(updated["updated_at"], stamp)
+        with closing(sqlite3.connect(self.source)) as conn, conn:
+            conn.execute("UPDATE management_organizations SET name='Synthetic changed UO'")
+        assistant_source.synchronize(self.source)
+        self.assertEqual(dict(db.row("SELECT * FROM houses WHERE assistant_source_id='house-test'")), updated)
+        self.assertEqual([dict(row) for row in db.rows("SELECT * FROM signatories ORDER BY id")], signers_before)
+
+    def test_missing_source_total_preserves_existing_fallback_on_partial_sync(self):
+        with closing(sqlite3.connect(self.source)) as conn, conn:
+            conn.execute("UPDATE houses SET residential_area=NULL,non_residential_area=NULL,charge_area=NULL")
+        assistant_source.synchronize(self.source)
+        db.execute("UPDATE houses SET residential_area=125,non_residential_area=25,total_area=150,"
+                   "updated_at='2000-01-01 00:00:00' WHERE assistant_source_id='house-test'")
+        before = dict(db.row("SELECT * FROM houses WHERE assistant_source_id='house-test'"))
+        with closing(sqlite3.connect(self.source)) as conn, conn:
+            conn.execute("UPDATE management_organizations SET name='Synthetic changed UO'")
+        assistant_source.synchronize(self.source)
+        self.assertEqual(dict(db.row("SELECT * FROM houses WHERE assistant_source_id='house-test'")), before)
+        db.execute("UPDATE houses SET total_area=999 WHERE assistant_source_id='house-test'")
+        with closing(sqlite3.connect(self.source)) as conn, conn:
+            conn.execute("UPDATE management_organizations SET name='Synthetic changed again'")
+        assistant_source.synchronize(self.source)
+        self.assertEqual(db.row("SELECT total_area FROM houses WHERE assistant_source_id='house-test'")[0], 150)
 
     def test_repeat_refresh_preserves_contract_validity_and_manual_signers(self):
         assistant_source.synchronize(self.source)

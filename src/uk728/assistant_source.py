@@ -319,8 +319,9 @@ def _sync_organizations(conn, organizations):
     for org in organizations:
         src_id = str(org["id"])
         current = conn.execute(
-            "SELECT id FROM companies WHERE assistant_source_id=?", (src_id,)
+            "SELECT id,name,ogrn_inn FROM companies WHERE assistant_source_id=?", (src_id,)
         ).fetchone()
+        identity = str(org["name"]), str(org["ogrn"] or "")
         if current is None:
             cursor = conn.execute(
                 "INSERT INTO companies(assistant_source_id,name,ogrn_inn) VALUES(?,?,?)",
@@ -330,16 +331,47 @@ def _sync_organizations(conn, organizations):
             new_companies += 1
         else:
             cid = int(current["id"])
-            conn.execute(
-                "UPDATE companies SET name=?,ogrn_inn=?,updated_at=CURRENT_TIMESTAMP "
-                "WHERE id=?",
-                (str(org["name"]), str(org["ogrn"] or ""), cid),
-            )
+            if (current["name"], current["ogrn_inn"]) != identity:
+                conn.execute(
+                    "UPDATE companies SET name=?,ogrn_inn=?,updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=?",
+                    (*identity, cid),
+                )
         mapping[src_id] = cid
     return mapping, new_companies
 
 
+def _house_needs_update(house, existing, owner):
+    fields = {
+        "company_id": owner,
+        "address": house["address"],
+        "management_start": house["management_start"],
+        "management_end": house["management_end"],
+        "management_agreement_number": house["management_agreement_number"],
+        "management_agreement_date": house["management_agreement_date"],
+    }
+    for field, missing_flag in (
+        ("residential_area", "assistant_residential_missing"),
+        ("non_residential_area", "assistant_non_residential_missing"),
+        ("total_area", "assistant_area_missing"),
+    ):
+        incoming = house[field]
+        fields[missing_flag] = int(incoming is None)
+        fields[field] = existing[field] if incoming is None else incoming
+    if house["total_area"] is None:
+        residential = fields["residential_area"]
+        non_residential = fields["non_residential_area"]
+        if residential is not None and non_residential is not None:
+            # Leave unusual legacy values to SQLite's existing arithmetic.
+            if not isinstance(residential, (int, float)) or not isinstance(non_residential, (int, float)):
+                return True
+            fields["total_area"] = residential + non_residential
+    return any(existing[key] != value for key, value in fields.items())
+
+
 def _update_linked_house(conn, house, existing, owner):
+    if not _house_needs_update(house, existing, owner):
+        return
     hid = int(existing["id"])
     if existing["company_id"] != owner:
         used = conn.execute(
@@ -389,7 +421,7 @@ def _sync_houses(conn, houses, mapping):
         src_id = str(house["id"])
         owner = mapping[str(house["organization_id"])]
         existing = conn.execute(
-            "SELECT id,company_id FROM houses WHERE assistant_source_id=?",
+            "SELECT * FROM houses WHERE assistant_source_id=?",
             (src_id,),
         ).fetchone()
         if existing is None:
@@ -430,7 +462,7 @@ def _sync_people(conn, people, mapping):
         if (cid is None) == (hid is None):
             raise AssistantSourceError("Не удалось сопоставить подписанта с владельцем.")
         old = conn.execute(
-            "SELECT id,company_id,house_id FROM signatories "
+            "SELECT id,company_id,house_id,data_json FROM signatories "
             "WHERE assistant_source_id=?", (src_id,),
         ).fetchone()
         if old and (old["company_id"] != cid or old["house_id"] != hid):
@@ -440,11 +472,12 @@ def _sync_people(conn, people, mapping):
             )
         data = json.dumps(person["data"], ensure_ascii=False)
         if old:
-            conn.execute(
-                "UPDATE signatories SET data_json=?,"
-                "updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                (data, old["id"]),
-            )
+            if old["data_json"] != data:
+                conn.execute(
+                    "UPDATE signatories SET data_json=?,"
+                    "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (data, old["id"]),
+                )
         else:
             conn.execute(
                 "INSERT INTO signatories(company_id,house_id,"
