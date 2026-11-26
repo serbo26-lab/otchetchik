@@ -805,8 +805,19 @@ class ReportsTab(BaseTab):
             if self.list.item(i).data(Qt.UserRole) == rid:
                 self.list.setCurrentRow(i); break
 
+    def _require_current_report_snapshot(self, conn, rid):
+        try:
+            current = db.read_report_editor_snapshot(conn, rid)
+        except ValueError as exc:
+            raise ReportChangedError("Отчет больше не существует.") from exc
+        if self.current_id != rid or self._loaded_report_snapshot != current:
+            raise ReportChangedError(
+                "Отчет изменился после открытия. Операция отменена."
+            )
+
     def delete_report(self):
-        if not self.current_id:
+        rid = self.current_id
+        if not rid:
             self.msg("Выберите отчет для удаления.")
             return
         item = self.list.currentItem()
@@ -814,18 +825,33 @@ class ReportsTab(BaseTab):
         if QMessageBox.question(
             self,
             "Удалить отчет?",
-            f"Удалить отчет: {title}?\n\nСтроки содержания, текущего ремонта, управления, финансов и претензионной работы по этому отчету также будут удалены.",
+            f"Удалить отчет: {title}?\n\nСтроки содержания, текущего ремонта, управления, финансов и претензионной работы по этому отчету также будут удалены. "
+            "Несохраненные изменения удаляемого отчета будут отброшены.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         ) != QMessageBox.Yes:
             return
         try:
+            with connect() as conn:
+                conn.execute("BEGIN")
+                self._require_current_report_snapshot(conn, rid)
             if make_backup("before_delete_report") is None:
                 raise RuntimeError("Резервная копия базы не создана.")
-            db.execute("DELETE FROM reports WHERE id=?", (int(self.current_id),))
-            self.current_id = None
-            self.refresh()
-            self.msg("Отчет удален")
-        except Exception as e:
-            QMessageBox.warning(self, "Не удалось удалить отчет", str(e))
+            with connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self._require_current_report_snapshot(conn, rid)
+                conn.execute("DELETE FROM reports WHERE id=?", (rid,))
+                conn.commit()
+        except Exception as exc:
+            QMessageBox.warning(self, "Не удалось удалить отчет", str(exc))
+            return
+        self._autosave_timer.stop()
+        self._dirty_report = False
+        self.current_id = None
+        self._loaded_report_snapshot = None
+        self._invalidate_review()
+        self._update_report_actions()
+        self.refresh()
+        self.msg("Отчет удален")
 
     def _restore_report_selection(self, old_id, exc):
         # The model selection has changed but the old editor must not be discarded.
@@ -1332,14 +1358,7 @@ class ReportsTab(BaseTab):
         try:
             with connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                try:
-                    current = db.read_report_editor_snapshot(conn, rid)
-                except ValueError as exc:
-                    raise ReportChangedError("Отчет больше не существует.") from exc
-                if self._loaded_report_snapshot != current:
-                    raise ReportChangedError(
-                        "Отчет изменился после открытия. Сохранение отменено."
-                    )
+                self._require_current_report_snapshot(conn, rid)
                 self._save_report_fields(conn, rid)
                 inserted_rows = self._sync_report_sections(conn, rid)
                 self._sync_finance_and_claims(conn, rid)
