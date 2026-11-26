@@ -41,6 +41,17 @@ class ReportChangedError(ValueError):
     """The persisted report no longer matches the loaded editor."""
 
 
+class ReportFieldError(ValueError):
+    """A validation error with the location of the editable value."""
+
+    def __init__(self, message, section, widget, row=None, column=None):
+        super().__init__(message)
+        self.section = section
+        self.widget = widget
+        self.row = row
+        self.column = column
+
+
 class AddFromReferenceDialog(QDialog):
     def __init__(self, category: str, parent=None):
         super().__init__(parent)
@@ -108,10 +119,12 @@ class AddFromReferenceDialog(QDialog):
 
 
 class CreateReportDialog(QDialog):
-    def __init__(self, default_year: int, parent=None):
+    def __init__(self, default_year: int, parent=None, *, context=""):
         super().__init__(parent)
         self.setWindowTitle("Создать отчет")
         layout = QVBoxLayout(self)
+        if context:
+            layout.addWidget(selectable_label(context))
         form = QFormLayout()
         self.year = SafeSpinBox(); self.year.setRange(2000, 2100); self.year.setValue(int(default_year or 2026))
         self.year.valueChanged.connect(self.fill_full_year)
@@ -127,12 +140,44 @@ class CreateReportDialog(QDialog):
         full_btn.clicked.connect(self.fill_full_year)
         layout.addWidget(full_btn)
         layout.addWidget(self.show_period)
+        self.period_hint = selectable_label("")
+        layout.addWidget(self.period_hint)
         buttons = QHBoxLayout()
-        ok = QPushButton("Создать"); cancel = QPushButton("Отмена")
-        ok.clicked.connect(self.accept); cancel.clicked.connect(self.reject)
-        buttons.addStretch(); buttons.addWidget(ok); buttons.addWidget(cancel)
+        self.create_button = QPushButton("Создать")
+        cancel = QPushButton("Отмена")
+        self.create_button.clicked.connect(self.accept); cancel.clicked.connect(self.reject)
+        buttons.addStretch(); buttons.addWidget(self.create_button); buttons.addWidget(cancel)
         layout.addLayout(buttons)
+        self.period_start.textChanged.connect(self._update_period_state)
+        self.period_end.textChanged.connect(self._update_period_state)
         self.fill_full_year()
+
+    def _period_problem(self):
+        year = str(self.year.value())
+        start = iso_date(self.period_start.text())
+        end = iso_date(self.period_end.text())
+        if not start.startswith(year + "-"):
+            return "Укажите дату начала в пределах отчетного года.", self.period_start
+        if not end.startswith(year + "-"):
+            return "Укажите дату окончания в пределах отчетного года.", self.period_end
+        if start > end:
+            return "Дата окончания не может быть раньше даты начала.", self.period_end
+        return "", None
+
+    def _update_period_state(self, *_args):
+        problem, _ = self._period_problem()
+        self.create_button.setEnabled(not problem)
+        self.create_button.setToolTip(problem or "Создать отчет за указанный период.")
+        self.period_hint.setText(problem)
+
+    def accept(self):
+        problem, field = self._period_problem()
+        if problem:
+            self._update_period_state()
+            field.setFocus()
+            field.selectAll()
+            return
+        super().accept()
 
     def fill_full_year(self) -> None:
         start, end = full_year_period(int(self.year.value()))
@@ -698,6 +743,7 @@ class ReportsTab(BaseTab):
             self._invalidate_review()
             self.review_status.setText(f"Проверка не выполнена: {exc}")
             self.msg(f"Проверка не выполнена: {exc}")
+            self._focus_report_error(exc)
             return None
 
     def _current_report_filters(self):
@@ -868,20 +914,19 @@ class ReportsTab(BaseTab):
         if not cid:
             self.msg("У дома не выбрана управляющая организация.")
             return
-        dlg = CreateReportDialog(int(self.year_filter.value()), self)
-        if dlg.exec() != QDialog.Accepted:
+        dlg = CreateReportDialog(
+            int(self.year_filter.value()), self,
+            context=f"УО: {self.company_filter.currentText()}\nДом: {self.house_filter.currentText()}",
+        )
+        created = self._create_from_dialog(dlg, cid, hid)
+        if created is None:
             return
-        year, p_start, p_end, show_period = dlg.values()
-        # Do not change current_id or create a new record until the previous
-        # editor has been committed; the current year may remain unchanged.
-        if not self._save_before_filter_change():
-            return
+        rid, year = created
+        blocked = self.year_filter.blockSignals(True)
         try:
-            rid = db.create_report(int(cid), int(hid), int(year), p_start, p_end, show_period)
-        except Exception as e:
-            QMessageBox.warning(self, "Не удалось создать", f"Возможно, отчет за этот период уже есть.\n\n{e}")
-            return
-        self.year_filter.setValue(year)
+            self.year_filter.setValue(year)
+        finally:
+            self.year_filter.blockSignals(blocked)
         self.current_id = rid; self.refresh()
         for i in range(self.list.count()):
             if self.list.item(i).data(Qt.UserRole) == rid:
@@ -896,6 +941,22 @@ class ReportsTab(BaseTab):
             raise ReportChangedError(
                 "Отчет изменился после открытия. Операция отменена."
             )
+
+    def _create_from_dialog(self, dlg, cid, hid):
+        while dlg.exec() == QDialog.Accepted:
+            year, p_start, p_end, show_period = dlg.values()
+            if (self.company_filter.currentData(), self.house_filter.currentData()) != (cid, hid):
+                self.msg("Выбранный дом или организация изменились. Откройте создание отчета заново.")
+                return None
+            if not self._save_before_filter_change():
+                return None
+            try:
+                rid = db.create_report(int(cid), int(hid), int(year), p_start, p_end, show_period)
+            except (ValueError, OSError, sqlite3.Error) as exc:
+                QMessageBox.warning(self, "Не удалось создать", f"Проверьте период или повторите запись.\n\n{exc}")
+                continue
+            return rid, year
+        return None
 
     def delete_report(self):
         rid = self.current_id
@@ -1278,12 +1339,12 @@ class ReportsTab(BaseTab):
 
     def _validate_numeric_tables(self):
         sections = (
-            (self.content_table, SECTION_CONTENT, (4, 5, 6, 7, 8)),
-            (self.repair_table, SECTION_REPAIR, (4,)),
-            (self.management_table, SECTION_MANAGEMENT, (4, 5, 6)),
-            (self.finance_table, "Финансы", (2, 3, 4, 5)),
+            (1, self.content_table, SECTION_CONTENT, (4, 5, 6, 7, 8)),
+            (2, self.repair_table, SECTION_REPAIR, (4,)),
+            (3, self.management_table, SECTION_MANAGEMENT, (4, 5, 6)),
+            (4, self.finance_table, "Финансы", (2, 3, 4, 5)),
         )
-        for table, section, columns in sections:
+        for index, table, section, columns in sections:
             for row in range(table.rowCount()):
                 for column in columns:
                     problem = numeric_error(
@@ -1291,27 +1352,47 @@ class ReportsTab(BaseTab):
                         f"{section}, строка {row + 1}, графа «{table.horizontalHeaderItem(column).text()}»",
                     )
                     if problem:
-                        raise ValueError(problem)
+                        raise ReportFieldError(problem, index, table, row, column)
 
     def validate_numeric_fields(self) -> None:
         inputs = [
-            (self.management_cost.text(), "Стоимость управления"),
-            (self.repair_start.text(), "Остаток на начало текущего ремонта"),
-            (self.repair_accrual.text(), "Начисления на текущий ремонт"),
-            (self.repair_work_cost.text(), "Стоимость текущего ремонта"),
-            (self.repair_end.text(), "Остаток на конец текущего ремонта"),
-            (self.claim_amount.text(), "Сумма поступивших средств по претензиям"),
+            (3, self.management_cost, "Стоимость управления"),
+            (2, self.repair_start, "Остаток на начало текущего ремонта"),
+            (2, self.repair_accrual, "Начисления на текущий ремонт"),
+            (2, self.repair_work_cost, "Стоимость текущего ремонта"),
+            (2, self.repair_end, "Остаток на конец текущего ремонта"),
+            (4, self.claim_amount, "Сумма поступивших средств по претензиям"),
         ]
         for widget, label in ((self.claim_pret, "Количество претензий"),
                               (self.claim_lawsuits, "Количество исков")):
             problem = numeric_error(widget.text(), label, whole=True)
             if problem:
-                raise ValueError(problem)
-        for value, label in inputs:
-            problem = numeric_error(value, label)
+                raise ReportFieldError(problem, 4, widget)
+        for index, widget, label in inputs:
+            problem = numeric_error(widget.text(), label)
             if problem:
-                raise ValueError(problem)
+                raise ReportFieldError(problem, index, widget)
         self._validate_numeric_tables()
+
+    def _focus_report_error(self, exc):
+        if not isinstance(exc, ReportFieldError):
+            return
+        # Reveal invalid input after an explicit action, without triggering
+        # another save attempt when the section changes.
+        blocked = self.report_tabs.blockSignals(True)
+        try:
+            self.report_tabs.setCurrentIndex(exc.section)
+            self._report_tab_index = exc.section
+        finally:
+            self.report_tabs.blockSignals(blocked)
+        if exc.row is not None:
+            exc.widget.focus_cell(exc.row, exc.column)
+        else:
+            exc.widget.setFocus()
+            exc.widget.selectAll()
+        win = self.window()
+        if hasattr(win, "refresh_context"):
+            win.refresh_context()
 
     def save_manually(self):
         try:
@@ -1333,6 +1414,7 @@ class ReportsTab(BaseTab):
             if hasattr(win, "set_save_status"):
                 win.set_save_status("error")
             QMessageBox.warning(self, "Проверьте отчет", str(exc))
+            self._focus_report_error(exc)
 
     def _save_report_fields(self, conn, rid):
         conn.execute(
@@ -1529,7 +1611,8 @@ class ReportsTab(BaseTab):
             if QMessageBox.question(
                 self, "Есть замечания к отчету",
                 "В отчете остались предупреждения:\n\n" + warning_text +
-                "\n\nПродолжить выгрузку без устранения замечаний?"
+                "\n\nПродолжить выгрузку без устранения замечаний?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
             ) != QMessageBox.Yes:
                 return None
         return rid
@@ -1584,7 +1667,7 @@ class ReportsTab(BaseTab):
         msg.setWindowTitle("Готово")
         msg.setText("Файлы сформированы:\n" + "\n".join(str(path) for path in paths))
         open_button = msg.addButton("Открыть папку", QMessageBox.ActionRole)
-        msg.addButton("OK", QMessageBox.AcceptRole)
+        msg.addButton("Закрыть", QMessageBox.AcceptRole)
         msg.exec()
         if msg.clickedButton() == open_button and paths:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths[0].parent)))
