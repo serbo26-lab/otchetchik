@@ -24,7 +24,11 @@ jobs:
                   return json.load(response)
 
           project = "serbo26-lab_otchetchik"
-          for target, extra in [("main", {})] + [(f"PR {n}", {"pullRequest": str(n)}) for n in range(88, 102)]:
+          analyses = read("project_analyses/search", project=project, ps=1)
+          print("Latest main analysis:", json.dumps(analyses.get("analyses", []), ensure_ascii=False))
+          gate = read("qualitygates/project_status", projectKey=project)
+          print("Main Quality Gate:", gate.get("projectStatus", {}).get("status"))
+          for target, extra in [("main", {}), ("PR 101", {"pullRequest": "101"})]:
               print("Audit target:", target)
               page = 1
               while True:
