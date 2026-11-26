@@ -236,6 +236,7 @@ class CopyPasteTable(QTableWidget):
         # A report row needs its own initializer and autosave after deletion.
         # Keep generic behavior for standalone directories and editing tables.
         self.context_add_handler = None
+        self.context_add_button = None
         self.context_delete_handler = None
         self.allow_paste_append = False
         self.allow_context_add = True
@@ -283,6 +284,10 @@ class CopyPasteTable(QTableWidget):
                 self.context_add_handler if self.context_add_handler is not None
                 else lambda: self.insertRow(self.rowCount())
             )
+            if self.context_add_button is not None:
+                act_add.setText(self.context_add_button.text())
+                act_add.setEnabled(self.context_add_button.isEnabled())
+                act_add.setToolTip(self.context_add_button.toolTip())
             menu.addAction(act_add)
         if self.allow_context_delete:
             act_del = QAction(DELETE_ROWS_TEXT, menu)

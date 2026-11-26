@@ -413,7 +413,12 @@ class WorksTab(BaseTab):
             self.subcategory_combo.addItem(r["name"], r["id"])
         restore_combo_selection(self.subcategory_combo, old_data, old_text)
         self.subcategory_combo.blockSignals(False)
-        self.add_from_category_button.setEnabled(self.category_combo.currentData() is not None)
+        selected = self.category_combo.currentData() is not None
+        self.add_from_category_button.setEnabled(selected)
+        self.add_from_category_button.setToolTip(
+            "Добавить работу с параметрами выбранной категории."
+            if selected else "Выберите категорию или добавьте работу вручную."
+        )
 
     def reload(self):
         self.reload_category_combo()

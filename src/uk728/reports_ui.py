@@ -302,9 +302,12 @@ class ReportsTab(BaseTab):
             self.report_empty_hint.setText(instruction)
         self.save_button.setEnabled(has_report)
         self.delete_report_btn.setEnabled(has_report)
-        self.create_report_btn.setEnabled(
-            self.company_filter.currentData() is not None
-            and self.house_filter.currentData() is not None
+        can_create = (self.company_filter.currentData() is not None
+                      and self.house_filter.currentData() is not None)
+        self.create_report_btn.setEnabled(can_create)
+        self.create_report_btn.setToolTip(
+            "Создать отчет за выбранный год." if can_create else
+            "Сначала выберите управляющую организацию и дом."
         )
         self._update_export_actions()
         self._update_template_actions()

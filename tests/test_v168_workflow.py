@@ -131,6 +131,28 @@ class WorkflowV168Tests(unittest.TestCase):
             "SELECT id FROM report_content_items WHERE report_id=?", (report,)
         )), 0)
 
+    def test_command_prerequisites_are_explained_and_template_menu_matches_button(self):
+        w = self.window
+        self.assertFalse(w.reports_tab.create_report_btn.isEnabled())
+        self.assertIn("Сначала", w.reports_tab.create_report_btn.toolTip())
+        self.assertFalse(w.houses_tab.add_button.isEnabled())
+        self.assertIn("Сначала", w.houses_tab.add_button.toolTip())
+        template = w.templates_tab
+        self.assertIs(template.table.context_add_button, template.add_item_button)
+        self.assertFalse(template.add_item_button.isEnabled())
+        self.assertIn("Выберите", template.add_item_button.toolTip())
+        cid, hid, wid, _rid = self.seed()
+        template.reload()
+        template.add_template()
+        template.reload_work_combo()
+        template.work_combo.setCurrentIndex(template.work_combo.findData(wid))
+        self.assertTrue(template.add_item_button.isEnabled())
+        template.add_work_to_template()
+        self.assertEqual(template.table.rowCount(), 1)
+        template.category.setCurrentText("Управление")
+        self.assertFalse(template.add_item_button.isEnabled())
+        self.assertIn("Выберите", template.add_item_button.toolTip())
+
     def test_empty_report_state_hides_previous_data(self):
         c1, h1, _work, _report = self.seed()
         page = self.open_report(c1, h1)
