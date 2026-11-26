@@ -366,6 +366,13 @@ class ReportsTab(BaseTab):
             self.msg(f"Не удалось сохранить отчет: {exc}")
             return
         self.report_tabs.setCurrentIndex(index)
+        if self.report_tabs.currentIndex() == index and self.report_tabs.isVisible():
+            self._focus_report_section(index)
+
+    def _focus_report_section(self, index):
+        targets = (self.year, self.content_template_combo, self.repair_start,
+                   self.management_cost, self.claim_pret, self.review_button)
+        targets[index].setFocus(Qt.FocusReason.TabFocusReason)
 
     def _next_report_action(self, layout, title, next_index):
         button = QPushButton(title)

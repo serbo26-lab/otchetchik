@@ -267,6 +267,33 @@ class ResponsiveWindowTests(unittest.TestCase):
         QTest.keyClick(year, Qt.Key_Up)
         self.assertEqual(year.value(), 2027)
 
+    def test_report_next_section_moves_focus_to_first_relevant_control(self):
+        w = self.window
+        cid = db.execute("INSERT INTO companies(name) VALUES(?)", ("Учебная УО",))
+        hid = db.execute("INSERT INTO houses(company_id,address) VALUES(?,?)", (cid, "Учебный дом"))
+        db.create_report(cid, hid, 2026)
+        w.navigate(6)
+        page = w.reports_tab
+        page.company_filter.setCurrentIndex(page.company_filter.findData(cid))
+        page.house_filter.setCurrentIndex(page.house_filter.findData(hid))
+        w.activateWindow()
+        self.qt.processEvents()
+        for index, target in ((1, page.content_template_combo), (2, page.repair_start),
+                              (3, page.management_cost), (4, page.claim_pret),
+                              (5, page.review_button)):
+            page._go_to_report_section(index)
+            self.qt.processEvents()
+            self.assertEqual(page.report_tabs.currentIndex(), index)
+            self.assertTrue(target.hasFocus(), type(target).__name__)
+
+    def test_report_form_labels_are_associated_with_fields(self):
+        for form in self.window.reports_tab.report_tabs.findChildren(QFormLayout):
+            for row in range(form.rowCount()):
+                label_item = form.itemAt(row, QFormLayout.LabelRole)
+                field_item = form.itemAt(row, QFormLayout.FieldRole)
+                if label_item and field_item and field_item.widget():
+                    self.assertIs(label_item.widget().buddy(), field_item.widget())
+
     def test_navigating_resized_windows_does_not_lose_edits(self):
         w = self.window
         cat = w.categories_tab
