@@ -10,10 +10,13 @@ import sqlite3
 from contextlib import closing
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QDialogButtonBox
+from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtGui import QGuiApplication
 
 from src.uk728 import app, ui_editors
+from src.uk728.ui_translation import install_dialog_translation
 
 
 class SharedEditorsArchitectureTests(unittest.TestCase):
@@ -162,6 +165,44 @@ class SharedEditorBehaviorTests(unittest.TestCase):
         table.context_add_handler = lambda: None
         table.paste_selection()
         self.assertEqual(table.rowCount(), 1)
+
+
+
+class SharedInteractionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.qt = QApplication.instance() or QApplication([])
+
+    def test_standard_buttons_are_russian_and_translation_is_idempotent(self):
+        install_dialog_translation(self.qt)
+        translator = self.qt._reporter_dialog_translator
+        install_dialog_translation(self.qt)
+        self.assertIs(self.qt._reporter_dialog_translator, translator)
+        box = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        self.addCleanup(box.close)
+        self.assertEqual(box.button(QDialogButtonBox.Save).text().replace("&", ""), "Сохранить")
+        self.assertEqual(box.button(QDialogButtonBox.Cancel).text().replace("&", ""), "Отмена")
+        message = QMessageBox()
+        self.addCleanup(message.close)
+        message.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        self.assertEqual(message.button(QMessageBox.Yes).text().replace("&", ""), "Да")
+        self.assertEqual(message.button(QMessageBox.No).text().replace("&", ""), "Нет")
+        self.assertIsNone(translator.translate("OtherContext", "Save"))
+
+    def test_editable_combo_right_click_does_not_schedule_popup(self):
+        combo = ui_editors.ClickComboBox()
+        self.addCleanup(combo.close)
+        combo.setEditable(True)
+        edit = combo.lineEdit()
+        right = QMouseEvent(QEvent.MouseButtonPress, QPointF(4, 4), QPointF(4, 4),
+                            Qt.RightButton, Qt.RightButton, Qt.NoModifier)
+        left = QMouseEvent(QEvent.MouseButtonPress, QPointF(4, 4), QPointF(4, 4),
+                           Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+        with patch("src.uk728.ui_editors.QTimer.singleShot") as schedule:
+            combo.eventFilter(edit, right)
+            schedule.assert_not_called()
+            combo.eventFilter(edit, left)
+            schedule.assert_called_once()
 
 
 if __name__ == "__main__":

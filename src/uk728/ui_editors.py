@@ -166,7 +166,7 @@ class ClickComboBox(QComboBox):
 
     def mousePressEvent(self, event):
         super().mousePressEvent(event)
-        if self.isEnabled():
+        if event.button() == Qt.LeftButton and self.isEnabled() and not self.view().isVisible():
             QTimer.singleShot(0, self.showPopup)
 
     def wheelEvent(self, event):
@@ -177,7 +177,8 @@ class ClickComboBox(QComboBox):
             event.ignore()
 
     def eventFilter(self, obj, event):
-        if obj is self.lineEdit() and event.type() == QEvent.MouseButtonPress and self.isEnabled():
+        if (obj is self.lineEdit() and event.type() == QEvent.MouseButtonPress
+                and event.button() == Qt.LeftButton and self.isEnabled()):
             QTimer.singleShot(0, self.showPopup)
         return super().eventFilter(obj, event)
 
@@ -271,10 +272,10 @@ class CopyPasteTable(QTableWidget):
 
     def _menu(self, pos):
         menu = QMenu(self)
-        act_copy = QAction("Копировать", self)
+        act_copy = QAction("Копировать", menu)
         act_copy.triggered.connect(self.copy_selection)
         menu.addAction(act_copy)
-        act_paste = QAction("Вставить", self)
+        act_paste = QAction("Вставить", menu)
         act_paste.triggered.connect(self.paste_selection)
         menu.addAction(act_paste)
         if self.allow_context_add:
