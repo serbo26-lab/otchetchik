@@ -141,6 +141,37 @@ class ReportWorkflowTests(TestCase):
         exporter.assert_not_called()
         self.assertTrue(self.page._review_dirty)
 
+    def test_partial_export_lists_success_and_failure_and_allows_single_retry(self):
+        page = self.page
+        page.run_review()
+        reviewed = db.load_report_bundle(self.report_id)
+        target = Path(self.tmp.name)
+        with (
+            patch.object(QMessageBox, "question", return_value=QMessageBox.Yes),
+            patch.object(QMessageBox, "exec", return_value=0),
+            patch("src.uk728.reports_ui.export_xlsx", return_value=target / "synthetic.xlsx") as xlsx,
+            patch("src.uk728.reports_ui.export_docx", side_effect=PermissionError("Synthetic locked file")) as docx,
+            patch("src.uk728.reports_ui.export_pdf", return_value=target / "synthetic.pdf") as pdf,
+            patch.object(page, "_show_export_result", wraps=page._show_export_result) as result,
+        ):
+            page.export("all")
+            self.assertEqual(result.call_args.args, (
+                [("Excel", target / "synthetic.xlsx"), ("PDF", target / "synthetic.pdf")],
+                [("Word", "Synthetic locked file")],
+            ))
+            self.assertIn("успешно — 2", page.export_result.text())
+            self.assertIn("Word", page.export_result.text())
+            self.assertTrue(page.export_buttons["docx"].isEnabled())
+            docx.side_effect = None
+            docx.return_value = target / "synthetic.docx"
+            page.export("docx")
+        xlsx.assert_called_once_with(self.report_id, bundle=reviewed)
+        pdf.assert_called_once_with(self.report_id, bundle=reviewed)
+        self.assertEqual(docx.call_count, 2)
+        self.assertIn("успешно — 1", page.export_result.text())
+        page.notes.setPlainText("Synthetic new edit")
+        self.assertTrue(page.export_result.isHidden())
+
     def test_all_formats_use_same_reviewed_snapshot(self):
         self.page.run_review()
         reviewed = db.load_report_bundle(self.report_id)
