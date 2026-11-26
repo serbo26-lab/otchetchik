@@ -46,7 +46,7 @@ def summarize(log, expected):
 
 
 def main():
-    log = Path(sys.argv[1]).read_text(encoding="utf-8-sig")
+    log = sys.stdin.read().lstrip("\ufeff")
     expected = {path.name for path in Path("tests").glob("test_*.py")}
     result = summarize(log, expected)
     print(json.dumps(result, ensure_ascii=False, indent=2))

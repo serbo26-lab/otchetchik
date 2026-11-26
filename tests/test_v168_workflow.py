@@ -139,6 +139,8 @@ class WorkflowV168Tests(unittest.TestCase):
         self.assertIn("Сначала", w.houses_tab.add_button.toolTip())
         template = w.templates_tab
         self.assertIs(template.table.context_add_button, template.add_item_button)
+        template.list.setCurrentRow(-1)
+        self.assertIsNone(template.current_id)
         self.assertFalse(template.add_item_button.isEnabled())
         self.assertIn("Выберите", template.add_item_button.toolTip())
         cid, hid, wid, _rid = self.seed()
@@ -150,8 +152,11 @@ class WorkflowV168Tests(unittest.TestCase):
         template.add_work_to_template()
         self.assertEqual(template.table.rowCount(), 1)
         template.category.setCurrentText("Управление")
+        self.assertEqual(template.work_combo.findData(wid), -1)
+        template.work_combo.setCurrentIndex(-1)
         self.assertFalse(template.add_item_button.isEnabled())
         self.assertIn("Выберите", template.add_item_button.toolTip())
+        template.category.setCurrentText("Содержание")
 
     def test_empty_report_state_hides_previous_data(self):
         c1, h1, _work, _report = self.seed()

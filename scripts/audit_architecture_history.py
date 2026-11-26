@@ -4,7 +4,6 @@ from __future__ import annotations
 import ast
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 BASES = {
@@ -60,7 +59,7 @@ def compare(base, current):
 
 
 def main():
-    ref = sys.argv[1] if len(sys.argv) > 1 else "HEAD"
+    ref = "HEAD"
     current = inventory(ref)
     results = {version: compare(inventory(sha), current) for version, sha in BASES.items()}
     print(json.dumps({"candidate": git("rev-parse", ref).strip(), "results": results},
