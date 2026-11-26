@@ -302,17 +302,19 @@ class CopyPasteTable(QTableWidget):
                 QGuiApplication.clipboard().setText(item.text())
             return
         r = ranges[0]
-        lines = []
-        for row in range(r.topRow(), r.bottomRow() + 1):
-            if self.isRowHidden(row):
-                continue
-            vals = []
-            for col in range(r.leftColumn(), r.rightColumn() + 1):
-                if not self.isColumnHidden(col):
-                    item = self.item(row, col)
-                    vals.append(item.text() if item else "")
-            lines.append("\t".join(vals))
+        columns = [col for col in range(r.leftColumn(), r.rightColumn() + 1)
+                   if not self.isColumnHidden(col)]
+        lines = [self._copy_row(row, columns)
+                 for row in range(r.topRow(), r.bottomRow() + 1)
+                 if not self.isRowHidden(row)]
         QGuiApplication.clipboard().setText("\n".join(lines))
+
+    def _copy_row(self, row, columns):
+        values = []
+        for col in columns:
+            item = self.item(row, col)
+            values.append(item.text() if item else "")
+        return "\t".join(values)
 
     def paste_selection(self):
         text = QGuiApplication.clipboard().text()

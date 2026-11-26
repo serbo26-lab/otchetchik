@@ -375,10 +375,13 @@ class SignatoryListDialog(QDialog):
         linked = bool(record and record["assistant_source_id"] is not None)
         self.edit_button.setText("Просмотреть" if linked else "Изменить")
         self.delete_button.setEnabled(bool(record and not linked))
-        self.delete_button.setToolTip(
-            "Запись из Ассистента доступна только для просмотра." if linked else
-            "Удалить выбранную локальную запись." if record else "Сначала выберите запись."
-        )
+        if linked:
+            reason = "Запись из Ассистента доступна только для просмотра."
+        elif record:
+            reason = "Удалить выбранную локальную запись."
+        else:
+            reason = "Сначала выберите запись."
+        self.delete_button.setToolTip(reason)
 
     def add_person(self):
         editor = PersonEditor(

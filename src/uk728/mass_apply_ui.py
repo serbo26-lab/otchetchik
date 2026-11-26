@@ -258,7 +258,6 @@ class MassApplyTab(BaseTab):
 
     def _company_changed(self):
         self._load_target_houses()
-        self.mark_dirty()
 
     def _load_target_houses(self):
         cid = self.company.currentData()
@@ -287,15 +286,21 @@ class MassApplyTab(BaseTab):
         has_houses = self.house_list.count() > 0
         self.house_list.setVisible(has_houses)
         self.no_houses_hint.setVisible(not has_houses)
-        self.select_all_houses.setEnabled(has_houses)
-        self.clear_all_houses.setEnabled(has_houses)
+        self.no_houses_hint.setText(
+            "Сначала выберите управляющую организацию." if cid is None else
+            "У выбранной организации нет доступных домов. Добавьте дом в разделе «Дома»."
+        )
         self._target_company_id = cid
         self.mark_dirty()
 
     def _check_all(self, value: bool):
         state = Qt.Checked if value else Qt.Unchecked
-        for i in range(self.house_list.count()):
-            self.house_list.item(i).setCheckState(state)
+        blocked = self.house_list.blockSignals(True)
+        try:
+            for i in range(self.house_list.count()):
+                self.house_list.item(i).setCheckState(state)
+        finally:
+            self.house_list.blockSignals(blocked)
         self.mark_dirty()
 
     def selected_house_ids(self):
@@ -321,10 +326,21 @@ class MassApplyTab(BaseTab):
         self._preview_dirty = True
         self._preview_plan = None
         if hasattr(self, "selected_house_count"):
-            self.selected_house_count.setText(
-                f"Выбрано домов: {len(self.selected_house_ids())} из {self.house_list.count()}"
-            )
+            selected = len(self.selected_house_ids())
+            count = self.house_list.count()
+            self.selected_house_count.setText(f"Выбрано домов: {selected} из {count}")
+            self.select_all_houses.setEnabled(selected < count)
+            self.clear_all_houses.setEnabled(selected > 0)
+            if not count:
+                select_hint = "Нет доступных домов."
+            elif selected == count:
+                select_hint = "Все доступные дома уже отмечены."
+            else:
+                select_hint = "Отметить все доступные дома."
+            self.select_all_houses.setToolTip(select_hint)
+            self.clear_all_houses.setToolTip("Снять отметки со всех домов." if selected else "Нет отмеченных домов.")
         self.apply_button.setEnabled(False)
+        self.apply_button.setToolTip("Сначала выполните актуальный предпросмотр.")
         self.table.setRowCount(0)
         self.summary.clear()
         self._update_preview_action()
@@ -354,6 +370,13 @@ class MassApplyTab(BaseTab):
         ]:
             label.setVisible(visible)
             widget.setVisible(visible)
+        rate_labels = {
+            "area": "Ставка за 1 м² за период",
+            "monthly": "Ставка за 1 м² в месяц",
+            "quantity": "Цена за единицу",
+        }
+        self.rate_label.setText(rate_labels.get(mode, "Ставка / цена"))
+        self.total_label.setText("Общая сумма на все дома" if mode == "split" else "Сумма на один дом")
         explanations = {
             "area": "Ставка за весь период × площадь дома.",
             "monthly": "Ставка за 1 м² за месяц × число месяцев × площадь дома.",
@@ -421,26 +444,43 @@ class MassApplyTab(BaseTab):
         )
         count = data["insert"] + data["update"]
         self.apply_button.setEnabled(count > 0)
+        self.apply_button.setToolTip(
+            "Записать только проверенные строки после подтверждения."
+            if count else "Нет строк для записи. Уточните параметры."
+        )
         self.status_label.setText(
             "Предпросмотр готов. Проверьте суммы и причины пропуска для каждого дома."
             if count else "Нет строк, которые можно добавить или обновить. Проверьте параметры."
         )
+
+    def _confirmation_text(self, plan):
+        summary = plan["summary"]
+        message = (
+            f'УО: {self.company.currentText()}\n'
+            f'Отчетный год: {plan["inputs"]["year"]}\n'
+            f'Работа: {plan["work_name"]} · {plan["section"]}\n'
+            f'Выбрано домов: {len(plan["rows"])}\n\n'
+            f'Добавить: {summary["insert"]}\nОбновить: {summary["update"]}\n'
+            f'Пропустить: {summary["skip"]}\n'
+            f'Создать отчетов: {summary["create_reports"]}\n'
+            f'Сумма добавляемых и обновляемых строк: {money(summary["cost"])}'
+        )
+        if plan["inputs"]["override_manual"]:
+            message += "\n\nВНИМАНИЕ: разрешена перезапись вручную измененных строк."
+        return message
 
     def apply(self):
         if self._preview_dirty or not self._preview_plan or not self.apply_button.isEnabled():
             self.status_label.setText("Сначала выполните актуальный предпросмотр.")
             return
         plan = self._preview_plan
-        summary = plan["summary"]
-        message = (
-            f'Вы действительно хотите записать результаты?\n\n'
-            f'Добавить: {summary["insert"]}\nОбновить: {summary["update"]}\n'
-            f'Пропустить: {summary["skip"]}\n'
-            f'Сумма добавляемых и обновляемых строк: {money(summary["cost"])}'
-        )
-        if plan["inputs"]["override_manual"]:
-            message += "\n\nВНИМАНИЕ: разрешена перезапись вручную измененных строк."
-        if QMessageBox.question(self, "Подтверждение массового заполнения", message) != QMessageBox.Yes:
+        if QMessageBox.question(
+            self, "Подтверждение массового заполнения", self._confirmation_text(plan),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ) != QMessageBox.Yes:
+            return
+        if self._preview_dirty or self._preview_plan is not plan:
+            self.status_label.setText("Условия изменились. Выполните новый предпросмотр.")
             return
         try:
             # A backup taken after mass application cannot restore the

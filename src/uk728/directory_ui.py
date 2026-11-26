@@ -496,21 +496,26 @@ class WorksTab(BaseTab):
                 seen.add(existing)
             if existing and self._initial_work_rows.get(existing) == self._row_signature(index):
                 continue  # Preserve unchanged legacy work, including missing section.
-            name = self.table.value(index, 3)
-            section = self.table.value(index, 4)
-            if not name.strip() or normalize_section(section, "") not in COMMON_SECTIONS:
-                QMessageBox.warning(
-                    self, "Проверьте справочник",
-                    f"Строка {index + 1}: заполните наименование и раздел формы "
-                    "(Содержание, Текущий ремонт или Управление).",
-                )
-                self._focus_work_error(index, 3 if not name.strip() else 4)
+            if not self._validate_work_fields(index):
                 return False
-            problem = numeric_error(self.table.value(index, 6), f"Цена работы, строка {index + 1}")
-            if problem:
-                QMessageBox.warning(self, "Проверьте цену", problem)
-                self._focus_work_error(index, 6)
-                return False
+        return True
+
+    def _validate_work_fields(self, index):
+        name = self.table.value(index, 3)
+        section = self.table.value(index, 4)
+        if not name.strip() or normalize_section(section, "") not in COMMON_SECTIONS:
+            QMessageBox.warning(
+                self, "Проверьте справочник",
+                f"Строка {index + 1}: заполните наименование и раздел формы "
+                "(Содержание, Текущий ремонт или Управление).",
+            )
+            self._focus_work_error(index, 3 if not name.strip() else 4)
+            return False
+        problem = numeric_error(self.table.value(index, 6), f"Цена работы, строка {index + 1}")
+        if problem:
+            QMessageBox.warning(self, "Проверьте цену", problem)
+            self._focus_work_error(index, 6)
+            return False
         return True
 
     def _focus_work_error(self, row, column):

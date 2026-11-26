@@ -114,6 +114,43 @@ class MassWorkflowTests(TestCase):
         self.assertFalse(self.ui.preview_button.isEnabled())
         self.assertFalse(self.ui.apply_button.isEnabled())
 
+    def test_house_selection_actions_and_confirmation_context(self):
+        self.assertFalse(self.ui.select_all_houses.isEnabled())
+        self.assertTrue(self.ui.clear_all_houses.isEnabled())
+        self.ui.clear_all_houses.click()
+        self.assertTrue(self.ui.select_all_houses.isEnabled())
+        self.assertFalse(self.ui.clear_all_houses.isEnabled())
+        self.ui.select_all_houses.click()
+        self.assertFalse(self.ui.select_all_houses.isEnabled())
+        self._preview_area()
+        plan = self.ui._preview_plan
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.No) as confirm, \
+             patch("src.uk728.mass_apply_ui.make_backup") as backup:
+            self.ui.apply_button.click()
+            backup.assert_not_called()
+        args = confirm.call_args.args
+        for value in ("УК Буревестник", "2025", "Контрольная уборка",
+                      "Выбрано домов: 2", "Создать отчетов: 2"):
+            self.assertIn(value, args[2])
+        self.assertEqual(args[-1], QMessageBox.No)
+        self.assertIs(self.ui._preview_plan, plan)
+        self.assertTrue(self.ui.apply_button.isEnabled())
+
+    def test_confirmation_rejects_changed_inputs_before_backup(self):
+        self._preview_area()
+
+        def change_conditions(*args):
+            self.ui.rate.setText("10")
+            return QMessageBox.Yes
+
+        with patch.object(QMessageBox, "question", side_effect=change_conditions), \
+             patch("src.uk728.mass_apply_ui.make_backup") as backup:
+            self.ui.apply()
+            backup.assert_not_called()
+        self.assertFalse(self.ui.apply_button.isEnabled())
+        self.assertIn("Условия изменились", self.ui.status_label.text())
+        self.assertEqual(db.row("SELECT COUNT(*) FROM reports")[0], 0)
+
     def test_explicit_house_selection_and_archived_excluded(self):
         self.assertEqual(self.ui.house_list.count(), 2)
         self.assertEqual(set(self.ui.selected_house_ids()), {self.house_1, self.house_2})
