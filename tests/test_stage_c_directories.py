@@ -548,6 +548,46 @@ class DirectoryFlowTests(unittest.TestCase):
         self.assertIsNone(category.current_id)
         self.assertFalse(category.save_button.isEnabled())
 
+    def test_manual_conflict_reload_requires_explicit_confirmation(self):
+        company = self.window.company_tab
+        company.add_company()
+        cid = company.current_id
+        company.notes.setPlainText("Synthetic local edit")
+        db.execute("UPDATE companies SET notes=? WHERE id=?", ("Synthetic external edit", cid))
+        with patch.object(QMessageBox, "question") as question, \
+             patch.object(QMessageBox, "warning") as warning:
+            self.assertIs(company.save(refresh_after=False), False)
+            question.assert_not_called()
+            warning.assert_called_once()
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.No):
+            company.save_manually()
+        self.assertEqual(company.notes.toPlainText(), "Synthetic local edit")
+        self.assertTrue(company.has_unsaved_changes())
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            company.save_manually()
+        self.assertEqual(company.notes.toPlainText(), "Synthetic external edit")
+        self.assertFalse(company.has_unsaved_changes())
+        company.notes.setPlainText("Synthetic retry")
+        company.save_manually()
+        self.assertEqual(db.row("SELECT notes FROM companies WHERE id=?", (cid,))[0],
+                         "Synthetic retry")
+
+    def test_work_conflict_reload_preserves_external_rows(self):
+        page = self.window.works_tab
+        row_id = db.execute("INSERT INTO work_items(name,category) VALUES(?,?)",
+                            ("Synthetic work", "Содержание"))
+        page.refresh()
+        row = next(i for i in range(page.table.rowCount())
+                   if page.table.value(i, 0) == str(row_id))
+        page.table.set_value(row, 7, "Synthetic pending")
+        db.execute("UPDATE work_items SET notes=? WHERE id=?", ("Synthetic external", row_id))
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            page.save_manually()
+        row = next(i for i in range(page.table.rowCount())
+                   if page.table.value(i, 0) == str(row_id))
+        self.assertEqual(page.table.value(row, 7), "Synthetic external")
+        self.assertFalse(page.has_unsaved_changes())
+
     def test_property_save_and_delete_reject_stale_record(self):
         company_id = db.execute("INSERT INTO companies(name) VALUES(?)", ("Synthetic UO",))
         company = self.window.company_tab

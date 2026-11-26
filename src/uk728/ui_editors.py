@@ -366,6 +366,10 @@ class CopyPasteTable(QTableWidget):
         return item.text().strip() if item else ""
 
 
+class EditorConflictError(ValueError):
+    """The stored record differs from the editor's loaded snapshot."""
+
+
 class BaseTab(QWidget):
     def _form_signature(self):
         """Non-invasive snapshot of a form; used to detect edits before changing records."""
@@ -466,6 +470,50 @@ class BaseTab(QWidget):
             return
         if next_id is not None and self.current_id is None:
             self._clear_record_selection()
+
+    def _handle_save_error(self, title, exc):
+        win = self.window()
+        if hasattr(win, "set_save_status"):
+            win.set_save_status("error")
+        if isinstance(exc, EditorConflictError) and getattr(self, "_manual_save_requested", False):
+            self._manual_conflict = str(exc)
+        else:
+            QMessageBox.warning(self, title, str(exc))
+        return False
+
+    def save_manually(self, *_args):
+        """Only an explicit Save click may offer to discard conflicting edits."""
+        self._manual_conflict = None
+        self._manual_save_requested = True
+        try:
+            result = self.save()
+        finally:
+            self._manual_save_requested = False
+        if result is False and self._manual_conflict:
+            self._offer_conflict_reload()
+        return result
+
+    def _offer_conflict_reload(self):
+        answer = QMessageBox.question(
+            self, "Данные изменились",
+            f"{self._manual_conflict}\n\nЗагрузить актуальные данные? "
+            "Несохраненные изменения будут отброшены. "
+            "Выберите «Нет», чтобы оставить их в редакторе.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        previous = getattr(self, "_form_snapshot", None)
+        self._remember_form_state()
+        try:
+            self.refresh()
+        except Exception as exc:
+            self._form_snapshot = previous
+            self._handle_save_error("Не удалось обновить данные", exc)
+            return
+        win = self.window()
+        if hasattr(win, "set_save_status") and not self.has_unsaved_changes():
+            win.set_save_status("saved")
 
     def _clear_record_selection(self):
         blocked = self.list.blockSignals(True)
