@@ -158,8 +158,9 @@ def assistant(app, folder, output):
             raise AssertionError("Live GIS operation forbidden in UX inventory")
 
     records = []
-    repository = Repository(folder / "assistant.db")
     for state in ("initial", "populated"):
+        # MainWindow.close() closes its repository; isolate each state.
+        repository = Repository(folder / f"assistant_{state}.db")
         if state == "populated":
             org = repository.create_organization(name="Учебная УО", ogrn="0000000000000")
             house = repository.create_house(organization_id=org.id, address="Учебный дом А",
