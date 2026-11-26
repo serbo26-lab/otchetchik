@@ -156,9 +156,9 @@ class CreateReportDialog(QDialog):
         year = str(self.year.value())
         start = iso_date(self.period_start.text())
         end = iso_date(self.period_end.text())
-        if not start or start[:4] != year:
+        if not start.startswith(year + "-"):
             return "Укажите дату начала в пределах отчетного года.", self.period_start
-        if not end or end[:4] != year:
+        if not end.startswith(year + "-"):
             return "Укажите дату окончания в пределах отчетного года.", self.period_end
         if start > end:
             return "Дата окончания не может быть раньше даты начала.", self.period_end
@@ -918,22 +918,10 @@ class ReportsTab(BaseTab):
             int(self.year_filter.value()), self,
             context=f"УО: {self.company_filter.currentText()}\nДом: {self.house_filter.currentText()}",
         )
-        while dlg.exec() == QDialog.Accepted:
-            year, p_start, p_end, show_period = dlg.values()
-            if (self.company_filter.currentData(), self.house_filter.currentData()) != (cid, hid):
-                self.msg("Выбранный дом или организация изменились. Откройте создание отчета заново.")
-                return
-            # Commit the previous editor before binding a new report.
-            if not self._save_before_filter_change():
-                return
-            try:
-                rid = db.create_report(int(cid), int(hid), int(year), p_start, p_end, show_period)
-            except (ValueError, OSError, sqlite3.Error) as exc:
-                QMessageBox.warning(self, "Не удалось создать", f"Проверьте период или повторите запись.\n\n{exc}")
-                continue
-            break
-        else:
+        created = self._create_from_dialog(dlg, cid, hid)
+        if created is None:
             return
+        rid, year = created
         blocked = self.year_filter.blockSignals(True)
         try:
             self.year_filter.setValue(year)
@@ -953,6 +941,22 @@ class ReportsTab(BaseTab):
             raise ReportChangedError(
                 "Отчет изменился после открытия. Операция отменена."
             )
+
+    def _create_from_dialog(self, dlg, cid, hid):
+        while dlg.exec() == QDialog.Accepted:
+            year, p_start, p_end, show_period = dlg.values()
+            if (self.company_filter.currentData(), self.house_filter.currentData()) != (cid, hid):
+                self.msg("Выбранный дом или организация изменились. Откройте создание отчета заново.")
+                return None
+            if not self._save_before_filter_change():
+                return None
+            try:
+                rid = db.create_report(int(cid), int(hid), int(year), p_start, p_end, show_period)
+            except (ValueError, OSError, sqlite3.Error) as exc:
+                QMessageBox.warning(self, "Не удалось создать", f"Проверьте период или повторите запись.\n\n{exc}")
+                continue
+            return rid, year
+        return None
 
     def delete_report(self):
         rid = self.current_id
