@@ -23,7 +23,7 @@ jobs:
 
           query = urllib.parse.urlencode({
               "componentKeys": "serbo26-lab_otchetchik",
-              "branch": "main",
+              "pullRequest": "73",
               "resolved": "false",
               "ps": 100,
           })
@@ -36,7 +36,7 @@ jobs:
               print("Public API HTTP status:", exc.code)
               print("No authentication will be attempted.")
               raise SystemExit(1)
-          print("Audit target: main after V1.6.64 merge (3448953)")
+          print("Audit target: PR 73 V1.6.69")
           print("Total:", data.get("total", data.get("paging", {}).get("total")))
           for issue in data.get("issues", []):
               print(json.dumps({
