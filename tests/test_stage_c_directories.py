@@ -491,6 +491,88 @@ class DirectoryFlowTests(unittest.TestCase):
         self.assertTrue(work.has_unsaved_changes())
         work.refresh()
 
+    def test_property_save_and_delete_reject_stale_record(self):
+        company_id = db.execute("INSERT INTO companies(name) VALUES(?)", ("Synthetic UO",))
+        company = self.window.company_tab
+        company.refresh()
+        company.notes.setPlainText("Synthetic local edit")
+        db.execute("UPDATE companies SET report_person=? WHERE id=?", ("Synthetic external", company_id))
+        with patch.object(QMessageBox, "warning") as warning:
+            self.assertIs(company.save(refresh_after=False), False)
+            warning.assert_called_once()
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), \
+             patch.object(QMessageBox, "warning"), \
+             patch("src.uk728.property_ui.make_backup") as backup:
+            company.delete_company()
+            backup.assert_not_called()
+        self.assertEqual(db.row("SELECT report_person FROM companies WHERE id=?", (company_id,))[0],
+                         "Synthetic external")
+        self.assertEqual(company.notes.toPlainText(), "Synthetic local edit")
+        company.notes.clear()
+        company.refresh()
+        company.notes.setPlainText("Synthetic retried edit")
+        company.save(refresh_after=False)
+        company.notes.setPlainText("Synthetic second edit")
+        company.save(refresh_after=False)
+        self.assertEqual(db.row("SELECT notes FROM companies WHERE id=?", (company_id,))[0],
+                         "Synthetic second edit")
+
+        house_id = db.execute("INSERT INTO houses(company_id,address) VALUES(?,?)",
+                              (company_id, "Synthetic house"))
+        house = self.window.houses_tab
+        house.reload()
+        self.assertEqual(house.current_id, house_id)
+        house.notes.setPlainText("Synthetic pending edit")
+        db.execute("UPDATE houses SET total_area=75 WHERE id=?", (house_id,))
+        with patch.object(QMessageBox, "warning") as warning:
+            self.assertIs(house.save(refresh_after=False), False)
+            warning.assert_called_once()
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), \
+             patch.object(QMessageBox, "warning"), \
+             patch("src.uk728.property_ui.make_backup") as backup:
+            house.delete_house()
+            backup.assert_not_called()
+        self.assertEqual(db.row("SELECT total_area FROM houses WHERE id=?", (house_id,))[0], 75)
+        self.assertEqual(house.notes.toPlainText(), "Synthetic pending edit")
+        house.notes.clear()
+        house.refresh()
+        house.notes.setPlainText("Synthetic retried edit")
+        house.save(refresh_after=False)
+        self.assertEqual(db.row("SELECT notes FROM houses WHERE id=?", (house_id,))[0],
+                         "Synthetic retried edit")
+
+    def test_category_save_and_delete_reject_external_field_change(self):
+        page = self.window.categories_tab
+        parent = db.execute("INSERT INTO work_categories(name,section) VALUES(?,?)",
+                            ("Synthetic parent", "Содержание"))
+        child = db.execute("INSERT INTO work_categories(parent_id,name,section) VALUES(?,?,?)",
+                           (parent, "Synthetic child", "Содержание"))
+        page.refresh()
+        page.list.setCurrentRow(next(i for i in range(page.list.count())
+                                     if page.list.item(i).data(Qt.UserRole) == parent))
+        page.notes.setPlainText("Synthetic local edit")
+        db.execute("UPDATE work_categories SET default_price=55 WHERE id=?", (child,))
+        with patch.object(QMessageBox, "warning") as warning:
+            self.assertIs(page.save(refresh_after=False), False)
+            warning.assert_called_once()
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), \
+             patch.object(QMessageBox, "warning"), \
+             patch("src.uk728.directory_ui.make_backup") as backup:
+            page.delete_category()
+            backup.assert_not_called()
+        self.assertEqual(db.row("SELECT default_price FROM work_categories WHERE id=?", (child,))[0], 55)
+        self.assertEqual(db.row("SELECT is_active FROM work_categories WHERE id=?", (parent,))[0], 1)
+        self.assertEqual(page.notes.toPlainText(), "Synthetic local edit")
+        page.notes.clear()
+        page.refresh()
+        page.notes.setPlainText("Synthetic retried edit")
+        page.save(refresh_after=False)
+        page.notes.setPlainText("Synthetic second edit")
+        page.save(refresh_after=False)
+        self.assertEqual(db.row("SELECT default_price FROM work_categories WHERE id=?", (child,))[0], 55)
+        self.assertEqual(db.row("SELECT notes FROM work_categories WHERE id=?", (parent,))[0],
+                         "Synthetic second edit")
+
     def test_directory_validation_rejects_changes_before_saving(self):
         category = self.window.categories_tab
         category.add_category()

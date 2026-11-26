@@ -26,6 +26,20 @@ from .ui_labels import (
 )
 
 
+def _category_snapshot(conn, category_id):
+    parent = conn.execute(
+        "SELECT * FROM work_categories WHERE id=? AND parent_id IS NULL AND is_active=1",
+        (category_id,),
+    ).fetchone()
+    if parent is None:
+        return None
+    children = [dict(row) for row in conn.execute(
+        "SELECT * FROM work_categories WHERE parent_id=? AND is_active=1 ORDER BY name,id",
+        (category_id,),
+    )]
+    return dict(parent), children
+
+
 class CategoriesTab(BaseTab):
     """Справочник категорий и подкатегорий работ.
 
@@ -37,6 +51,7 @@ class CategoriesTab(BaseTab):
         super().__init__()
         self.current_id: int | None = None
         self._loaded_subcategory_ids: set[int] = set()
+        self._loaded_category_snapshot = None
         root = QHBoxLayout(self)
         splitter = QSplitter(); self.splitter = splitter; root.addWidget(splitter)
 
@@ -132,20 +147,23 @@ class CategoriesTab(BaseTab):
         next_id = item.data(Qt.UserRole) if item else None
         if not self._commit_form_before_load():
             return
-        self.current_id = next_id
-        r = db.row(CATEGORY_BY_ID_SQL, (self.current_id,)) if self.current_id else None
-        if not r:
+        snapshot = None
+        if next_id is not None:
+            with connect() as conn:
+                conn.execute("BEGIN")
+                snapshot = _category_snapshot(conn, next_id)
+        self.current_id = next_id if snapshot is not None else None
+        self._loaded_category_snapshot = snapshot
+        if snapshot is None:
+            self._loaded_subcategory_ids = set()
             self.update_form_state()
             self._remember_form_state()
             return
+        r, subcategories = snapshot
         self.update_form_state()
         self.name.setText(r["name"]); self.section.setCurrentText(r["section"] or NOT_SELECTED); self.unit.setCurrentText(r["unit"] or NOT_SELECTED)
         self.price.setText(str(r["default_price"] or "")); self.notes.setPlainText(r["notes"])
         self.sub_table.setRowCount(0)
-        subcategories = db.named_rows(
-            "SELECT * FROM work_categories WHERE parent_id=? AND is_active=1 ORDER BY name",
-            (self.current_id,),
-        )
         self._loaded_subcategory_ids = {int(sub["id"]) for sub in subcategories}
         for sub in subcategories:
             row = self.sub_table.rowCount(); self.sub_table.insertRow(row)
@@ -169,18 +187,29 @@ class CategoriesTab(BaseTab):
                 self.list.setCurrentRow(i); break
 
     def delete_category(self):
-        if not self.current_id:
+        category_id = self.current_id
+        expected = self._loaded_category_snapshot
+        if not category_id:
             return
         if QMessageBox.question(self, DELETE_QUESTION, "Удалить категорию и ее подкатегории? Справочник работ не будет удален.") == QMessageBox.Yes:
             try:
+                with connect() as conn:
+                    conn.execute("BEGIN")
+                    self._check_subcategory_context(conn, category_id, expected)
                 if make_backup("before_category_deletion") is None:
                     raise RuntimeError("Не удалось создать резервную копию.")
-                db.execute("UPDATE work_categories SET is_active=0 WHERE id=? OR parent_id=?", (self.current_id, self.current_id))
+                with connect() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    self._check_subcategory_context(conn, category_id, expected)
+                    conn.execute("UPDATE work_categories SET is_active=0 WHERE id=? OR parent_id=?", (category_id, category_id))
+                    conn.commit()
             except Exception as exc:
                 QMessageBox.warning(self, DELETE_CANCELLED, str(exc))
                 return
             # Do not clear the next category's rows or autosave the deleted one.
             self.current_id = None
+            self._loaded_category_snapshot = None
+            self._loaded_subcategory_ids = set()
             self.update_form_state()
             self._remember_form_state()
             self.refresh()
@@ -210,18 +239,12 @@ class CategoriesTab(BaseTab):
                 remaining.add(row_id)
         return remaining
 
-    def _check_subcategory_context(self, conn):
-        parent = conn.execute(
-            "SELECT 1 FROM work_categories WHERE id=? AND parent_id IS NULL AND is_active=1",
-            (self.current_id,),
-        ).fetchone()
-        current = {int(row[0]) for row in conn.execute(
-            "SELECT id FROM work_categories WHERE parent_id=? AND is_active=1",
-            (self.current_id,),
-        )}
-        if not parent or current != self._loaded_subcategory_ids:
+    def _check_subcategory_context(self, conn, category_id, expected):
+        if (self.current_id != category_id or expected is None
+                or self._loaded_category_snapshot != expected
+                or _category_snapshot(conn, category_id) != expected):
             raise ValueError(
-                "Категория или состав подкатегорий изменились после открытия формы. Запись отменена."
+                "Категория или подкатегории изменились после открытия формы. Операция отменена."
             )
 
     def _save_subcategories(self, conn, section, unit):
@@ -280,12 +303,13 @@ class CategoriesTab(BaseTab):
                     raise RuntimeError("Не удалось создать резервную копию перед удалением подкатегорий.")
             with connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                self._check_subcategory_context(conn)
+                self._check_subcategory_context(conn, self.current_id, self._loaded_category_snapshot)
                 conn.execute(
                     "UPDATE work_categories SET name=?, section=?, unit=?, default_price=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                     (self.name.text(), section, unit, to_float(self.price.text()), self.notes.toPlainText(), self.current_id),
                 )
                 new_subrows = self._save_subcategories(conn, section, unit)
+                saved_snapshot = _category_snapshot(conn, self.current_id)
                 conn.commit()
         except (ValueError, OSError, RuntimeError, sqlite3.Error) as exc:
             win = self.window()
@@ -296,6 +320,7 @@ class CategoriesTab(BaseTab):
         for row_index, new_id in new_subrows:
             self.sub_table.set_value(row_index, 0, new_id)
         self._loaded_subcategory_ids = remaining | {new_id for _, new_id in new_subrows}
+        self._loaded_category_snapshot = saved_snapshot
         self._remember_form_state()
         self.msg("Категории сохранены")
         if refresh_after:
