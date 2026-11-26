@@ -349,14 +349,32 @@ class CopyPasteTable(QTableWidget):
                           if not self.isColumnHidden(column)), None)
         if start_col is None:
             return
+        if any(len(line.split("\t")) > self.columnCount() - start_col for line in lines):
+            self._paste_warning("Вставляемые данные выходят за пределы столбцов.")
+            return
         if any(self.isRowHidden(row) for row in range(self.rowCount())):
             self._paste_visible_rows(start_row, start_col, lines)
             return
+        if not self._reserve_paste_rows(start_row + len(lines)):
+            return
         for offset, line in enumerate(lines):
-            row = start_row + offset
+            self._paste_line(start_row + offset, start_col, line)
+
+    def _paste_warning(self, reason):
+        QMessageBox.warning(self, "Вставка таблицы", reason + " Данные не изменены.")
+
+    def _reserve_paste_rows(self, end):
+        original = self.rowCount()
+        if end > original and not self.allow_paste_append:
+            self._paste_warning("Недостаточно строк. В этой таблице нельзя добавлять строки вставкой.")
+            return False
+        for row in range(original, end):
             if not self._prepare_paste_row(row):
-                break
-            self._paste_line(row, start_col, line)
+                while self.rowCount() > original:
+                    self.removeRow(self.rowCount() - 1)
+                self._paste_warning("Не удалось подготовить все необходимые строки.")
+                return False
+        return True
 
     def _paste_visible_rows(self, start_row, start_col, lines):
         visible_rows = [row for row in range(start_row, self.rowCount())
