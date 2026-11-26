@@ -243,6 +243,7 @@ class CopyPasteTable(QTableWidget):
         self.allow_context_add = True
         self.allow_context_delete = True
         self.protected_columns: set[int] = set()
+        self._delete_action_button = None
 
     def _sync_cell_tooltip(self, item):
         if item and item.toolTip() != item.text():
@@ -384,6 +385,28 @@ class CopyPasteTable(QTableWidget):
     def selected_visible_rows(self):
         return sorted({i.row() for i in self.selectedIndexes() if not self.isRowHidden(i.row())},
                       reverse=True)
+
+    def bind_delete_action(self, button):
+        """Keep the external deletion command consistent with the table menu."""
+        self._delete_action_button = button
+        self.itemSelectionChanged.connect(self.refresh_delete_action)
+        self.model().rowsRemoved.connect(self.refresh_delete_action)
+        self.model().modelReset.connect(self.refresh_delete_action)
+        self.refresh_delete_action()
+
+    def refresh_delete_action(self, *_args):
+        button = getattr(self, "_delete_action_button", None)
+        if button is None:
+            return
+        available = self.isEnabled() and bool(self.selected_visible_rows())
+        button.setEnabled(available)
+        button.setToolTip("Удалить выделенные строки." if available else
+                          "Сначала выделите видимые строки таблицы.")
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.EnabledChange:
+            self.refresh_delete_action()
 
     def delete_selected_rows(self, confirmed: bool = False):
         rows = self.selected_visible_rows()

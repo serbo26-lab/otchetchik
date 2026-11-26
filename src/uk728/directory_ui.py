@@ -109,6 +109,7 @@ class CategoriesTab(BaseTab):
         self.save_button = QPushButton("Сохранить категорию и подкатегории")
         self.save_button.clicked.connect(self.save_manually)
         subcategories.add_widget(action_panel(DELETE_ROWS_TITLE, self.delete_sub_button, purpose="danger"))
+        self.sub_table.bind_delete_action(self.delete_sub_button)
         subcategories.add_widget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
         self.form_widgets = [self.name, self.section, self.unit, self.price, self.notes, self.sub_table]
         splitter.addWidget(right)
@@ -119,7 +120,7 @@ class CategoriesTab(BaseTab):
 
     def update_form_state(self):
         has_record = self.current_id is not None
-        set_widgets_enabled(self.form_widgets + [self.add_sub_button, self.delete_sub_button, self.save_button], has_record)
+        set_widgets_enabled(self.form_widgets + [self.add_sub_button, self.save_button], has_record)
         self.delete_button.setEnabled(has_record)
         if not has_record:
             self.name.clear(); self.price.clear(); self.notes.clear(); self.sub_table.setRowCount(0)
@@ -376,6 +377,7 @@ class WorksTab(BaseTab):
         save = QPushButton("Сохранить справочник")
         save.clicked.connect(self.save_manually)
         entries.add_widget(action_panel(DELETE_ROWS_TITLE, delete, purpose="danger"))
+        self.table.bind_delete_action(delete)
         entries.add_widget(action_panel("3. Сохранение справочника", save, primary=save))
         self.reload_category_combo()
         self.refresh()
@@ -426,6 +428,7 @@ class WorksTab(BaseTab):
             self.table.setRowHidden(row, not matches)
             shown += int(matches)
         self.work_match_count.setText(f"Показано: {shown} из {self.table.rowCount()}")
+        self.table.refresh_delete_action()
 
     def _row_signature(self, row):
         return tuple(self.table.value(row, col) for col in range(1, 8))
