@@ -249,6 +249,14 @@ class CategoriesTab(BaseTab):
             conn.execute("UPDATE work_categories SET is_active=0 WHERE parent_id=?", (self.current_id,))
         return new_subrows
 
+    def _category_price_error(self):
+        problem = numeric_error(self.price.text(), "Цена / ставка категории")
+        for index in range(self.sub_table.rowCount()):
+            problem = problem or numeric_error(
+                self.sub_table.value(index, 4), f"Цена подкатегории, строка {index + 1}"
+            )
+        return problem
+
     def save(self, *_args, refresh_after: bool = True):
         if not self.current_id:
             self.msg("Нажмите «Добавить категорию», затем заполните поля и сохраните.")
@@ -261,11 +269,7 @@ class CategoriesTab(BaseTab):
             QMessageBox.warning(self, SECTION_LABEL,
                 "Выберите раздел формы: Содержание, Текущий ремонт или Управление.")
             return False
-        problem = numeric_error(self.price.text(), "Цена / ставка категории")
-        for index in range(self.sub_table.rowCount()):
-            problem = problem or numeric_error(
-                self.sub_table.value(index, 4), f"Цена подкатегории, строка {index + 1}"
-            )
+        problem = self._category_price_error()
         if problem:
             QMessageBox.warning(self, "Проверьте стоимость", problem)
             return False
