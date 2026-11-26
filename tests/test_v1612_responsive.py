@@ -10,13 +10,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtCore import Qt, QCoreApplication, QEvent
+from PySide6.QtCore import Qt, QCoreApplication, QEvent, QPoint, QPointF
+from PySide6.QtGui import QWheelEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QComboBox, QFormLayout, QScrollArea, QWidget, QPushButton
 
 from src.uk728 import db
 from src.uk728.app import MainWindow
 from src.uk728.ui_shell import ActionFlowLayout
-from src.uk728.ui_editors import CopyPasteTable
+from src.uk728.ui_editors import ClickComboBox, CopyPasteTable, SafeSpinBox
 from src.uk728.reports_ui import AddFromReferenceDialog
 from src.uk728.ui_style import apply_theme
 
@@ -221,6 +223,49 @@ class ResponsiveWindowTests(unittest.TestCase):
                 self.assertFalse(button.isEnabled())
                 self.assertIn("выделите", button.toolTip())
         self.assertIsNone(w.reports_tab.finance_table._delete_action_button)
+
+    def test_form_fields_ignore_wheel_even_after_keyboard_focus(self):
+        parent = QWidget(self.window)
+        self.addCleanup(parent.deleteLater)
+        combo = ClickComboBox(parent)
+        combo.addItems(["Первый", "Второй", "Третий"])
+        combo.setCurrentIndex(1)
+        year = SafeSpinBox(parent)
+        year.setRange(2000, 2100)
+        year.setValue(2026)
+        for field, before, read in (
+            (combo, 1, combo.currentIndex),
+            (year, 2026, year.value),
+        ):
+            with self.subTest(field=type(field).__name__):
+                field.show()
+                parent.show()
+                field.setFocus()
+                self.qt.processEvents()
+                for delta in (120, -120):
+                    event = QWheelEvent(
+                        QPointF(5, 5), QPointF(5, 5), QPoint(), QPoint(0, delta),
+                        Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+                        Qt.ScrollPhase.NoScrollPhase, False,
+                    )
+                    field.wheelEvent(event)
+                    self.assertFalse(event.isAccepted())
+                    self.assertEqual(read(), before)
+        parent.hide()
+
+    def test_form_fields_still_accept_explicit_keyboard_changes(self):
+        combo = ClickComboBox(self.window)
+        year = SafeSpinBox(self.window)
+        self.addCleanup(combo.deleteLater)
+        self.addCleanup(year.deleteLater)
+        combo.addItems(["Первый", "Второй", "Третий"])
+        combo.setCurrentIndex(1)
+        year.setRange(2000, 2100)
+        year.setValue(2026)
+        QTest.keyClick(combo, Qt.Key_Down)
+        self.assertEqual(combo.currentIndex(), 2)
+        QTest.keyClick(year, Qt.Key_Up)
+        self.assertEqual(year.value(), 2027)
 
     def test_navigating_resized_windows_does_not_lose_edits(self):
         w = self.window

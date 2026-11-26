@@ -170,11 +170,10 @@ class ClickComboBox(QComboBox):
             QTimer.singleShot(0, self.showPopup)
 
     def wheelEvent(self, event):
-        # Scrolling a form must not accidentally change its selected value.
-        if self.hasFocus():
-            super().wheelEvent(event)
-        else:
-            event.ignore()
+        # An opened list handles its own scrolling. A collapsed field must
+        # not change while the user scrolls the surrounding form, even if
+        # it retained focus from the previous edit.
+        event.ignore()
 
     def eventFilter(self, obj, event):
         if (event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton
@@ -184,13 +183,10 @@ class ClickComboBox(QComboBox):
 
 
 class SafeSpinBox(QSpinBox):
-    """Prevent accidental year changes while the user scrolls a form."""
+    """Use arrows or explicit entry; never change a value by form scrolling."""
 
     def wheelEvent(self, event):
-        if self.hasFocus():
-            super().wheelEvent(event)
-        else:
-            event.ignore()
+        event.ignore()
 
 
 class EditableComboDelegate(QStyledItemDelegate):
