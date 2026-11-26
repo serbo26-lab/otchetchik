@@ -51,6 +51,25 @@ class ReportWorkflowTests(TestCase):
         self.assertTrue(self.page.delete_report_btn.isEnabled())
         self.assertTrue(self.page.create_report_btn.isEnabled())
 
+    def test_export_controls_follow_review_and_clear_stale_results(self):
+        page = self.page
+        self.assertTrue(all(not button.isEnabled() for button in page.export_buttons.values()))
+        page.run_review()
+        self.assertTrue(all(button.isEnabled() for button in page.export_buttons.values()))
+        self.assertTrue(page.review_text.toPlainText())
+        page.notes.setPlainText("Synthetic pending review change")
+        self.assertEqual(page.review_text.toPlainText(), "")
+        self.assertTrue(all(not button.isEnabled() for button in page.export_buttons.values()))
+        page.period_start.setText("2025-12-31")
+        page.period_end.setText("2025-01-01")
+        result = page.run_review()
+        self.assertTrue(result["errors"])
+        self.assertTrue(all(not button.isEnabled() for button in page.export_buttons.values()))
+        page.period_start.setText("2025-01-01")
+        page.period_end.setText("2025-12-31")
+        self.assertFalse(page.run_review()["errors"])
+        self.assertTrue(all(button.isEnabled() for button in page.export_buttons.values()))
+
     def test_saved_review_only_and_warnings(self):
         result = self.page.run_review()
         self.assertIsNotNone(result)

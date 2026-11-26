@@ -195,6 +195,44 @@ class WorkflowV168Tests(unittest.TestCase):
         self.assertEqual(len(db.rows("SELECT id FROM report_content_items")), 0)
         self.assertIn("Запись не выполнена", page.status_label.text())
 
+    def test_explicit_house_continuation_uses_selected_house_not_old_report(self):
+        company, first, _work, _report = self.seed()
+        second = db.execute("INSERT INTO houses(company_id,address,total_area) VALUES(?,?,?)",
+                            (company, "Synthetic second house", 500))
+        second_report = db.create_report(company, second, 2026)
+        self.window.navigate(6)
+        report = self.window.reports_tab
+        report.company_filter.setCurrentIndex(report.company_filter.findData(company))
+        report.house_filter.setCurrentIndex(report.house_filter.findData(first))
+        self.window.navigate(1)
+        house = self.window.houses_tab
+        house.company_filter.setCurrentIndex(house.company_filter.findData(company))
+        house.list.setCurrentRow(next(i for i in range(house.list.count())
+                                      if house.list.item(i).data(256) == second))
+        self.window.refresh_context()
+        self.window.page_header.next_button.click()
+        self.assertIs(self.window.tabs.currentWidget(), report)
+        self.assertEqual(report.house_filter.currentData(), second)
+        self.assertEqual(report.current_id, second_report)
+        # Ordinary navigation retains the report's own house.
+        self.window.navigate(1)
+        house.list.setCurrentRow(next(i for i in range(house.list.count())
+                                      if house.list.item(i).data(256) == first))
+        self.window.navigate(6)
+        self.assertEqual(report.house_filter.currentData(), second)
+
+    def test_house_continuation_does_not_require_work_directory(self):
+        company, house_id, _work, _report = self.seed()
+        db.execute("UPDATE work_items SET is_active=0")
+        self.window.navigate(1)
+        house = self.window.houses_tab
+        house.company_filter.setCurrentIndex(house.company_filter.findData(company))
+        self.assertEqual(house.current_id, house_id)
+        self.window.refresh_context()
+        self.assertEqual(self.window.page_header.next_button.text(), "Далее: отчеты →")
+        self.window.page_header.next_button.click()
+        self.assertIs(self.window.tabs.currentWidget(), self.window.reports_tab)
+
     def test_next_action_skips_optional_templates(self):
         self.seed()
         page = self.window.works_tab

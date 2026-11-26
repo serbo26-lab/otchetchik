@@ -214,14 +214,31 @@ class ReportsTab(BaseTab):
             self.company_filter.currentData() is not None
             and self.house_filter.currentData() is not None
         )
+        self._update_export_actions()
+
+    def _update_export_actions(self):
+        snapshot = self._review_snapshot
+        if not self.current_id:
+            reason = "Сначала выберите отчет."
+        elif self._review_dirty or not snapshot or snapshot[0] != self.current_id:
+            reason = "Сначала нажмите «Проверить заполнение»."
+        elif snapshot[2]["errors"]:
+            reason = "Исправьте ошибки и выполните проверку повторно."
+        else:
+            reason = ""
+        for button in self.export_buttons.values():
+            button.setEnabled(not reason)
+            button.setToolTip(reason or button.text())
 
     def _invalidate_review(self):
         self._review_dirty = True
         self._review_snapshot = None
         if hasattr(self, "review_status"):
+            self.review_text.clear()
             self.review_status.setText(
                 "Отчет изменен. Перед выгрузкой повторите проверку."
             )
+            self._update_export_actions()
 
     def _on_report_section_changed(self, index):
         previous_index = self._report_tab_index
@@ -613,6 +630,7 @@ class ReportsTab(BaseTab):
                 self.review_status.setText(
                     f'Ошибок нет. Предупреждений: {len(result["warnings"])}.'
                 )
+            self._update_export_actions()
             return result
         except Exception as exc:
             self._invalidate_review()
@@ -766,6 +784,7 @@ class ReportsTab(BaseTab):
             self.list.setCurrentRow(0)
         else:
             self.current_id = None
+            self._invalidate_review()
             self.report_tabs.setEnabled(False)
         self._update_report_actions()
 

@@ -96,6 +96,24 @@ class MassWorkflowTests(TestCase):
         self._preview_area()
         self.assertTrue(self.ui.apply_button.isEnabled())
 
+    def test_preview_button_explains_missing_prerequisites_before_click(self):
+        self.ui._check_all(False)
+        self.ui.rate.setText("3")
+        self.assertFalse(self.ui.preview_button.isEnabled())
+        self.assertIn("дом", self.ui.status_label.text().lower())
+        self.ui._check_all(True)
+        self.ui.rate.setText("")
+        self.assertFalse(self.ui.preview_button.isEnabled())
+        self.assertTrue(self.ui.preview_button.toolTip())
+        self.ui.rate.setText("3")
+        self.assertTrue(self.ui.preview_button.isEnabled())
+        self.assertFalse(self.ui.apply_button.isEnabled())
+        self.ui.preview_button.click()
+        self.assertTrue(self.ui.apply_button.isEnabled())
+        self.ui.rate.setText("0")
+        self.assertFalse(self.ui.preview_button.isEnabled())
+        self.assertFalse(self.ui.apply_button.isEnabled())
+
     def test_explicit_house_selection_and_archived_excluded(self):
         self.assertEqual(self.ui.house_list.count(), 2)
         self.assertEqual(set(self.ui.selected_house_ids()), {self.house_1, self.house_2})
