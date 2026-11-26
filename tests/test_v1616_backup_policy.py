@@ -7,17 +7,20 @@ from __future__ import annotations
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import hashlib
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication
 
 from src.uk728 import assistant_source, db
 from src.uk728.app import MainWindow
-from src.uk728.paths import make_backup
+from src.uk728.paths import make_backup, db_path, _logical_digest
+from src.uk728.backup_restore import apply_pending_restore
 from src.uk728.report_review import inspect_report
 
 
@@ -119,6 +122,33 @@ class BackupPolicyV1616Tests(unittest.TestCase):
             db.init_db()
             self.assertIsNone(make_backup("auto"))
         self.assertEqual(len(self.backups("auto")), 1)
+
+    def test_ten_real_window_lifecycles_do_not_create_additional_database_copies(self):
+        assistant_source.synchronize(self.source, save_path=True)
+        make_backup("auto")
+        copies = set(self.backups())
+        source_digest = hashlib.sha256(self.source.read_bytes()).digest()
+        local_digest = _logical_digest(db_path())
+        for index in range(10):
+            self.assertIsNone(apply_pending_restore())
+            db.init_db()
+            self.assertTrue(assistant_source.synchronize().unchanged)
+            window = MainWindow()
+            try:
+                window.show()
+                self.app.processEvents()
+                window.navigate(index % 8)
+                window.auto_backup()
+                self.assertTrue(window.close())
+            finally:
+                window.timer.stop()
+                window.context_timer.stop()
+                window.deleteLater()
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+                self.app.processEvents()
+            self.assertEqual(set(self.backups()), copies)
+            self.assertEqual(_logical_digest(db_path()), local_digest)
+            self.assertEqual(hashlib.sha256(self.source.read_bytes()).digest(), source_digest)
 
     def test_auto_backups_follow_real_changes_and_preserve_wal(self):
         assistant_source.synchronize(self.source)
