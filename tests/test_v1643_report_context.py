@@ -66,6 +66,59 @@ class ReportContextSafetyTests(unittest.TestCase):
         self.assertEqual(db.row("SELECT notes FROM reports WHERE id=?", (self.report,))[0],
                          "Synthetic pending edit")
 
+    def test_report_deletion_rejects_changes_before_or_during_backup(self):
+        page = self.page
+        page.notes.setPlainText("Synthetic pending edit")
+        db.execute("UPDATE reports SET notes=? WHERE id=?",
+                   ("Synthetic external edit", self.report))
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), \
+             patch.object(QMessageBox, "warning") as warning, \
+             patch("src.uk728.reports_ui.make_backup") as backup:
+            page.delete_report()
+            warning.assert_called_once()
+            backup.assert_not_called()
+        self.assertEqual(page.current_id, self.report)
+        self.assertTrue(page._dirty_report)
+        self.assertEqual(page.notes.toPlainText(), "Synthetic pending edit")
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            page.save_manually()
+
+        from src.uk728.paths import make_backup
+
+        def backup_and_change_report(reason):
+            result = make_backup(reason)
+            db.execute("INSERT INTO report_repair_items(report_id,name) VALUES(?,?)",
+                       (self.report, "Synthetic external repair"))
+            return result
+
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), \
+             patch.object(QMessageBox, "warning") as warning, \
+             patch("src.uk728.reports_ui.make_backup", side_effect=backup_and_change_report):
+            page.delete_report()
+            warning.assert_called_once()
+        self.assertEqual(page.current_id, self.report)
+        self.assertIsNotNone(db.row("SELECT id FROM reports WHERE id=?", (self.report,)))
+        self.assertEqual(len(db.load_report_bundle(self.report)["repair"]), 1)
+
+    def test_report_deletion_discards_only_deleted_editor_state(self):
+        page = self.page
+        second = db.create_report(self.company, self.house, 2025,
+                                  "2025-07-01", "2025-12-31", True)
+        page.refresh()
+        page.notes.setPlainText("Synthetic unsaved deleted notes")
+        self.assertTrue(page._dirty_report)
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            page.delete_report()
+        self.assertIsNone(db.row("SELECT id FROM reports WHERE id=?", (self.report,)))
+        self.assertEqual(page.current_id, second)
+        self.assertFalse(page._dirty_report)
+        self.assertFalse(page._autosave_timer.isActive())
+        self.assertEqual(page.notes.toPlainText(), "")
+        page.notes.setPlainText("Synthetic retained report edit")
+        page.flush_autosave()
+        self.assertEqual(db.row("SELECT notes FROM reports WHERE id=?", (second,))[0],
+                         "Synthetic retained report edit")
+
     def test_report_save_rejects_external_rows_and_preserves_pending_edits(self):
         page = self.page
         page.notes.setPlainText("Synthetic pending edit")
