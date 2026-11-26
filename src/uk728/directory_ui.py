@@ -179,6 +179,8 @@ class CategoriesTab(BaseTab):
         for i in range(self.list.count()):
             if self.list.item(i).data(Qt.UserRole) == cid:
                 self.list.setCurrentRow(i); break
+        self.name.setFocus()
+        self.name.selectAll()
 
     def delete_category(self):
         category_id = self.current_id
@@ -217,6 +219,7 @@ class CategoriesTab(BaseTab):
         unit = "" if self.unit.currentText() == NOT_SELECTED else self.unit.currentText()
         vals = ["", "Новая подкатегория", section, unit, self.price.text() or "0", ""]
         for c, val in enumerate(vals): self.sub_table.set_value(row, c, val)
+        self.sub_table.focus_cell(row, 1)
 
     def _validated_subcategory_ids(self):
         remaining = set()
@@ -285,6 +288,7 @@ class CategoriesTab(BaseTab):
         if normalize_section(section, "") not in COMMON_SECTIONS:
             QMessageBox.warning(self, SECTION_LABEL,
                 "Выберите раздел формы: Содержание, Текущий ремонт или Управление.")
+            self.section.setFocus()
             return False
         problem = self._category_price_error()
         if problem:
@@ -450,20 +454,24 @@ class WorksTab(BaseTab):
         row = self.table.rowCount(); self.table.insertRow(row)
         for c, val in enumerate(["", "", "", "Новая работа", "", "усл.", "0", ""]):
             self.table.set_value(row, c, val)
-        self.table.setCurrentCell(row, 3)
-        self.table.scrollToBottom()
         self.filter_rows()
+        self.table.focus_cell(row, 3)
 
     def add_from_category(self):
         cid = self.category_combo.currentData()
         sid = self.subcategory_combo.currentData()
-        if not cid and not sid:
-            self.add_row(); return
+        if not cid:
+            self.msg("Выберите категорию или добавьте работу вручную.")
+            return
         cat = db.row(CATEGORY_BY_ID_SQL, (cid,)) if cid else None
         sub = db.row(CATEGORY_BY_ID_SQL, (sid,)) if sid else None
         source = sub or cat
-        if not source:
-            self.add_row(); return
+        if not source or not cat or not cat["is_active"] or (sid and (
+                not sub or not sub["is_active"] or sub["parent_id"] != cid)):
+            QMessageBox.warning(self, "Категория недоступна",
+                                "Категория изменилась. Выберите актуальную категорию.")
+            self.reload_category_combo()
+            return
         group_name = cat["name"] if cat else ""
         subgroup_name = sub["name"] if sub else ""
         name = subgroup_name or group_name or "Новая работа"
@@ -471,9 +479,8 @@ class WorksTab(BaseTab):
         row = self.table.rowCount(); self.table.insertRow(row)
         vals = ["", group_name, subgroup_name, name, source["section"], source["unit"], source["default_price"], source["notes"]]
         for c, val in enumerate(vals): self.table.set_value(row, c, val)
-        self.table.setCurrentCell(row, 3)
-        self.table.scrollToBottom()
         self.filter_rows()
+        self.table.focus_cell(row, 3)
 
     def _validate_work_rows(self):
         seen = set()
@@ -497,12 +504,19 @@ class WorksTab(BaseTab):
                     f"Строка {index + 1}: заполните наименование и раздел формы "
                     "(Содержание, Текущий ремонт или Управление).",
                 )
+                self._focus_work_error(index, 3 if not name.strip() else 4)
                 return False
             problem = numeric_error(self.table.value(index, 6), f"Цена работы, строка {index + 1}")
             if problem:
                 QMessageBox.warning(self, "Проверьте цену", problem)
+                self._focus_work_error(index, 6)
                 return False
         return True
+
+    def _focus_work_error(self, row, column):
+        if self.table.isRowHidden(row):
+            self.work_search.clear()
+        self.table.focus_cell(row, column)
 
     def _save_work_rows(self, conn):
         active_ids: list[int] = []

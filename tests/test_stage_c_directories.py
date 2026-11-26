@@ -338,6 +338,27 @@ class DirectoryFlowTests(unittest.TestCase):
         self.assertEqual(db.row("SELECT name FROM templates WHERE id=?", (template_id,))[0],
                          "Synthetic pending template")
 
+    def test_directory_error_reveals_filtered_row_and_focuses_field(self):
+        db.execute("INSERT INTO work_items(name,category) VALUES(?,?)",
+                   ("Synthetic visible", "Содержание"))
+        db.execute("INSERT INTO work_items(name,category) VALUES(?,?)",
+                   ("Synthetic hidden", "Содержание"))
+        page = self.window.works_tab
+        page.reload()
+        row = next(i for i in range(page.table.rowCount())
+                   if page.table.value(i, 3) == "Synthetic hidden")
+        page.table.set_value(row, 4, "")
+        page.work_search.setText("Synthetic visible")
+        self.assertTrue(page.table.isRowHidden(row))
+        with patch.object(QMessageBox, "warning") as warning:
+            self.assertIs(page.save(), False)
+        warning.assert_called_once()
+        self.assertEqual(page.work_search.text(), "")
+        self.assertEqual(page.table.currentRow(), row)
+        self.assertEqual(page.table.currentColumn(), 4)
+        page.table.set_value(row, 4, "Содержание")
+        page.save()
+
     def test_template_filters_by_section_and_prevents_duplicates(self):
         w1 = db.execute("INSERT INTO work_items(name,category,unit,default_price) VALUES(?,?,?,?)",
                         ("Уборка", "Содержание", "м²", 3))

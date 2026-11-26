@@ -183,6 +183,8 @@ class TemplatesTab(BaseTab):
         for i in range(self.list.count()):
             if self.list.item(i).data(Qt.UserRole) == tid:
                 self.list.setCurrentRow(i); break
+        self.name.setFocus()
+        self.name.selectAll()
 
     def _require_template_snapshot(self, conn, template_id, expected):
         if (self.current_id != template_id or expected is None
@@ -235,15 +237,17 @@ class TemplatesTab(BaseTab):
         for row_index in range(self.table.rowCount()):
             if self.table.value(row_index, 1) == str(wid):
                 self.msg("Эта работа уже добавлена в шаблон.")
+                self.table.focus_cell(row_index, 2)
                 self.table.selectRow(row_index)
                 return
-        r = db.row("SELECT * FROM work_items WHERE id=?", (wid,))
+        r = db.row("SELECT * FROM work_items WHERE id=? AND is_active=1", (wid,))
         if not r or normalize_section(r["category"], "") != normalize_section(self.category.currentText(), ""):
             QMessageBox.warning(self, "Раздел шаблона", "Работа не соответствует разделу выбранного шаблона.")
             return
         row = self.table.rowCount(); self.table.insertRow(row)
         vals = ["", wid, r["name"], r["unit"], r["default_price"], "0"]
         for c, val in enumerate(vals): self.table.set_value(row, c, val)
+        self.table.focus_cell(row, 5)
 
     def _validate_template_rows(self, section):
         for index in range(self.table.rowCount()):
@@ -253,6 +257,7 @@ class TemplatesTab(BaseTab):
                 )
                 if problem:
                     QMessageBox.warning(self, "Проверьте числа", problem)
+                    self.table.focus_cell(index, column)
                     return False
             wid = int(self.table.value(index, 1) or 0)
             if not wid:
@@ -264,6 +269,7 @@ class TemplatesTab(BaseTab):
                     f"Работа в строке {index + 1} относится к другому разделу. "
                     "Исправьте состав шаблона или верните прежний раздел.",
                 )
+                self.table.focus_cell(index, 2)
                 return False
         return True
 

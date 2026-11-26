@@ -298,7 +298,7 @@ class CopyPasteTable(QTableWidget):
         ranges = self.selectedRanges()
         if not ranges:
             item = self.currentItem()
-            if item:
+            if item and not self.isRowHidden(item.row()) and not self.isColumnHidden(item.column()):
                 QGuiApplication.clipboard().setText(item.text())
             return
         r = ranges[0]
@@ -328,10 +328,26 @@ class CopyPasteTable(QTableWidget):
                           if not self.isColumnHidden(column)), None)
         if start_col is None:
             return
+        if any(self.isRowHidden(row) for row in range(self.rowCount())):
+            self._paste_visible_rows(start_row, start_col, lines)
+            return
         for offset, line in enumerate(lines):
             row = start_row + offset
             if not self._prepare_paste_row(row):
                 break
+            self._paste_line(row, start_col, line)
+
+    def _paste_visible_rows(self, start_row, start_col, lines):
+        visible_rows = [row for row in range(start_row, self.rowCount())
+                        if not self.isRowHidden(row)]
+        if len(lines) > len(visible_rows):
+            QMessageBox.warning(
+                self, "Вставка таблицы",
+                "Недостаточно видимых строк. Уточните выделение или снимите фильтр. "
+                "Данные не изменены.",
+            )
+            return
+        for row, line in zip(visible_rows, lines):
             self._paste_line(row, start_col, line)
 
     def _prepare_paste_row(self, row):
@@ -355,6 +371,13 @@ class CopyPasteTable(QTableWidget):
                 continue
             self.setItem(row, col, QTableWidgetItem(value))
 
+    def focus_cell(self, row, column):
+        self.setCurrentCell(row, column)
+        item = self.item(row, column)
+        if item is not None:
+            self.scrollToItem(item)
+        self.setFocus()
+
     def selected_visible_rows(self):
         return sorted({i.row() for i in self.selectedIndexes() if not self.isRowHidden(i.row())},
                       reverse=True)
@@ -366,6 +389,7 @@ class CopyPasteTable(QTableWidget):
         if not confirmed and QMessageBox.question(
             self, DELETE_ROWS_TITLE,
             f"Удалить выбранные строки ({len(rows)})? Изменения будут сохранены при следующем сохранении формы.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         ) != QMessageBox.Yes:
             return False
         for row in rows:

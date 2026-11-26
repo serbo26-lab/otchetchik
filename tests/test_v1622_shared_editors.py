@@ -10,7 +10,7 @@ import sqlite3
 from contextlib import closing
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtGui import QGuiApplication
 
 from src.uk728 import app, ui_editors
@@ -101,6 +101,27 @@ class SharedEditorBehaviorTests(unittest.TestCase):
         table.delete_selected_rows(confirmed=True)
         self.assertEqual(table.rowCount(), 1)
         self.assertEqual(table.value(0, 0), "88")
+
+    def test_filtered_paste_targets_visible_rows_and_rejects_overflow(self):
+        table = ui_editors.CopyPasteTable(3, 2)
+        self.addCleanup(table.close)
+        table.allow_paste_append = True
+        for row, name in enumerate(("Visible A", "Hidden", "Visible B")):
+            table.set_value(row, 1, name)
+        table.setRowHidden(1, True)
+        table.setCurrentCell(0, 1)
+        clipboard = QGuiApplication.clipboard()
+        self.addCleanup(clipboard.clear)
+        clipboard.setText("Changed A\nChanged B")
+        table.paste_selection()
+        self.assertEqual([table.value(row, 1) for row in range(3)],
+                         ["Changed A", "Hidden", "Changed B"])
+        clipboard.setText("New A\nNew B\nExtra")
+        with patch.object(QMessageBox, "warning") as warning:
+            table.paste_selection()
+        warning.assert_called_once()
+        self.assertEqual([table.value(row, 1) for row in range(3)],
+                         ["Changed A", "Hidden", "Changed B"])
 
     def test_empty_table_paste_begins_at_first_visible_field(self):
         table = ui_editors.CopyPasteTable(0, 3)
