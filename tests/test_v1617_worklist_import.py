@@ -469,6 +469,27 @@ class WorkListTransferTests(unittest.TestCase):
             dialog.deleteLater()
             self.application.processEvents()
 
+    def test_dialog_selection_state_requires_units_only_for_content(self):
+        dialog = AssistantWorkListDialog(self.report_id)
+        self.addCleanup(dialog.close)
+        choice = dialog.choices[2]
+        self.assertFalse(dialog.reset.isEnabled())
+        choice.setCurrentIndex(choice.findData(CONTENT))
+        self.assertTrue(dialog.reset.isEnabled())
+        self.assertFalse(dialog.apply_button.isEnabled())
+        self.assertIn("единицу измерения", dialog.selection_hint.text())
+        dialog.table.item(2, 2).setText("шт.")
+        self.assertTrue(dialog.apply_button.isEnabled())
+        self.assertIn("содержание — 1", dialog.selection_hint.text())
+        dialog.table.item(2, 2).setText("")
+        self.assertFalse(dialog.apply_button.isEnabled())
+        choice.setCurrentIndex(choice.findData(REPAIR))
+        self.assertTrue(dialog.apply_button.isEnabled())
+        self.assertIn("текущий ремонт — 1", dialog.selection_hint.text())
+        dialog.reset.click()
+        self.assertFalse(dialog.apply_button.isEnabled())
+        self.assertFalse(dialog.reset.isEnabled())
+
     def test_dialog_requires_explicit_section_choice(self):
         dialog = AssistantWorkListDialog(self.report_id)
         try:

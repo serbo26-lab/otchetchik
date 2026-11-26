@@ -6,10 +6,11 @@ import sqlite3
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QHBoxLayout, QHeaderView, QLabel, QMessageBox,
+    QComboBox, QDialog, QHeaderView, QLabel, QMessageBox,
     QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
+from .ui_shell import ActionFlowLayout
 from .assistant_work_list import (
     SKIP, CONTENT, REPAIR,
     apply_selected, read_preview,
@@ -77,7 +78,10 @@ class AssistantWorkListDialog(QDialog):
         summary = QLabel(count_message)
         summary.setWordWrap(True)
         root.addWidget(summary)
-        controls = QHBoxLayout()
+        self.selection_hint = QLabel("")
+        self.selection_hint.setWordWrap(True)
+        root.addWidget(self.selection_hint)
+        controls = ActionFlowLayout()
         self.select_content = QPushButton("Все заполненные — в содержание")
         self.select_content.clicked.connect(self._select_all_content)
         controls.addWidget(self.select_content)
@@ -94,6 +98,7 @@ class AssistantWorkListDialog(QDialog):
         root.addLayout(controls)
         for choice in self.choices:
             choice.currentIndexChanged.connect(self._update_apply_button)
+        self.table.itemChanged.connect(self._update_apply_button)
         self._update_apply_button()
 
     def _fill_preview_table(self):
@@ -119,7 +124,7 @@ class AssistantWorkListDialog(QDialog):
         ]
         for column, value in enumerate(fields):
             cell = QTableWidgetItem(value)
-            if column != 2:
+            if column != 2 or candidate.problem or candidate.already_imported:
                 cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
             if candidate.problem:
                 cell.setToolTip(candidate.problem)
@@ -134,18 +139,44 @@ class AssistantWorkListDialog(QDialog):
         self.table.setCellWidget(row, 6, choices)
         self.choices.append(choices)
 
+    def _selection_state(self):
+        counts = {CONTENT: 0, REPAIR: 0}
+        missing = []
+        can_assign = False
+        for row, choice in enumerate(self.choices):
+            if not choice.isEnabled():
+                continue
+            section = choice.currentData()
+            unit = self.table.item(row, 2).text().strip()
+            if section in counts:
+                counts[section] += 1
+            if section == CONTENT and not unit:
+                missing.append(row)
+            if unit and section != CONTENT:
+                can_assign = True
+        return counts, missing, can_assign
+
     def _update_apply_button(self, *_args) -> None:
-        self.apply_button.setEnabled(
-            any(choice.isEnabled() and choice.currentData() != SKIP
-                for choice in self.choices)
-        )
+        counts, missing, can_assign = self._selection_state()
+        selected = sum(counts.values())
+        self.select_content.setEnabled(can_assign)
+        self.reset.setEnabled(selected > 0)
+        self.apply_button.setEnabled(selected > 0 and not missing)
+        text = f"Выбрано: содержание — {counts[CONTENT]}; текущий ремонт — {counts[REPAIR]}."
+        if missing:
+            text += " Укажите единицу измерения в строках: " + ", ".join(str(row + 1) for row in missing) + "."
+        elif not selected:
+            text += " Назначьте раздел хотя бы одной позиции."
+        self.selection_hint.setText(text)
+        self.apply_button.setToolTip(text)
 
     def _select_all_content(self) -> None:
         if QMessageBox.question(
             self, "Массовое назначение раздела",
             "Назначить все заполненные позиции разделу «Содержание»? "
             "В перечне могут быть работы текущего ремонта. "
-            "Проверьте каждую строку перед подтверждением переноса."
+            "Проверьте каждую строку перед подтверждением переноса.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         ) != QMessageBox.StandardButton.Yes:
             return
         self._set_all(CONTENT)
@@ -163,9 +194,16 @@ class AssistantWorkListDialog(QDialog):
                 continue
             idx = choice.findData(section)
             if idx >= 0:
-                choice.setCurrentIndex(idx)
+                blocked = choice.blockSignals(True)
+                try:
+                    choice.setCurrentIndex(idx)
+                finally:
+                    choice.blockSignals(blocked)
+        self._update_apply_button()
 
     def _apply(self) -> None:
+        if not self.apply_button.isEnabled():
+            return
         selections = {
             candidate.item_id: (
                 self.choices[row].currentData(),
@@ -184,7 +222,10 @@ class AssistantWorkListDialog(QDialog):
                 "Перед выгрузкой отчёта черновые строки потребуется заполнить "
                 "по документам либо удалить.\n\nПродолжить?"
             )
-            if QMessageBox.question(self, "Проверьте текущий ремонт", question) != QMessageBox.StandardButton.Yes:
+            if QMessageBox.question(
+                self, "Проверьте текущий ремонт", question,
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            ) != QMessageBox.StandardButton.Yes:
                 return
         try:
             result = apply_selected(self.preview, selections)
