@@ -15,9 +15,9 @@ class RussianButtons(QTranslator):
     def isEmpty(self):
         return False
 
-    def translate(self, context, sourceText, disambiguation=None, n=-1):
+    def translate(self, context, source_text, disambiguation=None, n=-1):
         if context in {"QPlatformTheme", "QMessageBox", "QDialogButtonBox"}:
-            return _BUTTONS.get(sourceText.replace("&", ""))
+            return _BUTTONS.get(source_text.replace("&", ""))
         # A null QString preserves other Qt translations and original text.
         return None
 
