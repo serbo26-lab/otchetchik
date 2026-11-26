@@ -250,7 +250,7 @@ class CompaniesTab(BaseTab):
                 if make_backup("before_delete_company") is None:
                     raise RuntimeError("Не удалось создать резервную копию.")
                 with connect() as conn:
-                    conn.execute("BEGIN IMMEDIATE")
+                    conn.execute(db.BEGIN_IMMEDIATE_SQL)
                     _require_record_snapshot(conn, COMPANY_RECORD_SQL, record_id, expected)
                     deleted = conn.execute(
                         "DELETE FROM companies WHERE id=? AND assistant_source_id IS NULL "
@@ -279,7 +279,7 @@ class CompaniesTab(BaseTab):
             return True
         try:
             with connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(db.BEGIN_IMMEDIATE_SQL)
                 source = _require_record_snapshot(conn, COMPANY_RECORD_SQL, self.current_id, self._loaded_record)
                 if source and source["assistant_source_id"]:
                     # Never override linked source identity through the local form.
@@ -699,7 +699,7 @@ class HousesTab(BaseTab):
                 if make_backup("before_delete_house") is None:
                     raise RuntimeError("Не удалось создать резервную копию.")
                 with connect() as conn:
-                    conn.execute("BEGIN IMMEDIATE")
+                    conn.execute(db.BEGIN_IMMEDIATE_SQL)
                     _require_record_snapshot(conn, HOUSE_RECORD_SQL, record_id, expected)
                     deleted = conn.execute(
                         "DELETE FROM houses WHERE id=? AND assistant_source_id IS NULL "
@@ -816,7 +816,7 @@ class HousesTab(BaseTab):
 
         try:
             with connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(db.BEGIN_IMMEDIATE_SQL)
                 source = _require_record_snapshot(conn, HOUSE_RECORD_SQL, self.current_id, self._loaded_record)
                 if source and source["assistant_source_id"]:
                     # No sourced identity/period/agreement or known component may be
