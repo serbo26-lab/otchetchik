@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from xml.sax.saxutils import escape
 
 from .db import load_report_bundle
 from .paths import export_dir, safe_filename
@@ -158,6 +159,9 @@ def _write_xlsx_table(ws, r, headers, data, widths_count, styles):
     for row_data in data:
         for c, value in enumerate(row_data, 1):
             cell = ws.cell(r, c, value)
+            if isinstance(value, str) and value.startswith("="):
+                # User-entered text is data, not an Excel formula.
+                cell.data_type = "s"
             cell.font = normal
             cell.border = border
             cell.alignment = Alignment(wrap_text=True, vertical="top")
@@ -216,6 +220,8 @@ def export_xlsx(report_id: int, *, bundle: dict[str, Any] | None = None) -> Path
         nonlocal r
         ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=8)
         cell = ws.cell(r, 1, text)
+        if text.startswith("="):
+            cell.data_type = "s"
         cell.font = Font(name="Arial", size=size, bold=is_bold)
         cell.alignment = Alignment(wrap_text=True, horizontal="center", vertical="center")
         ws.row_dimensions[r].height = max(18, 15 * rows)
@@ -384,7 +390,8 @@ def export_pdf(report_id: int, *, bundle: dict[str, Any] | None = None) -> Path:
     section = ParagraphStyle("SectionRU", parent=normal, fontName=font_name, fontSize=9, leading=11, spaceBefore=6, spaceAfter=4)
 
     elems = []
-    P = lambda txt, st=normal: Paragraph(str(txt).replace("\n", "<br/>"), st)
+    def P(txt, st=normal):
+        return Paragraph(escape(str(txt)).replace("\n", "<br/>"), st)
     elems += [P(REPORT_TITLE, title), P(REPORT_SUBTITLE, title), P(f"по адресу: {house.get('address','')}", title), P(f"за {report.get('year','____')} год", title)]
     line = _period_line(report)
     if line:
