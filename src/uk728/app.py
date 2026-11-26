@@ -28,6 +28,7 @@ from .backup_restore import apply_pending_restore
 from .backups_ui import BackupsTab
 from .ui_style import apply_theme
 from .ui_shell import NavigationSidebar, PageChrome, PAGES
+from .ui_workflow import recommend_next
 from .templates_ui import TemplatesTab
 from .mass_apply_ui import MassApplyTab, MassPreviewTable
 from .directory_ui import CategoriesTab, WorksTab
@@ -257,22 +258,12 @@ class MainWindow(QMainWindow):
                 self.refresh_context()
 
     def _update_next_action(self, page):
-        action = None
-        if isinstance(page, CompaniesTab) and page.current_id:
-            action = ("Далее: дома →", 1)
-        elif isinstance(page, HousesTab) and page.current_id:
-            # Manual report entry does not require a populated directory.
-            action = (NEXT_REPORTS_TEXT, 6)
-        elif isinstance(page, CategoriesTab) and page.current_id:
-            action = ("Далее: справочник работ →", 3)
-        elif isinstance(page, WorksTab) and page.table.rowCount():
-            action = (NEXT_REPORTS_TEXT, 6)
-        elif isinstance(page, TemplatesTab) and page.current_id:
-            action = (NEXT_REPORTS_TEXT, 6)
-        self._next_page = action[1] if action else None
-        self.page_header.next_button.setVisible(action is not None)
-        if action:
-            self.page_header.next_button.setText(action[0])
+        hint = recommend_next(page)
+        self._next_page = hint.destination
+        self.page_header.recommendation.setText("Следующий шаг: " + hint.text)
+        self.page_header.next_button.setVisible(hint.destination is not None)
+        if hint.destination is not None:
+            self.page_header.next_button.setText(hint.navigation_text)
 
     def navigate(self, index: int):
         if not 0 <= index < self.tabs.count():

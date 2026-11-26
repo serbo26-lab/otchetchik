@@ -206,6 +206,12 @@ class PageChrome(QFrame):
         context_row.addWidget(self.guide_button, 0, 2)
         container.addLayout(context_row)
 
+        self.recommendation = QLabel()
+        self.recommendation.setObjectName("ContextCaption")
+        self.recommendation.setWordWrap(True)
+        self.recommendation.setMinimumWidth(0)
+        container.addWidget(self.recommendation)
+
         self.guide = QLabel()
         self.guide.setObjectName("Guide")
         self.guide.setWordWrap(True)
