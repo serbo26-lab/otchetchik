@@ -16,7 +16,7 @@ from .utils import to_float
 from .template_storage import read_template_snapshot, save_template
 from .ui_components import ContentCard, action_panel, table_card, fit_table_columns
 from .ui_editors import (
-    BaseTab, ClickComboBox, CopyPasteTable, EditableComboDelegate,
+    BaseTab, EditorConflictError, ClickComboBox, CopyPasteTable, EditableComboDelegate,
     COMMON_SECTIONS, COMMON_UNITS, SECTION_CONTENT, DELETE_ROWS_TEXT,
     DELETE_ROWS_TITLE, distinct_texts, empty_record_editor, normalize_section,
     numeric_error, polish_form, restore_combo_selection, row_get,
@@ -86,7 +86,7 @@ class TemplatesTab(BaseTab):
         self.remove_item_button = QPushButton(DELETE_ROWS_TEXT)
         self.remove_item_button.clicked.connect(self.table.delete_selected_rows)
         self.save_button = QPushButton("Сохранить шаблон")
-        self.save_button.clicked.connect(self.save)
+        self.save_button.clicked.connect(self.save_manually)
         composition.add_widget(action_panel(DELETE_ROWS_TITLE, self.remove_item_button, purpose="danger"))
         composition.add_widget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
         self.editor_stack = empty_record_editor(
@@ -201,7 +201,7 @@ class TemplatesTab(BaseTab):
         if (self.current_id != template_id or expected is None
                 or self._loaded_template_snapshot != expected
                 or read_template_snapshot(conn, template_id) != expected):
-            raise ValueError(
+            raise EditorConflictError(
                 "Шаблон изменился после открытия. Операция отменена, введенные данные сохранены в форме."
             )
 
@@ -316,11 +316,7 @@ class TemplatesTab(BaseTab):
                 saved_snapshot = read_template_snapshot(conn, self.current_id)
                 conn.commit()
         except (ValueError, OSError, sqlite3.Error) as exc:
-            win = self.window()
-            if hasattr(win, "set_save_status"):
-                win.set_save_status("error")
-            QMessageBox.warning(self, "Шаблон не сохранён", str(exc))
-            return False
+            return self._handle_save_error("Шаблон не сохранён", exc)
         # Reconcile hidden row IDs even when saving before a selection change.
         for index, row_id in inserted:
             self.table.set_value(index, 0, row_id)

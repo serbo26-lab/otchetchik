@@ -15,7 +15,7 @@ from .paths import make_backup
 from .utils import to_float
 from .ui_components import ContentCard, action_panel, table_card, fit_table_columns
 from .ui_editors import (
-    BaseTab, ClickComboBox, CopyPasteTable, EditableComboDelegate,
+    BaseTab, EditorConflictError, ClickComboBox, CopyPasteTable, EditableComboDelegate,
     COMMON_SECTIONS, COMMON_UNITS, DELETE_ROWS_TEXT, DELETE_ROWS_TITLE,
     distinct_texts, normalize_section, numeric_error, polish_form,
     restore_combo_selection, selectable_label, set_widgets_enabled,
@@ -107,7 +107,7 @@ class CategoriesTab(BaseTab):
         self.delete_sub_button = QPushButton("Удалить выбранные подкатегории")
         self.delete_sub_button.clicked.connect(self.sub_table.delete_selected_rows)
         self.save_button = QPushButton("Сохранить категорию и подкатегории")
-        self.save_button.clicked.connect(self.save)
+        self.save_button.clicked.connect(self.save_manually)
         subcategories.add_widget(action_panel(DELETE_ROWS_TITLE, self.delete_sub_button, purpose="danger"))
         subcategories.add_widget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
         self.form_widgets = [self.name, self.section, self.unit, self.price, self.notes, self.sub_table]
@@ -250,7 +250,7 @@ class CategoriesTab(BaseTab):
         if (self.current_id != category_id or expected is None
                 or self._loaded_category_snapshot != expected
                 or _category_snapshot(conn, category_id) != expected):
-            raise ValueError(
+            raise EditorConflictError(
                 "Категория или подкатегории изменились после открытия формы. Операция отменена."
             )
 
@@ -319,11 +319,7 @@ class CategoriesTab(BaseTab):
                 saved_snapshot = _category_snapshot(conn, self.current_id)
                 conn.commit()
         except (ValueError, OSError, RuntimeError, sqlite3.Error) as exc:
-            win = self.window()
-            if hasattr(win, "set_save_status"):
-                win.set_save_status("error")
-            QMessageBox.warning(self, "Категория не сохранена", str(exc))
-            return False
+            return self._handle_save_error("Категория не сохранена", exc)
         for row_index, new_id in new_subrows:
             self.sub_table.set_value(row_index, 0, new_id)
         self._loaded_subcategory_ids = remaining | {new_id for _, new_id in new_subrows}
@@ -389,7 +385,7 @@ class WorksTab(BaseTab):
         delete = QPushButton(DELETE_ROWS_TEXT)
         delete.clicked.connect(self.table.delete_selected_rows)
         save = QPushButton("Сохранить справочник")
-        save.clicked.connect(self.save)
+        save.clicked.connect(self.save_manually)
         entries.add_widget(action_panel(DELETE_ROWS_TITLE, delete, purpose="danger"))
         entries.add_widget(action_panel("3. Сохранение справочника", save, primary=save))
         self.reload_category_combo()
@@ -572,17 +568,13 @@ class WorksTab(BaseTab):
                     "SELECT * FROM work_items WHERE is_active=1"
                 )}
                 if current != self._loaded_work_records:
-                    raise ValueError(
+                    raise EditorConflictError(
                         "Справочник изменился после открытия. Запись отменена, введенные данные сохранены в форме."
                     )
                 self._save_work_rows(conn)
                 conn.commit()
         except (ValueError, OSError, RuntimeError, sqlite3.Error) as exc:
-            win = self.window()
-            if hasattr(win, "set_save_status"):
-                win.set_save_status("error")
-            QMessageBox.warning(self, "Справочник не сохранен", str(exc))
-            return False
+            return self._handle_save_error("Справочник не сохранен", exc)
         # Reconcile generated IDs and the in-memory snapshot even when the
         # caller requested no refresh. Otherwise newly added rows could be
         # inserted twice on a subsequent edit/save.

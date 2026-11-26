@@ -16,7 +16,7 @@ from .signatories import SignatoryListDialog, count_signatories
 from .utils import iso_date, money, to_float, parse_date, format_date
 from .ui_components import ContentCard, action_panel
 from .ui_editors import (
-    BaseTab, ClickComboBox, clear_widgets, empty_record_editor, fill_combo,
+    BaseTab, EditorConflictError, ClickComboBox, clear_widgets, empty_record_editor, fill_combo,
     numeric_error, polish_form, selectable_label, set_widgets_enabled,
 )
 from .ui_labels import (
@@ -32,16 +32,8 @@ HOUSE_RECORD_SQL = "SELECT * FROM houses WHERE id=?"
 def _require_record_snapshot(conn, query, record_id, expected):
     record = conn.execute(query, (record_id,)).fetchone()
     if record is None or dict(record) != expected:
-        raise ValueError("Запись изменилась после открытия. Операция отменена.")
+        raise EditorConflictError("Запись изменилась после открытия. Операция отменена.")
     return record
-
-
-def _property_save_error(page, exc):
-    win = page.window()
-    if hasattr(win, "set_save_status"):
-        win.set_save_status("error")
-    QMessageBox.warning(page, "Запись не сохранена", str(exc))
-    return False
 
 
 class CompaniesTab(BaseTab):
@@ -125,7 +117,7 @@ class CompaniesTab(BaseTab):
         form_layout.addWidget(extra)
 
         self.save_button = QPushButton("Сохранить организацию")
-        self.save_button.clicked.connect(self.save)
+        self.save_button.clicked.connect(self.save_manually)
         form_layout.addWidget(action_panel("Сохранение сведений", self.save_button, primary=self.save_button))
         form_layout.addStretch()
         self.editor_stack = empty_record_editor(
@@ -313,7 +305,7 @@ class CompaniesTab(BaseTab):
                 saved = dict(conn.execute(COMPANY_RECORD_SQL, (self.current_id,)).fetchone())
                 conn.commit()
         except (ValueError, OSError, sqlite3.Error) as exc:
-            return _property_save_error(self, exc)
+            return self._handle_save_error("Запись не сохранена", exc)
         self._loaded_record = saved
         self._remember_form_state()
         self.msg("Организация сохранена")
@@ -453,7 +445,7 @@ class HousesTab(BaseTab):
         other.add_layout(extra_form)
         form_l.addWidget(other)
 
-        self.save_button = QPushButton("Сохранить дом"); self.save_button.clicked.connect(self.save)
+        self.save_button = QPushButton("Сохранить дом"); self.save_button.clicked.connect(self.save_manually)
         form_l.addWidget(action_panel("Сохранение карточки", self.save_button, primary=self.save_button))
         form_l.addStretch(1)
         self.editor_stack = empty_record_editor(
@@ -890,7 +882,7 @@ class HousesTab(BaseTab):
                 saved = dict(conn.execute(HOUSE_RECORD_SQL, (self.current_id,)).fetchone())
                 conn.commit()
         except (ValueError, OSError, sqlite3.Error) as exc:
-            return _property_save_error(self, exc)
+            return self._handle_save_error("Запись не сохранена", exc)
         self._loaded_record = saved
         self._remember_form_state()
         self.msg("Дом сохранен")
