@@ -239,18 +239,30 @@ class MainWindow(QMainWindow):
                     combo.setCurrentIndex(index)
 
     def _follow_next_action(self):
-        if self._next_page is not None:
-            self.navigate(self._next_page)
+        source = self.tabs.currentWidget()
+        self._update_next_action(source)
+        if self._next_page is None:
+            return
+        # Only an explicit continuation from a house card transfers its house.
+        # Ordinary sidebar navigation keeps the destination's independent context.
+        house_id = source.current_id if isinstance(source, HousesTab) else None
+        company_id = source.company_filter.currentData() if house_id is not None else None
+        self.navigate(self._next_page)
+        if (house_id is not None and self.tabs.currentWidget() is self.reports_tab
+                and self.reports_tab.company_filter.currentData() == company_id):
+            combo = self.reports_tab.house_filter
+            index = combo.findData(house_id)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+                self.refresh_context()
 
     def _update_next_action(self, page):
         action = None
         if isinstance(page, CompaniesTab) and page.current_id:
             action = ("Далее: дома →", 1)
         elif isinstance(page, HousesTab) and page.current_id:
-            # Categories and templates are helpful but optional once the
-            # directory is populated. Do not force users to visit them.
-            has_works = db.row("SELECT id FROM work_items WHERE is_active=1 LIMIT 1")
-            action = (NEXT_REPORTS_TEXT, 6) if has_works else ("Далее: справочник работ →", 3)
+            # Manual report entry does not require a populated directory.
+            action = (NEXT_REPORTS_TEXT, 6)
         elif isinstance(page, CategoriesTab) and page.current_id:
             action = ("Далее: справочник работ →", 3)
         elif isinstance(page, WorksTab) and page.table.rowCount():

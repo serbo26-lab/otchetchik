@@ -16,7 +16,7 @@ from .paths import make_backup
 from .utils import money
 from .mass_apply_logic import (
     ACTION_TEXT as MASS_ACTION_TEXT, OutdatedPreview as MassOutdatedPreview,
-    build_plan as build_mass_plan, apply_plan as apply_mass_plan,
+    build_plan as build_mass_plan, apply_plan as apply_mass_plan, validate_inputs,
 )
 from .ui_shell import ActionFlowLayout
 from .ui_components import ContentCard, action_panel, fit_table_columns
@@ -327,7 +327,18 @@ class MassApplyTab(BaseTab):
         self.apply_button.setEnabled(False)
         self.table.setRowCount(0)
         self.summary.clear()
-        self.status_label.setText("Параметры изменены. Рассчитайте и проверьте заново.")
+        self._update_preview_action()
+
+    def _update_preview_action(self):
+        try:
+            validate_inputs(self._inputs())
+        except ValueError as exc:
+            reason = str(exc)
+        else:
+            reason = ""
+        self.preview_button.setEnabled(not reason)
+        self.preview_button.setToolTip(reason or "Рассчитать выбранные дома без записи в базу.")
+        self.status_label.setText(reason or "Параметры изменены. Рассчитайте и проверьте заново.")
 
     def update_mode_help(self, *_):
         mode = self.mode.currentData()
