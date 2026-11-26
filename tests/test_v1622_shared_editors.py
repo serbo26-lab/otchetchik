@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication, QMessageBox, QDialogButtonBox, QTableWidgetSelectionRange
 from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtGui import QGuiApplication
 
@@ -218,16 +219,15 @@ class SharedInteractionTests(unittest.TestCase):
         table.setCurrentCell(0, 0)
 
         def click(row, modifiers):
-            point = QPointF(table.visualItemRect(table.item(row, 0)).center())
-            event = QMouseEvent(QEvent.MouseButtonPress, point, point,
-                                Qt.LeftButton, Qt.LeftButton, modifiers)
-            table.mousePressEvent(event)
+            point = table.visualItemRect(table.item(row, 0)).center()
+            QTest.mouseClick(table.viewport(), Qt.LeftButton, modifiers, point)
 
         with patch("src.uk728.ui_editors.QTimer.singleShot") as schedule:
             click(2, Qt.ControlModifier)
             self.assertEqual(table.selected_visible_rows(), [2, 0])
             schedule.assert_not_called()
-            table.setCurrentCell(0, 0)
+            click(0, Qt.NoModifier)
+            schedule.reset_mock()
             click(2, Qt.ShiftModifier)
             self.assertEqual(table.selected_visible_rows(), [2, 1, 0])
             schedule.assert_not_called()
