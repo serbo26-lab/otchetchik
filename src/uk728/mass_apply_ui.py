@@ -418,22 +418,7 @@ class MassApplyTab(BaseTab):
         self._preview_plan = plan
         self._preview_dirty = False
         for row in plan["rows"]:
-            position = self.table.rowCount()
-            self.table.insertRow(position)
-            action_text = MASS_ACTION_TEXT[row["action"]]
-            if row["action"].startswith("skip"):
-                action_text = "Пропуск: " + action_text
-            values = [
-                row["address"], money(row["area"]),
-                f'{plan["section"]} · {plan["work_name"]}',
-                str(row["report_id"]) if row["report_id"] else "Нет отчета",
-                money(row["cost"]) if not row["action"].startswith("skip") else "—",
-                money(row["price"]) if not row["action"].startswith("skip") else "—",
-                money(row["quantity"]) if not row["action"].startswith("skip") else "—",
-                action_text,
-            ]
-            for column, value in enumerate(values):
-                self.table.set_value(position, column, value)
+            self._append_preview_row(plan, row)
         # Preserve the flexible widths configured at table creation.
         data = plan["summary"]
         self.summary.setText(
@@ -452,6 +437,25 @@ class MassApplyTab(BaseTab):
             "Предпросмотр готов. Проверьте суммы и причины пропуска для каждого дома."
             if count else "Нет строк, которые можно добавить или обновить. Проверьте параметры."
         )
+
+    def _append_preview_row(self, plan, row):
+        position = self.table.rowCount()
+        self.table.insertRow(position)
+        skipped = row["action"].startswith("skip")
+        action_text = MASS_ACTION_TEXT[row["action"]]
+        if skipped:
+            action_text = "Пропуск: " + action_text
+        values = [
+            row["address"], money(row["area"]),
+            f'{plan["section"]} · {plan["work_name"]}',
+            str(row["report_id"]) if row["report_id"] else "Нет отчета",
+            money(row["cost"]) if not skipped else "—",
+            money(row["price"]) if not skipped else "—",
+            money(row["quantity"]) if not skipped else "—",
+            action_text,
+        ]
+        for column, value in enumerate(values):
+            self.table.set_value(position, column, value)
 
     def _confirmation_text(self, plan):
         summary = plan["summary"]

@@ -7,10 +7,11 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QDialog
 
 from src.uk728 import db
 from src.uk728.app import MainWindow
+from src.uk728.reports_ui import AddFromReferenceDialog
 from src.uk728.report_review import inspect_report, bundle_fingerprint
 
 
@@ -198,6 +199,64 @@ class ReportWorkflowTests(TestCase):
         self.assertEqual(saved["report"]["notes"], "Synthetic pending change")
         self.assertEqual(len(saved["content"]), 1)
         self.assertEqual(int(self.page.content_table.value(0, 0)), saved["content"][0]["id"])
+
+    def test_reference_search_and_empty_selection(self):
+        first = db.execute("INSERT INTO work_items(name,category,group_name) VALUES(?,?,?)",
+                           ("Synthetic cleaning", "Содержание", "Synthetic group"))
+        db.execute("INSERT INTO work_items(name,category) VALUES(?,?)",
+                   ("Synthetic repair", "Текущий ремонт"))
+        dialog = AddFromReferenceDialog("Содержание")
+        self.addCleanup(dialog.close)
+        self.assertGreaterEqual(dialog.combo.findData(first), 0)
+        self.assertNotIn("Synthetic repair", [dialog.combo.itemText(i) for i in range(dialog.combo.count())])
+        dialog.search.setText("not found")
+        self.assertFalse(dialog.add_button.isEnabled())
+        dialog.accept()
+        self.assertNotEqual(dialog.result(), QDialog.Accepted)
+        dialog.search.setText("synthetic group")
+        self.assertEqual(dialog.combo.count(), 1)
+        self.assertTrue(dialog.add_button.isEnabled())
+        dialog.add_button.click()
+        self.assertEqual(dialog.selected_id, first)
+
+    def test_reference_archived_during_selection_is_not_added(self):
+        wid = db.execute("INSERT INTO work_items(name,category) VALUES(?,?)",
+                         ("Synthetic work", "Содержание"))
+
+        def archive_and_accept(dialog):
+            dialog.selected_id = wid
+            db.execute("UPDATE work_items SET is_active=0 WHERE id=?", (wid,))
+            return QDialog.Accepted
+
+        with patch.object(AddFromReferenceDialog, "exec", new=archive_and_accept), \
+             patch.object(QMessageBox, "warning") as warning:
+            self.page.add_from_reference("Содержание")
+        warning.assert_called_once()
+        self.assertEqual(self.page.content_table.rowCount(), 0)
+
+    def test_template_action_requires_available_template_and_rechecks_section(self):
+        db.execute("DELETE FROM template_items")
+        db.execute("DELETE FROM templates")
+        self.page.reload_template_combo()
+        combo = self.page.content_template_combo
+        button = self.page._template_apply_buttons[combo]
+        self.assertFalse(button.isEnabled())
+        tid = db.execute("INSERT INTO templates(name,category) VALUES(?,?)",
+                         ("Synthetic template", "Содержание"))
+        self.page.reload_template_combo()
+        combo.setCurrentIndex(combo.findData(tid))
+        self.assertTrue(button.isEnabled())
+
+        def change_section(*args):
+            db.execute("UPDATE templates SET category=? WHERE id=?", ("Текущий ремонт", tid))
+            return QMessageBox.Yes
+
+        with patch.object(QMessageBox, "question", side_effect=change_section), \
+             patch.object(QMessageBox, "warning") as warning:
+            button.click()
+        warning.assert_called_once()
+        self.assertFalse(button.isEnabled())
+        self.assertEqual(self.page.content_table.rowCount(), 0)
 
     def test_duplicate_template_application_skips_existing_work(self):
         wid = db.execute(

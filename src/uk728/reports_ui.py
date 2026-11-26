@@ -47,19 +47,63 @@ class AddFromReferenceDialog(QDialog):
         self.setWindowTitle(ADD_REFERENCE_TEXT)
         self.selected_id = None
         layout = QVBoxLayout(self)
-        self.combo = ClickComboBox()
+        self.resize(620, 190)
         target = normalize_section(category, category)
-        for r in db.named_rows("SELECT * FROM work_items WHERE is_active=1 ORDER BY group_name, subgroup_name, name"):
-            if normalize_section(row_get(r, "category", ""), "") != target:
-                continue
-            self.combo.addItem(work_display(r), r["id"])
+        self.records = [
+            (work_display(r), r["id"])
+            for r in db.named_rows("SELECT * FROM work_items WHERE is_active=1 ORDER BY group_name, subgroup_name, name")
+            if normalize_section(row_get(r, "category", ""), "") == target
+        ]
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Поиск по названию или категории работы…")
+        self.search.setClearButtonEnabled(True)
+        layout.addWidget(self.search)
+        self.combo = ClickComboBox()
         layout.addWidget(self.combo)
-        btns = ActionFlowLayout(); ok = QPushButton("Добавить"); cancel = QPushButton("Отмена")
-        ok.clicked.connect(self.accept); cancel.clicked.connect(self.reject)
-        btns.addStretch(); btns.addWidget(ok); btns.addWidget(cancel); layout.addLayout(btns)
+        self.result_hint = selectable_label("")
+        layout.addWidget(self.result_hint)
+        btns = ActionFlowLayout()
+        self.add_button = QPushButton("Добавить")
+        cancel = QPushButton("Отмена")
+        self.add_button.clicked.connect(self.accept); cancel.clicked.connect(self.reject)
+        btns.addStretch(); btns.addWidget(self.add_button); btns.addWidget(cancel); layout.addLayout(btns)
+        self.search.textChanged.connect(self.filter_works)
+        self.combo.currentIndexChanged.connect(self._update_selection)
+        self.filter_works()
+        self.search.setFocus()
+
+    def filter_works(self, *_args):
+        previous = self.combo.currentData()
+        query = self.search.text().strip().casefold()
+        matches = [(title, ident) for title, ident in self.records if query in title.casefold()]
+        blocked = self.combo.blockSignals(True)
+        try:
+            self.combo.clear()
+            for title, ident in matches:
+                self.combo.addItem(title, ident)
+            index = self.combo.findData(previous)
+            if index >= 0:
+                self.combo.setCurrentIndex(index)
+        finally:
+            self.combo.blockSignals(blocked)
+        self.combo.setEnabled(bool(matches))
+        if matches:
+            self.result_hint.setText(f"Найдено работ: {len(matches)} из {len(self.records)}")
+        elif self.records:
+            self.result_hint.setText("По запросу ничего не найдено. Измените или очистите поиск.")
+        else:
+            self.result_hint.setText("В справочнике нет работ для этого раздела. Можно добавить строку вручную в отчете.")
+        self.combo.setToolTip(self.combo.currentText())
+        self._update_selection()
+
+    def _update_selection(self, *_args):
+        self.add_button.setEnabled(self.combo.currentData() is not None)
 
     def accept(self):
-        self.selected_id = self.combo.currentData()
+        selected = self.combo.currentData()
+        if selected is None:
+            return
+        self.selected_id = selected
         super().accept()
 
 
@@ -115,6 +159,7 @@ class ReportsTab(BaseTab):
         self._review_snapshot = None
         self._report_tab_index = 0
         self._last_report_filters = None
+        self._template_apply_buttons = {}
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.timeout.connect(self._autosave_current_report)
@@ -215,6 +260,14 @@ class ReportsTab(BaseTab):
             and self.house_filter.currentData() is not None
         )
         self._update_export_actions()
+        self._update_template_actions()
+
+    def _update_template_actions(self, *_args):
+        for combo, button in self._template_apply_buttons.items():
+            available = self.current_id is not None and combo.currentData() is not None
+            button.setEnabled(available)
+            button.setToolTip("Добавить строки выбранного шаблона." if available else
+                              "Выберите отчет и шаблон этого раздела.")
 
     def _update_export_actions(self):
         snapshot = self._review_snapshot
@@ -291,7 +344,8 @@ class ReportsTab(BaseTab):
             self.msg("Выделите строки, которые требуется удалить.")
             return
         if QMessageBox.question(
-            self, DELETE_ROWS_TITLE, f"Удалить из отчета выбранные строки ({count})?"
+            self, DELETE_ROWS_TITLE, f"Удалить из отчета выбранные строки ({count})?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         ) != QMessageBox.Yes:
             return
         table.delete_selected_rows(confirmed=True)
@@ -384,6 +438,8 @@ class ReportsTab(BaseTab):
         template_row.addWidget(selectable_label(TEMPLATE_LABEL)); template_row.addWidget(self.content_template_combo, 1)
         layout.addLayout(template_row)
         apply = QPushButton(APPLY_TEMPLATE_TEXT); apply.clicked.connect(lambda: self.apply_template(SECTION_CONTENT, self.content_template_combo))
+        self._template_apply_buttons[self.content_template_combo] = apply
+        self.content_template_combo.currentIndexChanged.connect(self._update_template_actions)
         add_ref = QPushButton(ADD_REFERENCE_TEXT); add_ref.clicked.connect(lambda: self.add_from_reference(SECTION_CONTENT))
         add_empty = QPushButton(ADD_ROW_TEXT); add_empty.clicked.connect(lambda: self.add_blank_report_row(SECTION_CONTENT))
         from_assistant = QPushButton("Перенести перечень из Ассистента…")
@@ -435,6 +491,8 @@ class ReportsTab(BaseTab):
         template_row.addWidget(selectable_label(TEMPLATE_LABEL)); template_row.addWidget(self.repair_template_combo, 1)
         layout.addLayout(template_row)
         apply = QPushButton(APPLY_TEMPLATE_TEXT); apply.clicked.connect(lambda: self.apply_template(SECTION_REPAIR, self.repair_template_combo))
+        self._template_apply_buttons[self.repair_template_combo] = apply
+        self.repair_template_combo.currentIndexChanged.connect(self._update_template_actions)
         add_ref = QPushButton(ADD_REFERENCE_TEXT); add_ref.clicked.connect(lambda: self.add_from_reference(SECTION_REPAIR))
         add_empty = QPushButton(ADD_ROW_TEXT); add_empty.clicked.connect(lambda: self.add_blank_report_row(SECTION_REPAIR))
         from_assistant_repair = QPushButton("Перенести перечень из Ассистента…")
@@ -492,6 +550,8 @@ class ReportsTab(BaseTab):
         template_row.addWidget(selectable_label(TEMPLATE_LABEL)); template_row.addWidget(self.management_template_combo, 1)
         layout.addLayout(template_row)
         apply = QPushButton(APPLY_TEMPLATE_TEXT); apply.clicked.connect(lambda: self.apply_template(SECTION_MANAGEMENT, self.management_template_combo))
+        self._template_apply_buttons[self.management_template_combo] = apply
+        self.management_template_combo.currentIndexChanged.connect(self._update_template_actions)
         add_ref = QPushButton(ADD_REFERENCE_TEXT); add_ref.clicked.connect(lambda: self.add_from_reference(SECTION_MANAGEMENT))
         add_empty = QPushButton(ADD_ROW_TEXT); add_empty.clicked.connect(lambda: self.add_blank_report_row(SECTION_MANAGEMENT))
         # Keep the complete template title on its own wide row. Actions
@@ -745,6 +805,7 @@ class ReportsTab(BaseTab):
             self._fill_template_combo(self.repair_template_combo, SECTION_REPAIR)
         if hasattr(self, "management_template_combo"):
             self._fill_template_combo(self.management_template_combo, SECTION_MANAGEMENT)
+        self._update_template_actions()
 
     def refresh(self):
         # Before rebuilding the report list, persist the report still on screen.
@@ -1106,16 +1167,29 @@ class ReportsTab(BaseTab):
         if not self.current_id:
             self.msg("Сначала выберите или создайте отчет.")
             return
+        report_id = self.current_id
         dlg = AddFromReferenceDialog(category, self)
-        if dlg.exec() == QDialog.Accepted and dlg.selected_id:
-            r = db.row("SELECT * FROM work_items WHERE id=?", (dlg.selected_id,))
-            price = to_float(r["default_price"])
-            if category == SECTION_CONTENT:
-                self.add_content_row({"work_item_id": r["id"], "name": r["name"], "unit": r["unit"], "unit_price": price, "plan_qty": 1, "plan_cost": price, "actual_qty": 1, "actual_cost": price, "source": REFERENCE_SOURCE})
-            elif category == SECTION_MANAGEMENT:
-                self.add_management_row({"work_item_id": r["id"], "name": r["name"], "unit": r["unit"], "unit_price": price, "qty": 1, "cost": price, "source": REFERENCE_SOURCE})
-            else:
-                self.add_repair_row({"work_item_id": r["id"], "name": r["name"], "source": REFERENCE_SOURCE})
+        if dlg.exec() != QDialog.Accepted or not dlg.selected_id:
+            return
+        if self.current_id != report_id:
+            self.msg("Отчет изменился. Повторите выбор работы.")
+            return
+        r = db.row("SELECT * FROM work_items WHERE id=? AND is_active=1", (dlg.selected_id,))
+        if not r or normalize_section(r["category"], "") != category:
+            QMessageBox.warning(self, "Работа недоступна", "Работа удалена или изменен ее раздел. Повторите выбор.")
+            return
+        self._append_reference_work(category, r)
+        table = self._template_target_table(category)
+        table.focus_cell(table.rowCount() - 1, 2)
+
+    def _append_reference_work(self, category, r):
+        price = to_float(r["default_price"])
+        if category == SECTION_CONTENT:
+            self.add_content_row({"work_item_id": r["id"], "name": r["name"], "unit": r["unit"], "unit_price": price, "plan_qty": 1, "plan_cost": price, "actual_qty": 1, "actual_cost": price, "source": REFERENCE_SOURCE})
+        elif category == SECTION_MANAGEMENT:
+            self.add_management_row({"work_item_id": r["id"], "name": r["name"], "unit": r["unit"], "unit_price": price, "qty": 1, "cost": price, "source": REFERENCE_SOURCE})
+        else:
+            self.add_repair_row({"work_item_id": r["id"], "name": r["name"], "source": REFERENCE_SOURCE})
 
     def _template_section(self, template_id: int, fallback: str) -> str:
         tr = db.row("SELECT category FROM templates WHERE id=?", (template_id,))
@@ -1180,10 +1254,26 @@ class ReportsTab(BaseTab):
         if not tid:
             self.msg("Выберите шаблон для этого раздела.")
             return
-        if QMessageBox.question(self, APPLY_TEMPLATE_TEXT, f"Добавить строки выбранного шаблона в раздел «{target_section}»?") != QMessageBox.Yes:
+        report_id = self.current_id
+        if QMessageBox.question(
+            self, APPLY_TEMPLATE_TEXT,
+            f"Добавить строки шаблона «{combo.currentText()}» в раздел «{target_section}»?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ) != QMessageBox.Yes:
             return
-        template_section = self._template_section(int(tid), target_section)
+        if self.current_id != report_id or combo.currentData() != tid:
+            self.msg("Выбор изменился. Повторите применение шаблона.")
+            return
+        template_section = self._template_section(int(tid), "")
+        if template_section != target_section:
+            QMessageBox.warning(self, "Шаблон недоступен", "Шаблон удален или изменен его раздел. Повторите выбор.")
+            self.reload_template_combo()
+            return
+        table = self._template_target_table(target_section)
+        first = table.rowCount()
         added, skipped = self._apply_template_items(tid, target_section, template_section)
+        if added:
+            table.focus_cell(first, 2)
         self.msg(f"Шаблон применен. Раздел: {target_section}. Добавлено: {added}. Пропущено: {skipped}")
 
     def _validate_numeric_tables(self):
