@@ -13,7 +13,7 @@ BASES = {
 }
 CORE = ("db.py", "exporters.py", "utils.py", "mass_apply_logic.py")
 ALLOWED = {
-    "MainWindow.set_scale",
+    "MainWindow.set_scale", "NavigationSidebar._scale_changed",
     "CompaniesTab.delete_report", "HousesTab.delete_report",
     "CategoriesTab.delete_report", "TemplatesTab.delete_report",
     "MassApplyTab._section_for_work", "MassApplyTab._target_table",
