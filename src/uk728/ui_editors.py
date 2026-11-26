@@ -424,6 +424,56 @@ class BaseTab(QWidget):
         self.current_id = selected_id
         return True
 
+    def _replace_record_list(self, records, make_item, *, auto_select=False):
+        """Rebuild a list without transient selection events or stale binding."""
+        target_id = self.current_id
+        blocked = self.list.blockSignals(True)
+        try:
+            self.list.clear()
+            select_row = -1
+            for record in records:
+                item = make_item(record)
+                item.setData(Qt.UserRole, record["id"])
+                self.list.addItem(item)
+                if record["id"] == target_id:
+                    select_row = self.list.count() - 1
+        finally:
+            self.list.blockSignals(blocked)
+        if select_row >= 0:
+            self.list.setCurrentRow(select_row)
+        elif auto_select and self.list.count():
+            self.list.setCurrentRow(0)
+        else:
+            self._load_current()
+
+    def _load_selected_record(self, populate):
+        """Only a fully populated editor may remain bound to a selected record."""
+        item = self.list.currentItem()
+        next_id = item.data(Qt.UserRole) if item else None
+        if not self._commit_form_before_load():
+            return
+        try:
+            populate(next_id)
+        except Exception as exc:
+            self.current_id = None
+            self._clear_record_selection()
+            self.update_form_state()
+            self._remember_form_state()
+            win = self.window()
+            if hasattr(win, "set_save_status"):
+                win.set_save_status("error")
+            QMessageBox.warning(self, "Не удалось открыть запись", str(exc))
+            return
+        if next_id is not None and self.current_id is None:
+            self._clear_record_selection()
+
+    def _clear_record_selection(self):
+        blocked = self.list.blockSignals(True)
+        try:
+            self.list.setCurrentRow(-1)
+        finally:
+            self.list.blockSignals(blocked)
+
     def save(self, *_args, refresh_after: bool = True) -> bool | None:
         # Intentional default hook: tabs without editable form data may
         # inherit this. Data-editing tabs override it. Keep a uniform
