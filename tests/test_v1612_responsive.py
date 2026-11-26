@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QApplication, QComboBox, QFormLayout, QScrollArea,
 from src.uk728 import db
 from src.uk728.app import MainWindow
 from src.uk728.ui_shell import ActionFlowLayout
+from src.uk728.ui_editors import CopyPasteTable
 from src.uk728.reports_ui import AddFromReferenceDialog
 from src.uk728.ui_style import apply_theme
 
@@ -179,6 +180,47 @@ class ResponsiveWindowTests(unittest.TestCase):
             self.assertEqual(form.fieldGrowthPolicy(), QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.assertIn("период управления", page.show_period.text())
         self.assertIn("полный год", page.show_period.toolTip())
+
+    def test_delete_action_requires_visible_selection_and_enabled_table(self):
+        parent = QWidget()
+        self.addCleanup(parent.close)
+        table = CopyPasteTable(2, 2, parent)
+        button = QPushButton("Удалить", parent)
+        table.set_value(0, 0, "Учебная строка A")
+        table.set_value(1, 0, "Учебная строка B")
+        table.bind_delete_action(button)
+        self.assertFalse(button.isEnabled())
+        table.setCurrentCell(0, 0)
+        self.assertTrue(button.isEnabled())
+        table.setEnabled(False)
+        self.assertFalse(button.isEnabled())
+        table.setEnabled(True)
+        self.assertTrue(button.isEnabled())
+        table.setRowHidden(0, True)
+        table.refresh_delete_action()
+        self.assertFalse(button.isEnabled())
+        table.setRowHidden(0, False)
+        table.setCurrentCell(1, 0)
+        self.assertTrue(button.isEnabled())
+        table.clearSelection()
+        self.assertFalse(button.isEnabled())
+        table.setCurrentCell(0, 0)
+        table.setRowCount(0)
+        self.assertFalse(button.isEnabled())
+
+    def test_row_delete_actions_are_bound_in_all_editable_sections(self):
+        w = self.window
+        tables = (w.categories_tab.sub_table, w.works_tab.table,
+                  w.templates_tab.table, w.reports_tab.content_table,
+                  w.reports_tab.repair_table, w.reports_tab.management_table)
+        for table in tables:
+            with self.subTest(table=table):
+                button = table._delete_action_button
+                self.assertIsNotNone(button)
+                table.clearSelection()
+                self.assertFalse(button.isEnabled())
+                self.assertIn("выделите", button.toolTip())
+        self.assertIsNone(w.reports_tab.finance_table._delete_action_button)
 
     def test_navigating_resized_windows_does_not_lose_edits(self):
         w = self.window

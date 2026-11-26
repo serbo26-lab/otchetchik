@@ -521,6 +521,7 @@ class ReportsTab(BaseTab):
         delete = QPushButton(DELETE_ROWS_TEXT)
         delete.clicked.connect(lambda: self._delete_selected_report_rows(self.content_table))
         content_card.add_widget(action_panel(DELETE_ROWS_TITLE, delete, purpose="danger"))
+        self.content_table.bind_delete_action(delete)
         self._next_report_action(layout, "Перейти к текущему ремонту", 2)
         self.report_tabs.addTab(w, "1. Содержание")
 
@@ -573,6 +574,7 @@ class ReportsTab(BaseTab):
         delete = QPushButton(DELETE_ROWS_TEXT)
         delete.clicked.connect(lambda: self._delete_selected_report_rows(self.repair_table))
         repair_card.add_widget(action_panel(DELETE_ROWS_TITLE, delete, purpose="danger"))
+        self.repair_table.bind_delete_action(delete)
         self._next_report_action(layout, "Перейти к управлению", 3)
         self.report_tabs.addTab(w, "2. Текущий ремонт")
 
@@ -634,6 +636,7 @@ class ReportsTab(BaseTab):
         delete = QPushButton(DELETE_ROWS_TEXT)
         delete.clicked.connect(lambda: self._delete_selected_report_rows(self.management_table))
         management_card.add_widget(action_panel("Удаление строк расчета", delete, purpose="danger"))
+        self.management_table.bind_delete_action(delete)
         layout.addWidget(selectable_label(
             "В официальной форме раздел 3 содержит итоговую сумму, а не внутренние строки расчета."
         ))

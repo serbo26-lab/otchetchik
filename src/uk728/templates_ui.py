@@ -88,6 +88,7 @@ class TemplatesTab(BaseTab):
         self.save_button = QPushButton("Сохранить шаблон")
         self.save_button.clicked.connect(self.save_manually)
         composition.add_widget(action_panel(DELETE_ROWS_TITLE, self.remove_item_button, purpose="danger"))
+        self.table.bind_delete_action(self.remove_item_button)
         composition.add_widget(action_panel("Завершение заполнения", self.save_button, primary=self.save_button))
         self.editor_stack = empty_record_editor(
             right, "Шаблон не выбран",
@@ -105,7 +106,7 @@ class TemplatesTab(BaseTab):
     def update_form_state(self):
         has_record = self.current_id is not None
         set_widgets_enabled(self.form_widgets + [self.work_combo, self.table,
-                            self.add_item_button, self.remove_item_button, self.save_button], has_record)
+                            self.add_item_button, self.save_button], has_record)
         self.delete_button.setEnabled(has_record)
         if hasattr(self, "editor_stack"):
             self.editor_stack.setCurrentIndex(1 if has_record else 0)
