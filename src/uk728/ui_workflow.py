@@ -117,7 +117,7 @@ def _backups(page):
     if page._checked_path is not None:
         return WorkflowHint("Копия проверена. Восстановление требуется только при необходимости.")
     if page.check_button.isEnabled():
-        return WorkflowHint("Проверьте выбранную копию. При восстановлении она будет проверена повторно.")
+        return WorkflowHint("Нажмите «Проверить выбранную» при необходимости. При восстановлении копия проверяется автоматически.")
     return WorkflowHint("Создайте копию либо выберите существующую для проверки.")
 
 
