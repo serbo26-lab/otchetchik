@@ -255,7 +255,7 @@ class BackupsTab(BaseTab):
 
     def _confirm_restore(self, source: Path):
         try:
-            result = verify_backup(source)
+            result = verify_backup(source, include_digest=True)
         except Exception as exc:
             QMessageBox.warning(self, "Копия не прошла проверку", str(exc))
             return
@@ -272,7 +272,7 @@ class BackupsTab(BaseTab):
         if answer != QMessageBox.Yes:
             return
         try:
-            stage_restore(source)
+            stage_restore(source, expected_digest=result["logical_digest"])
         except Exception as exc:
             QMessageBox.warning(self, "Восстановление не подготовлено", str(exc))
             return

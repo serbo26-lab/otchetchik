@@ -467,20 +467,40 @@ def _save_sync_metadata(conn, path, digest, save_path):
     )
 
 
+def _sync_context(conn):
+    metadata = dict(conn.execute(
+        "SELECT key,value FROM app_meta WHERE key IN (?,?)", (_CONFIG_KEY, _DIGEST_KEY)
+    ))
+    return metadata, configured_source_path(conn).resolve()
+
+
+def _require_sync_context(conn, expected):
+    if _sync_context(conn) != expected:
+        raise AssistantSourceError(
+            "Источник или состояние синхронизации изменились. Повторите обновление."
+        )
+
+
 def synchronize(source: Path | str | None = None, *, save_path: bool = False) -> SyncSummary:
     """Read source; atomically upsert only into reporting_728.db.
 
     Keep source-linked rows even if they disappear from the Assistant later:
     historical reports must never be orphaned by a refresh.
     """
-    path = Path(source) if source is not None else configured_source_path()
+    with closing(db.connect()) as conn:
+        conn.execute("BEGIN")
+        expected = _sync_context(conn)
+    metadata, configured = expected
+    path = Path(source) if source is not None else configured
     snapshot = read_source(path)
     path = path.expanduser().absolute()
     digest = _snapshot_digest(snapshot)
-    old = db.row("SELECT value FROM app_meta WHERE key=?", (_DIGEST_KEY,))
-    same_source = not save_path or configured_source_path().resolve() == path.resolve()
+    same_source = not save_path or configured == path.resolve()
     missing_start = sum(not h["management_start"].strip() for h in snapshot.houses)
-    if old is not None and old["value"] == digest and same_source:
+    if metadata.get(_DIGEST_KEY) == digest and same_source:
+        with closing(db.connect()) as conn:
+            conn.execute("BEGIN")
+            _require_sync_context(conn, expected)
         return SyncSummary(
             len(snapshot.organizations), len(snapshot.houses), 0, 0,
             snapshot.missing_area, path, len(snapshot.people),
@@ -490,11 +510,13 @@ def synchronize(source: Path | str | None = None, *, save_path: bool = False) ->
     # Only a changed import needs a pre-change safety snapshot. It protects the
     # Reporter DB, never copies the Assistant DB, and reuses an identical
     # already existing snapshot instead of producing duplicates.
-    make_backup("before_assistant_sync")
+    if make_backup("before_assistant_sync", reuse_existing=True) is None:
+        raise AssistantSourceError("Не удалось защитить локальную базу перед синхронизацией.")
     with db.connect() as conn:
         # No write to the reporting DB until the entire Assistant source
         # snapshot has been read and its identifiers validated.
         conn.execute("BEGIN IMMEDIATE")
+        _require_sync_context(conn, expected)
         mapping, new_companies = _sync_organizations(conn, snapshot.organizations)
         new_houses = _sync_houses(conn, snapshot.houses, mapping)
         _sync_people(conn, snapshot.people, mapping)

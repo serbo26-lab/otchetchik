@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .db import SCHEMA_VERSION, read_schema_version
-from .paths import data_dir, db_path, make_backup
+from .paths import data_dir, db_path, make_backup, logical_connection_digest
 
 
 # Baseline columns not provided by any existing migration. Legacy optional
@@ -85,13 +85,14 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verify_backup(path: Path) -> dict:
+def verify_backup(path: Path, *, include_digest: bool = False) -> dict:
     """Reject corruption, unrelated DBs and future unsupported schema versions."""
     source = Path(path)
     if not source.is_file():
         raise ValueError("Файл резервной копии не найден.")
     try:
         with closing(_read_only(source)) as conn:
+            conn.execute("BEGIN")
             if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                 raise ValueError("SQLite сообщает о нарушенной целостности файла.")
             tables = {
@@ -109,12 +110,16 @@ def verify_backup(path: Path) -> dict:
             companies = conn.execute("SELECT COUNT(*) FROM companies").fetchone()[0]
             houses = conn.execute("SELECT COUNT(*) FROM houses").fetchone()[0]
             reports = conn.execute("SELECT COUNT(*) FROM reports").fetchone()[0]
+            digest = logical_connection_digest(conn).hex() if include_digest else None
     except sqlite3.DatabaseError as exc:
         raise ValueError(f"Файл SQLite повреждён или не читается: {exc}") from exc
-    return {
+    details = {
         "schema_version": version, "companies": companies,
         "houses": houses, "reports": reports, "size": source.stat().st_size,
     }
+    if digest is not None:
+        details["logical_digest"] = digest
+    return details
 
 
 def _marker_path() -> Path:
@@ -146,14 +151,16 @@ def pending_restore() -> dict | None:
     return record
 
 
-def stage_restore(selected: Path) -> dict:
+def stage_restore(selected: Path, *, expected_digest: str | None = None) -> dict:
     """Snapshot the selected backup and make a durable restore request."""
     if pending_restore() is not None:
         raise RuntimeError("Восстановление уже подготовлено. Сначала отмените его.")
     source = Path(selected)
     if source.resolve() == db_path().resolve():
         raise ValueError("Нельзя выбирать открытую рабочую базу. Выберите резервную копию.")
-    details = verify_backup(source)
+    details = verify_backup(source, include_digest=True)
+    if expected_digest is not None and details["logical_digest"] != expected_digest:
+        raise ValueError("Резервная копия изменилась после подтверждения. Выберите ее повторно.")
     name = ".restore_pending_" + uuid.uuid4().hex + ".db"
     target = data_dir() / "backups" / name
     temporary = target.with_suffix(".tmp")
@@ -162,13 +169,15 @@ def stage_restore(selected: Path) -> dict:
               closing(sqlite3.connect(str(temporary), timeout=30)) as destination):
             original.backup(destination)
         os.replace(temporary, target)
-        verify_backup(target)
+        copied = verify_backup(target, include_digest=True)
+        if copied["logical_digest"] != details["logical_digest"]:
+            raise ValueError("Резервная копия изменилась во время подготовки. Повторите операцию.")
         request = {
             "snapshot": name,
             "sha256": _sha256(target),
             "selected_name": source.name,
             "created_at": datetime.now().isoformat(timespec="seconds"),
-            "summary": details,
+            "summary": copied,
         }
         marker = _marker_path()
         temporary_marker = marker.with_suffix(".tmp")
@@ -194,18 +203,22 @@ def cancel_restore() -> bool:
     return True
 
 
+def _verify_pending_snapshot(snapshot, record):
+    if not snapshot.is_file() or _sha256(snapshot) != record.get("sha256"):
+        raise ValueError("Подготовленная копия была изменена или пропала. Текущая база не затронута.")
+    expected = record.get("summary", {}).get("logical_digest")
+    details = verify_backup(snapshot, include_digest=expected is not None)
+    if expected is not None and details["logical_digest"] != expected:
+        raise ValueError("Подготовленная копия была изменена. Текущая база не затронута.")
+
+
 def apply_pending_restore() -> Path | None:
     """Call once before init_db; never replace a database opened by the GUI."""
     record = pending_restore()
     if record is None:
         return None
     snapshot = _pending_file(record)
-    if not snapshot.is_file() or _sha256(snapshot) != record.get("sha256"):
-        raise ValueError(
-            "Подготовленная копия была изменена или пропала. "
-            "Текущая база не затронута."
-        )
-    verify_backup(snapshot)
+    _verify_pending_snapshot(snapshot, record)
     # A consistent BEFORE-restore copy is mandatory even if there is an old WAL
     # containing committed data. It must be preserved by retention clean-up.
     live = db_path()
@@ -215,6 +228,7 @@ def apply_pending_restore() -> Path | None:
         if guard is None:
             raise RuntimeError("Не удалось защитить текущую базу перед восстановлением.")
         verify_backup(guard)
+    _verify_pending_snapshot(snapshot, record)
     try:
         # SQLite's online backup API manages existing WAL files correctly.
         # It is safer than replacing only .db while -wal/-shm may be present.

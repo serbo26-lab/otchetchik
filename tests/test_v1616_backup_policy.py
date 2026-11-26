@@ -69,6 +69,36 @@ class BackupPolicyV1616Tests(unittest.TestCase):
         pattern = f"reporting_728_{reason}_*.db" if reason else "reporting_728_*.db"
         return list((self.folder / "data" / "backups").glob(pattern))
 
+    def test_sync_requires_guard_but_can_reuse_identical_backup(self):
+        existing = make_backup("manual")
+        with patch("src.uk728.assistant_source.make_backup", return_value=None):
+            with self.assertRaisesRegex(assistant_source.AssistantSourceError, "защитить"):
+                assistant_source.synchronize(self.source, save_path=True)
+        self.assertEqual(db.row("SELECT COUNT(*) FROM companies")[0], 0)
+        self.assertEqual(make_backup("before_assistant_sync", reuse_existing=True), existing)
+        result = assistant_source.synchronize(self.source, save_path=True)
+        self.assertFalse(result.unchanged)
+        self.assertEqual(len(self.backups("before_assistant_sync")), 0)
+
+    def test_sync_rejects_changed_configuration_during_backup(self):
+        assistant_source.synchronize(self.source, save_path=True)
+        before = dict(db.row("SELECT * FROM companies WHERE assistant_source_id='uo-example'"))
+        with sqlite3.connect(self.source) as conn:
+            conn.execute("UPDATE management_organizations SET name='Synthetic external change'")
+        alternative = self.folder / "synthetic_other.db"
+
+        def backup_and_switch(reason, **kwargs):
+            guard = make_backup(reason, **kwargs)
+            db.execute("UPDATE app_meta SET value=? WHERE key=?",
+                       (str(alternative), "assistant_database_path"))
+            return guard
+
+        with patch("src.uk728.assistant_source.make_backup", side_effect=backup_and_switch):
+            with self.assertRaisesRegex(assistant_source.AssistantSourceError, "изменились"):
+                assistant_source.synchronize()
+        self.assertEqual(dict(db.row("SELECT * FROM companies WHERE id=?", (before["id"],))), before)
+        self.assertEqual(assistant_source.configured_source_path(), alternative)
+
     def test_ten_unchanged_launch_refreshes_make_no_new_backups(self):
         result = assistant_source.synchronize(self.source, save_path=True)
         self.assertFalse(result.unchanged)
