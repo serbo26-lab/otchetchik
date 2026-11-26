@@ -5,6 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -88,6 +89,37 @@ class BackupRestorationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "полной базой"):
             verify_backup(unrelated)
         self.assertIsNone(pending_restore())
+
+    def test_restore_rejects_source_changed_after_confirmation(self):
+        self.create_company("Synthetic original")
+        source = make_backup("manual")
+        preview = verify_backup(source, include_digest=True)
+        with closing(sqlite3.connect(source)) as conn, conn:
+            conn.execute("UPDATE companies SET name='Synthetic changed'")
+        with self.assertRaisesRegex(ValueError, "изменилась после подтверждения"):
+            stage_restore(source, expected_digest=preview["logical_digest"])
+        self.assertIsNone(pending_restore())
+        self.assertEqual(self.count_companies(), 1)
+
+    def test_restore_rechecks_staged_snapshot_after_guard_creation(self):
+        self.create_company("Synthetic original")
+        source = make_backup("manual")
+        request = stage_restore(source)
+        self.create_company("Synthetic later")
+        staged = data_dir() / "backups" / request["snapshot"]
+
+        def backup_and_change(reason):
+            guard = make_backup(reason)
+            with closing(sqlite3.connect(staged)) as conn, conn:
+                conn.execute("UPDATE companies SET name='Synthetic changed'")
+            return guard
+
+        with patch("src.uk728.backup_restore.make_backup", side_effect=backup_and_change):
+            with self.assertRaisesRegex(ValueError, "была изменена"):
+                apply_pending_restore()
+        self.assertEqual(self.count_companies(), 2)
+        self.assertIsNotNone(pending_restore())
+        cancel_restore()
 
     def test_changed_staged_file_does_not_modify_live_database(self):
         self.create_company("Актуальная")

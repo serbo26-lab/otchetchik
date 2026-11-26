@@ -50,45 +50,50 @@ def _logical_digest(path: Path) -> bytes:
     Restarting or checkpointing SQLite may change DB bytes without changing
     any report data. A logical signature also works across SQLite backups.
     """
-    digest = hashlib.sha256()
     with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro",
                                  uri=True, timeout=30)) as conn:
         conn.execute("PRAGMA query_only=ON")
-        conn.execute("BEGIN")  # One consistent WAL snapshot for the checksum.
-        schema = conn.execute(
-            "SELECT type,name,tbl_name,sql FROM sqlite_master "
-            "WHERE name NOT GLOB 'sqlite_autoindex_*' "
-            "ORDER BY type,name"
-        ).fetchall()
-        for item in schema:
-            digest.update(repr(tuple(item)).encode("utf-8"))
+        conn.execute("BEGIN")
+        return logical_connection_digest(conn)
+
+
+def logical_connection_digest(conn: sqlite3.Connection) -> bytes:
+    """Hash a consistent caller-owned SQLite snapshot."""
+    digest = hashlib.sha256()
+    schema = conn.execute(
+        "SELECT type,name,tbl_name,sql FROM sqlite_master "
+        "WHERE name NOT GLOB 'sqlite_autoindex_*' "
+        "ORDER BY type,name"
+    ).fetchall()
+    for item in schema:
+        digest.update(repr(tuple(item)).encode("utf-8"))
+        digest.update(b"\n")
+    tables = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND (name NOT GLOB 'sqlite_*' OR name='sqlite_sequence') "
+        "ORDER BY name"
+    ).fetchall()
+    for (name,) in tables:
+        escaped = name.replace('"', '""')
+        columns = conn.execute(f'PRAGMA table_info("{escaped}")').fetchall()
+        # Do not treat sqlite_sequence/app_meta rowid churn on reopening as
+        # a data change. Sort by explicit PK or all columns otherwise.
+        ordered = sorted(((int(col[5]), str(col[1])) for col in columns
+                          if col[5]), key=lambda pair: pair[0])
+        keys = [key for _, key in ordered] or [str(col[1]) for col in columns]
+        order_by = ",".join('"' + key.replace('"', '""') + '"' for key in keys)
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        query = f'SELECT * FROM "{escaped}"'
+        if order_by:
+            query += f" ORDER BY {order_by}"
+        for row in conn.execute(query):
+            digest.update(repr(tuple(row)).encode("utf-8"))
             digest.update(b"\n")
-        tables = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' "
-            "AND (name NOT GLOB 'sqlite_*' OR name='sqlite_sequence') "
-            "ORDER BY name"
-        ).fetchall()
-        for (name,) in tables:
-            escaped = name.replace('"', '""')
-            columns = conn.execute(f'PRAGMA table_info("{escaped}")').fetchall()
-            # Do not treat sqlite_sequence/app_meta rowid churn on reopening as
-            # a data change. Sort by explicit PK or all columns otherwise.
-            ordered = sorted(((int(col[5]), str(col[1])) for col in columns
-                              if col[5]), key=lambda pair: pair[0])
-            keys = [key for _, key in ordered] or [str(col[1]) for col in columns]
-            order_by = ",".join('"' + key.replace('"', '""') + '"' for key in keys)
-            digest.update(name.encode("utf-8"))
-            digest.update(b"\0")
-            query = f'SELECT * FROM "{escaped}"'
-            if order_by:
-                query += f" ORDER BY {order_by}"
-            for row in conn.execute(query):
-                digest.update(repr(tuple(row)).encode("utf-8"))
-                digest.update(b"\n")
     return digest.digest()
 
 
-def make_backup(reason: str = "auto") -> Path | None:
+def make_backup(reason: str = "auto", *, reuse_existing: bool = False) -> Path | None:
     src = db_path()
     if not src.exists():
         return None
@@ -101,7 +106,7 @@ def make_backup(reason: str = "auto") -> Path | None:
             latest = max(candidates, key=lambda p: p.stat().st_mtime_ns)
             try:
                 if _logical_digest(src) == _logical_digest(latest):
-                    return None
+                    return latest if reuse_existing else None
             except (OSError, sqlite3.DatabaseError):
                 # Never skip a protective backup on a failed comparison.
                 pass
