@@ -88,6 +88,7 @@ def empty_record_editor(
 SECTION_CONTENT = "Содержание"
 SECTION_REPAIR = "Текущий ремонт"
 SECTION_MANAGEMENT = "Управление"
+PASTE_TABLE_TITLE = "Вставка таблицы"
 DELETE_ROWS_TITLE = "Удаление строк"
 DELETE_ROWS_TEXT = "Удалить выбранные строки"
 ADD_ROW_TEXT = "Добавить строку"
@@ -348,7 +349,7 @@ class CopyPasteTable(QTableWidget):
             return
         lines = text.splitlines()
         if len(lines) > 1000:
-            QMessageBox.warning(self, "Вставка таблицы",
+            QMessageBox.warning(self, PASTE_TABLE_TITLE,
                                 "За один раз можно вставить не более 1000 строк.")
             return
         start_row = self.currentRow() if self.currentRow() >= 0 else 0
@@ -368,7 +369,7 @@ class CopyPasteTable(QTableWidget):
             self._paste_line(start_row + offset, start_col, line)
 
     def _paste_warning(self, reason):
-        QMessageBox.warning(self, "Вставка таблицы", reason + " Данные не изменены.")
+        QMessageBox.warning(self, PASTE_TABLE_TITLE, reason + " Данные не изменены.")
 
     def _reserve_paste_rows(self, end):
         original = self.rowCount()
@@ -388,7 +389,7 @@ class CopyPasteTable(QTableWidget):
                         if not self.isRowHidden(row)]
         if len(lines) > len(visible_rows):
             QMessageBox.warning(
-                self, "Вставка таблицы",
+                self, PASTE_TABLE_TITLE,
                 "Недостаточно видимых строк. Уточните выделение или снимите фильтр. "
                 "Данные не изменены.",
             )
