@@ -25,7 +25,8 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
-          ref: a78086ab362d13f186f6746054657baa5cf1d8ae
+          ref: 449b51ecfcc4810f4ba8d9839711200927f343fc
+          fetch-depth: 0
           path: candidate
           persist-credentials: false
       - uses: actions/setup-python@v5
@@ -33,6 +34,11 @@ jobs:
           python-version: '3.12'
       - name: Install only export inspection libraries
         run: python -m pip install "openpyxl>=3.1" "python-docx>=1.1" "reportlab>=4.2" "pypdf>=5,<7"
+      - name: Verify candidate history inventory
+        working-directory: candidate
+        env:
+          PYTHONUTF8: '1'
+        run: python scripts/audit_architecture_history.py
       - name: Compare declarations and all three export formats
         shell: pwsh
         env:
