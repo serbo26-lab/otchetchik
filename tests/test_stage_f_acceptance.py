@@ -221,6 +221,28 @@ class AcceptanceStageTests(unittest.TestCase):
         self.assert_section_headings_preserved(text)
         self.assertNotIn("Внутренний расчет управления", text)
 
+    def test_export_user_text_is_literal_in_word_excel_and_pdf(self):
+        labels = ("Учебная <b>работа</b>", "Учебное &lt;имя&gt;", "=1+1")
+        for position, label in enumerate(labels, 2):
+            db.execute(
+                "INSERT INTO report_content_items(report_id,name,unit,position) VALUES(?,?,?,?)",
+                (self.rid, label, "шт.", position),
+            )
+        bundle = db.load_report_bundle(self.rid)
+        workbook = load_workbook(export_xlsx(self.rid, bundle=bundle), read_only=True, data_only=True)
+        self.addCleanup(workbook.close)
+        excel_values = [cell for row in workbook.active.iter_rows(values_only=True) for cell in row]
+        document = Document(export_docx(self.rid, bundle=bundle))
+        word_values = [cell.text for table in document.tables for row in table.rows for cell in row.cells]
+        pdf = PdfReader(str(export_pdf(self.rid, bundle=bundle)))
+        pdf_text = " ".join(" ".join((page.extract_text() or "").split()) for page in pdf.pages)
+        for label in labels:
+            self.assertIn(label, excel_values)
+            self.assertIn(label, word_values)
+            self.assertIn(label, pdf_text)
+        self.assert_section_headings_preserved(pdf_text)
+        self.assertEqual(db.load_report_bundle(self.rid), bundle)
+
     def test_exports_are_separated_by_house_and_year(self):
         current = export_xlsx(self.rid)
         next_rid = db.create_report(self.org, self.other_house, 2026)
