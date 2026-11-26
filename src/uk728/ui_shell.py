@@ -41,15 +41,22 @@ class ActionFlowLayout(QLayout):
         # Command groups stay together; empty stretches must not split them.
         pass
 
+    def _layout_items(self):
+        # Qt can query a Python layout during wrapper construction/destruction.
+        # In that interval there are no Python-owned layout items to return.
+        return getattr(self, "_items", ())
+
     def count(self):
-        return len(self._items)
+        return len(self._layout_items())
 
     def itemAt(self, index):
-        return self._items[index] if 0 <= index < len(self._items) else None
+        items = self._layout_items()
+        return items[index] if 0 <= index < len(items) else None
 
     def takeAt(self, index):
-        if 0 <= index < len(self._items):
-            return self._items.pop(index)
+        items = self._layout_items()
+        if 0 <= index < len(items):
+            return items.pop(index)
         return None
 
     def expandingDirections(self):
@@ -63,7 +70,7 @@ class ActionFlowLayout(QLayout):
 
     def minimumSize(self):
         result = QSize(0, 0)
-        for item in self._items:
+        for item in self._layout_items():
             result = result.expandedTo(item.minimumSize())
         margins = self.contentsMargins()
         return result + QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
@@ -80,7 +87,7 @@ class ActionFlowLayout(QLayout):
         space = rect.adjusted(margins.left(), margins.top(), -margins.right(), -margins.bottom())
         x, y = space.x(), space.y()
         row_height = 0
-        for item in self._items:
+        for item in self._layout_items():
             if item.isEmpty():
                 continue
             hint = item.sizeHint()
@@ -127,7 +134,8 @@ class NavigationSidebar(QFrame):
         self.navigation.setObjectName("SidebarNavigation")
         self.navigation.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.navigation.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.navigation.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.navigation.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         self.navigation.setIconSize(QSize(20, 20))
         self.navigation.setSpacing(3)
         for title, _glyph, subtitle, _help in PAGES:

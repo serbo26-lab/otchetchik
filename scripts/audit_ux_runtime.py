@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
-from PySide6.QtCore import QPoint, QRect, QSettings, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QRect, QSettings, Qt
 from PySide6.QtWidgets import (
     QApplication, QWidget, QAbstractButton, QComboBox, QLineEdit, QTextEdit,
     QListWidget, QTableWidget, QSpinBox, QScrollArea, QLabel, QTabWidget,
@@ -163,6 +163,8 @@ def snapshot(root, name, theme, size, app, output, records):
                     "visible_primary": primary, "horizontal_scroll": hscroll,
                     "outside_root": overflow, "reachability": reachability,
                     "focus_chain": focus_chain})
+    # Keep completed observations even if a later state raises an exception.
+    (output / "runtime.partial.json").write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
     if size[0] in (1366, 860):
         root.grab().save(str(output / (name + "_" + theme + "_" + str(size[0]) + ".png")))
 
@@ -211,13 +213,23 @@ def reporter(app, folder, output):
                             win.refresh_context()
                             snapshot(win, f"{state}_page_{index}", theme, size, app, output, records)
                     if state == "populated" and size[0] == 1366:
-                        for dialog in (CreateReportDialog(2026, win), AddFromReferenceDialog("Содержание", win)):
-                            dialog.show()
-                            snapshot(dialog, "dialog_" + type(dialog).__name__, theme, size, app, output, records)
-                            dialog.reject()
+                        for factory in (lambda: CreateReportDialog(2026, win),
+                                        lambda: AddFromReferenceDialog("Содержание", win)):
+                            dialog = factory()
+                            try:
+                                dialog.show()
+                                snapshot(dialog, "dialog_" + type(dialog).__name__, theme, size, app, output, records)
+                            finally:
+                                dialog.reject()
+                                dialog.deleteLater()
+                                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+                                app.processEvents()
+                                del dialog
             win.close()
             win.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
             app.processEvents()
+            del win
     return records
 
 
@@ -269,7 +281,9 @@ def assistant(app, folder, output):
                         snapshot(win, f"{state}_page_{index}", theme, size, app, output, records)
             win.close()
             win.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
             app.processEvents()
+            del win
     return records
 
 
@@ -291,6 +305,7 @@ def main():
         app.setQuitOnLastWindowClosed(False)
         records = (reporter if kind == "reporter" else assistant)(app, folder, output)
         (output / "runtime.json").write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+        (output / "runtime.partial.json").unlink(missing_ok=True)
         print("RUNTIME", kind, len(records), "states", sum(len(r["controls"]) for r in records), "observations", flush=True)
 
 
