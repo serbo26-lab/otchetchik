@@ -252,8 +252,8 @@ class CopyPasteTable(QTableWidget):
         # а не только при попадании в маленькую стрелку редактора.
         idx = self.indexAt(event.position().toPoint() if hasattr(event, "position") else event.pos())
         super().mousePressEvent(event)
-        if (event.button() == Qt.LeftButton and idx.isValid()
-                and idx.flags() & Qt.ItemIsEditable
+        if (event.button() == Qt.LeftButton and event.modifiers() == Qt.NoModifier
+                and idx.isValid() and idx.flags() & Qt.ItemIsEditable
                 and isinstance(self.itemDelegateForColumn(idx.column()), EditableComboDelegate)):
             self.setCurrentCell(idx.row(), idx.column())
             QTimer.singleShot(0, lambda ix=idx: self.edit(ix))
@@ -299,13 +299,34 @@ class CopyPasteTable(QTableWidget):
             if item and not self.isRowHidden(item.row()) and not self.isColumnHidden(item.column()):
                 QGuiApplication.clipboard().setText(item.text())
             return
-        r = ranges[0]
-        columns = [col for col in range(r.leftColumn(), r.rightColumn() + 1)
-                   if not self.isColumnHidden(col)]
-        lines = [self._copy_row(row, columns)
-                 for row in range(r.topRow(), r.bottomRow() + 1)
-                 if not self.isRowHidden(row)]
+        rows, columns = self._visible_copy_rectangle(ranges)
+        if not rows or not columns:
+            return
+        lines = [self._copy_row(row, columns) for row in rows]
         QGuiApplication.clipboard().setText("\n".join(lines))
+
+    def _visible_copy_rectangle(self, ranges):
+        # TSV has no representation of unrelated selections that can be
+        # pasted back safely. Never copy only the first range silently.
+        rows = [row for row in range(min(r.topRow() for r in ranges),
+                                      max(r.bottomRow() for r in ranges) + 1)
+                if not self.isRowHidden(row)]
+        columns = [col for col in range(min(r.leftColumn() for r in ranges),
+                                        max(r.rightColumn() for r in ranges) + 1)
+                   if not self.isColumnHidden(col)]
+        if len(ranges) > 1:
+            selected = sum(1 for index in self.selectedIndexes()
+                           if not self.isRowHidden(index.row())
+                           and not self.isColumnHidden(index.column()))
+            if selected != len(rows) * len(columns):
+                QMessageBox.warning(
+                    self, "Копирование таблицы",
+                    "Выделите один прямоугольный диапазон видимых ячеек. "
+                    "Раздельные диапазоны нельзя скопировать без потери структуры. "
+                    "Буфер обмена не изменен.",
+                )
+                return [], []
+        return rows, columns
 
     def _copy_row(self, row, columns):
         values = []

@@ -10,8 +10,9 @@ import sqlite3
 from contextlib import closing
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication, QMessageBox, QDialogButtonBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QDialogButtonBox, QTableWidgetSelectionRange
 from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtGui import QGuiApplication
 
@@ -105,6 +106,24 @@ class SharedEditorBehaviorTests(unittest.TestCase):
         self.assertEqual(table.rowCount(), 1)
         self.assertEqual(table.value(0, 0), "88")
 
+    def test_copy_disjoint_ranges_does_not_silently_drop_cells(self):
+        table = ui_editors.CopyPasteTable(3, 2)
+        self.addCleanup(table.close)
+        for row in range(3):
+            table.set_value(row, 0, f"Учебная строка {row}")
+        clipboard = QGuiApplication.clipboard()
+        self.addCleanup(clipboard.clear)
+        clipboard.setText("Предыдущее содержимое")
+        table.setRangeSelected(QTableWidgetSelectionRange(0, 0, 0, 0), True)
+        table.setRangeSelected(QTableWidgetSelectionRange(2, 0, 2, 0), True)
+        with patch.object(QMessageBox, "warning") as warning:
+            table.copy_selection()
+        warning.assert_called_once()
+        self.assertEqual(clipboard.text(), "Предыдущее содержимое")
+        table.setRangeSelected(QTableWidgetSelectionRange(1, 0, 1, 0), True)
+        table.copy_selection()
+        self.assertEqual(clipboard.text(), "Учебная строка 0\nУчебная строка 1\nУчебная строка 2")
+
     def test_filtered_paste_targets_visible_rows_and_rejects_overflow(self):
         table = ui_editors.CopyPasteTable(3, 2)
         self.addCleanup(table.close)
@@ -188,6 +207,32 @@ class SharedInteractionTests(unittest.TestCase):
         self.assertEqual(message.button(QMessageBox.Yes).text().replace("&", ""), "Да")
         self.assertEqual(message.button(QMessageBox.No).text().replace("&", ""), "Нет")
         self.assertIsNone(translator.translate("OtherContext", "Save"))
+
+    def test_table_modifier_click_preserves_selection_without_opening_editor(self):
+        table = ui_editors.CopyPasteTable(3, 1)
+        self.addCleanup(table.close)
+        table.setItemDelegateForColumn(0, ui_editors.EditableComboDelegate(lambda: ["A", "B"], table))
+        for row in range(3):
+            table.set_value(row, 0, f"Учебная строка {row}")
+        table.show()
+        self.qt.processEvents()
+        table.setCurrentCell(0, 0)
+
+        def click(row, modifiers):
+            point = table.visualItemRect(table.item(row, 0)).center()
+            QTest.mouseClick(table.viewport(), Qt.LeftButton, modifiers, point)
+
+        with patch("src.uk728.ui_editors.QTimer.singleShot") as schedule:
+            click(2, Qt.ControlModifier)
+            self.assertEqual(table.selected_visible_rows(), [2, 0])
+            schedule.assert_not_called()
+            click(0, Qt.NoModifier)
+            schedule.reset_mock()
+            click(2, Qt.ShiftModifier)
+            self.assertEqual(table.selected_visible_rows(), [2, 1, 0])
+            schedule.assert_not_called()
+            click(1, Qt.NoModifier)
+            schedule.assert_called_once()
 
     def test_editable_combo_right_click_does_not_schedule_popup(self):
         combo = ui_editors.ClickComboBox()
