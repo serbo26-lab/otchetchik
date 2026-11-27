@@ -1,4 +1,5 @@
 """Synthetic marks only; no authentic signatures or seals."""
+from contextlib import closing
 import sqlite3
 import tempfile
 import unittest
@@ -49,7 +50,7 @@ class SigningStorageTests(unittest.TestCase):
         self.assertFalse(signing_store.read_signature(self.person))
 
     def test_migrate_legacy_v12_with_guard_and_preserve_existing_person(self):
-        with sqlite3.connect(paths.db_path()) as conn:
+        with closing(sqlite3.connect(paths.db_path())) as conn, conn:
             for table in ("report_signing", "organization_signing", "signatory_images"):
                 conn.execute(f"DROP TABLE {table}")
             conn.execute("UPDATE app_meta SET value='12' WHERE key='schema_version'")

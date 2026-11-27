@@ -1,4 +1,5 @@
 """Read-only source integration using only artificial image data."""
+from contextlib import closing
 import hashlib
 import json
 import sqlite3
@@ -17,7 +18,7 @@ class SigningImportTests(unittest.TestCase):
             root = Path(folder)
             source = root / "assistant.db"
             data = synthetic_image()
-            with sqlite3.connect(source) as conn:
+            with closing(sqlite3.connect(source)) as conn, conn:
                 conn.executescript("""
                     CREATE TABLE management_organizations(id TEXT PRIMARY KEY,name TEXT,ogrn TEXT);
                     CREATE TABLE houses(id TEXT PRIMARY KEY,organization_id TEXT,address TEXT);
@@ -47,7 +48,7 @@ class SigningImportTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     signing_store.save_signature(person, None)
                 self.assertEqual(hashlib.sha256(source.read_bytes()).digest(), digest)
-                with sqlite3.connect(source) as conn:
+                with closing(sqlite3.connect(source)) as conn, conn:
                     conn.execute("UPDATE act_people SET signature_settings=?", ('{"width_mm":30}',))
                     conn.execute("UPDATE act_organization_options SET stamp=NULL")
                 changed = hashlib.sha256(source.read_bytes()).digest()
