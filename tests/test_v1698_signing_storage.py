@@ -26,7 +26,7 @@ class SigningStorageTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
-        patcher = patch.object(paths, "data_dir", return_value=root)
+        patcher = patch.object(paths, "app_dir", return_value=root)
         patcher.start()
         self.addCleanup(patcher.stop)
         db.init_db()

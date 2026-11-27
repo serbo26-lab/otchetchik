@@ -36,7 +36,7 @@ class SigningImportTests(unittest.TestCase):
                 conn.execute("INSERT INTO act_organization_options VALUES(?,?,?,?,?,?)",
                              ("org", 1, 1, data, "synthetic.png", '{"size_mm":40}'))
             digest = hashlib.sha256(source.read_bytes()).digest()
-            with patch.object(paths, "data_dir", return_value=root / "local"):
+            with patch.object(paths, "app_dir", return_value=root / "local"):
                 db.init_db()
                 assistant_source.synchronize(source, save_path=True)
                 person = db.row("SELECT id FROM signatories")[0]

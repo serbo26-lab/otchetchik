@@ -25,7 +25,7 @@ class SigningWorkflowTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
-        patcher = patch.object(paths, "data_dir", return_value=self.root)
+        patcher = patch.object(paths, "app_dir", return_value=self.root)
         patcher.start()
         self.addCleanup(patcher.stop)
         db.init_db()
