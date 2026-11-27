@@ -6,7 +6,6 @@ test fails; a failing or empty module never counts as an accepted run.
 """
 from __future__ import annotations
 
-import ast
 import json
 import os
 from pathlib import Path
@@ -21,33 +20,26 @@ def command(*args, env=None):
     return subprocess.run([sys.executable, *args], cwd=ROOT, env=env, check=False).returncode
 
 
+def function_status(region):
+    """Importing a definition is not evidence of executing its body."""
+    start = region["start_line"]
+    body = set(region["executed_lines"]) | set(region["missing_lines"])
+    if not body:
+        return "no-measurable-body"
+    if body == {start}:
+        return "same-line-definition"
+    return "executed" if set(region["executed_lines"]) - {start} else "not-executed"
+
+
 def function_inventory(report):
-    """List functions whose body has no executed statement (not just definition)."""
+    """Use coverage's native qualified function regions, including nested code."""
     inventory = []
-    for filename, coverage in sorted(report["files"].items()):
-        path = ROOT / filename
-        if not path.is_file():
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
-        executed = set(coverage["executed_lines"])
-        statements = executed | set(coverage["missing_lines"])
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            body_start = node.body[0].lineno
-            # The function definition is executed on import; that does not
-            # establish that the function was called.
-            if body_start == node.lineno:
-                # A single-line function cannot be distinguished using lines.
-                status = "same-line-definition"
-            else:
-                body = {line for line in statements if body_start <= line <= node.end_lineno}
-                if not body:
-                    status = "no-measurable-body"
-                else:
-                    status = "executed" if body & executed else "not-executed"
-            inventory.append({"file": filename, "name": node.name,
-                              "line": node.lineno, "status": status})
+    for filename, file_report in sorted(report["files"].items()):
+        for name, region in sorted(file_report["functions"].items()):
+            if name:
+                inventory.append({"file": filename, "name": name,
+                                  "line": region["start_line"],
+                                  "status": function_status(region)})
     return inventory
 
 
@@ -85,8 +77,12 @@ def main():
         json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     command("-m", "coverage", "report", "--show-missing", env=env)
     print(f"Modules: {len(modules)}; failed: {failures}", flush=True)
-    print(f"Functions with no measured execution: {sum(f['status'] == 'not-executed' for f in inventory)}",
-          flush=True)
+    missing = [f for f in inventory if f["status"] == "not-executed"]
+    print(f"Functions with no measured execution: {len(missing)}", flush=True)
+    for entry in missing:
+        print(f"{entry['file']}:{entry['line']} {entry['name']}", flush=True)
+    print(f"Line coverage: {report['totals']['percent_statements_covered']:.2f}%", flush=True)
+    print(f"Branch coverage: {report['totals']['percent_branches_covered']:.2f}%", flush=True)
     return int(bool(failures))
 
 
