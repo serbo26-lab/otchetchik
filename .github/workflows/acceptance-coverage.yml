@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install application and acceptance dependencies
-        run: python -m pip install -r requirements.txt coverage
+        run: python -m pip install -r requirements.txt coverage "pypdf>=5,<7"
       - name: Run isolated modules and collect branch coverage
         run: python -m scripts.run_coverage_acceptance
       - name: Publish coverage and function inventory
