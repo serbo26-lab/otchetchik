@@ -265,10 +265,10 @@ def _read_signing_options(conn):
     rows = []
     for row in conn.execute("SELECT * FROM act_organization_options ORDER BY organization_id"):
         value = dict(row)
-        rows.append(dict(organization_id=str(value["organization_id"]),
-                         stamp=_source_image(value, "stamp"),
-                         insert_images=bool(value.get("insert_images")),
-                         customer_signature_placeholder=bool(value.get("customer_signature_placeholder"))))
+        rows.append({"organization_id": str(value["organization_id"]),
+                     "stamp": _source_image(value, "stamp"),
+                     "insert_images": bool(value.get("insert_images")),
+                     "customer_signature_placeholder": bool(value.get("customer_signature_placeholder"))})
     return tuple(rows)
 
 
@@ -510,6 +510,9 @@ def _sync_people(conn, people, mapping):
 
 
 def _sync_signing_options(conn, options, mapping):
+    present = {item["organization_id"] for item in options}
+    for source_id in mapping.keys() - present:
+        conn.execute("DELETE FROM organization_signing WHERE company_id=?", (mapping[source_id],))
     for item in options:
         stamp = item["stamp"] or {}
         signing_store.write_options(conn, mapping[item["organization_id"]], {

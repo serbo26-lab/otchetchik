@@ -47,6 +47,8 @@ class ReportSigningDialog(QDialog):
         root.addWidget(self.privacy)
         self.images = QCheckBox("Вставить сохраненные изображения подписей и печати в отчет")
         self.images.setChecked(bool(self.previous.get("insert_images", False)))
+        if options["insert_images"] and not self.previous:
+            self.images.setToolTip("В настройках УО включена вставка изображений. Подтвердите ее для этого отчета.")
         root.addWidget(self.images)
         notice = QLabel("Настройка скрывает данные только в дополнительном блоке подписантов. "
                         "Проверьте отдельно обязательные реквизиты формы и произвольный текст отчета. "

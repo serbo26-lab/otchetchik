@@ -16,6 +16,7 @@ PRIVACY_MODES = {
 }
 HIDDEN = "Данные скрыты в целях безопасности персональных данных"
 SIGNATURE_LINE = "________________"
+INVALID_PRIVACY = "Неизвестный режим скрытия реквизитов."
 
 
 def available_people(conn, report, signing_date):
@@ -31,9 +32,9 @@ def available_people(conn, report, signing_date):
         if (start and (parse_date(start) is None or parse_date(start) > day)
                 or end and (parse_date(end) is None or parse_date(end) < day)):
             continue
-        result.append(dict(id=row["id"], side="company" if row["company_id"] else "house",
-                           name=str(data.get("full_name") or ""), role=str(data.get("role") or ""),
-                           position=str(data.get("position") or ""), details=data))
+        result.append({"id": row["id"], "side": "company" if row["company_id"] else "house",
+                       "name": str(data.get("full_name") or ""), "role": str(data.get("role") or ""),
+                       "position": str(data.get("position") or ""), "details": data})
     return result
 
 
@@ -73,7 +74,20 @@ def _capture_images(conn, snapshot, company_id):
             person["image"] = _encoded_image(signing_store.read_signature(person["id"], conn))
     if privacy != "all_identity" and any(p["side"] == "company" for p in snapshot["people"]):
         options = signing_store.read_options(company_id, conn)
-        snapshot["stamp"] = _encoded_image(dict(content=options["stamp"], settings=options["stamp_settings"]))
+        snapshot["stamp"] = _encoded_image({"content": options["stamp"], "settings": options["stamp_settings"]})
+
+
+def _public_person(person, privacy, insert_images):
+    side = person["side"]
+    identity_hidden = _hidden_identity(side, privacy)
+    mark_hidden = _hidden_mark(side, privacy)
+    return {
+        "label": "Представитель УО" if side == "company" else "Представитель собственников МКД",
+        "name": HIDDEN if identity_hidden else person["name"],
+        "position": "" if identity_hidden else person["position"] or person["role"],
+        "mark": HIDDEN if mark_hidden else SIGNATURE_LINE,
+        "image": person.get("image") if insert_images and not mark_hidden else None,
+    }
 
 
 def public_block(snapshot):
@@ -82,21 +96,11 @@ def public_block(snapshot):
         return {}
     privacy = snapshot.get("privacy", "full")
     if privacy not in PRIVACY_MODES:
-        raise ValueError("Неизвестный режим скрытия реквизитов.")
-    people = []
-    for person in snapshot["people"]:
-        side = person["side"]
-        identity_hidden = _hidden_identity(side, privacy)
-        mark_hidden = _hidden_mark(side, privacy)
-        label = "Представитель УО" if side == "company" else "Представитель собственников МКД"
-        people.append(dict(label=label,
-                           name=HIDDEN if identity_hidden else person["name"],
-                           position="" if identity_hidden else person["position"] or person["role"],
-                           mark=HIDDEN if mark_hidden else SIGNATURE_LINE,
-                           image=person.get("image") if snapshot.get("insert_images") and not mark_hidden else None))
-    return dict(date=snapshot["date"], people=people,
-                stamp=snapshot.get("stamp") if snapshot.get("insert_images") and privacy != "all_identity" else None)
-
+        raise ValueError(INVALID_PRIVACY)
+    insert_images = bool(snapshot.get("insert_images"))
+    return {"date": snapshot["date"],
+            "people": [_public_person(person, privacy, insert_images) for person in snapshot["people"]],
+            "stamp": snapshot.get("stamp") if insert_images and privacy != "all_identity" else None}
 
 def verify_snapshot(bundle):
     snapshot = bundle.get("signing")
@@ -107,7 +111,7 @@ def verify_snapshot(bundle):
     if not parse_date(snapshot.get("date")) or not snapshot.get("people"):
         raise ValueError("Некорректный снимок подписантов. Повторно выберите подписантов.")
     if snapshot.get("privacy", "full") not in PRIVACY_MODES:
-        raise ValueError("Неизвестный режим скрытия реквизитов.")
+        raise ValueError(INVALID_PRIVACY)
 
 
 def _require_previous(conn, report_id, expected_snapshot):
@@ -118,7 +122,7 @@ def _require_previous(conn, report_id, expected_snapshot):
 def save_selection(report_id, signing_date, selected_ids, *, expected_context=None,
                    expected_snapshot=None, privacy="full", insert_images=False):
     if privacy not in PRIVACY_MODES:
-        raise ValueError("Неизвестный режим скрытия реквизитов.")
+        raise ValueError(INVALID_PRIVACY)
     day = iso_date(signing_date)
     if not day:
         raise ValueError("Укажите корректную дату подписания.")
@@ -137,8 +141,8 @@ def save_selection(report_id, signing_date, selected_ids, *, expected_context=No
         available = {person["id"]: person for person in available_people(conn, report, day)}
         if any(ident not in available for ident in ids):
             raise ValueError("Подписант не относится к отчету или не уполномочен на указанную дату.")
-        snapshot = dict(date=day, context=context, people=[available[ident] for ident in ids],
-                        privacy=privacy, insert_images=bool(insert_images))
+        snapshot = {"date": day, "context": context, "people": [available[ident] for ident in ids],
+                    "privacy": privacy, "insert_images": bool(insert_images)}
         _capture_images(conn, snapshot, report["company_id"])
         conn.execute("""INSERT INTO report_signing(report_id,snapshot_json) VALUES(?,?)
             ON CONFLICT(report_id) DO UPDATE SET snapshot_json=excluded.snapshot_json
