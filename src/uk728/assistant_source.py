@@ -548,7 +548,7 @@ def synchronize(source: Path | str | None = None, *, save_path: bool = False) ->
     # already existing snapshot instead of producing duplicates.
     if make_backup("before_assistant_sync", reuse_existing=True) is None:
         raise AssistantSourceError("Не удалось защитить локальную базу перед синхронизацией.")
-    with db.connect() as conn:
+    with closing(db.connect()) as conn, conn:
         # No write to the reporting DB until the entire Assistant source
         # snapshot has been read and its identifiers validated.
         conn.execute("BEGIN IMMEDIATE")
