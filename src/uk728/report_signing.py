@@ -1,13 +1,21 @@
 """Explicit selection of report signatories, with a local historical snapshot."""
 from __future__ import annotations
 
+import base64
 import json
 from contextlib import closing
 
-from . import db
+from . import db, signing_store
 from .utils import iso_date, parse_date
 
-OWNER_FIELDS = ("company_id", "house_id")
+PRIVACY_MODES = {
+    "full": "Полные реквизиты",
+    "house_mark": "Скрыть подписи представителей МКД, сохранить ФИО",
+    "house_identity": "Скрыть ФИО, сведения и подписи представителей МКД",
+    "all_identity": "Скрыть персональные реквизиты и изображения всех подписантов",
+}
+HIDDEN = "Данные скрыты в целях безопасности персональных данных"
+SIGNATURE_LINE = "________________"
 
 
 def available_people(conn, report, signing_date):
@@ -41,7 +49,59 @@ def report_context(report):
     return {key: report[key] for key in ("company_id", "house_id", "year", "period_start", "period_end")}
 
 
-def save_selection(report_id, signing_date, selected_ids, *, expected_context=None):
+def _encoded_image(record):
+    if not record.get("content"):
+        return None
+    return {"content": base64.b64encode(record["content"]).decode("ascii"),
+            "settings": record["settings"]}
+
+
+def _hidden_identity(side, privacy):
+    return privacy == "all_identity" or (side == "house" and privacy == "house_identity")
+
+
+def _hidden_mark(side, privacy):
+    return _hidden_identity(side, privacy) or (side == "house" and privacy == "house_mark")
+
+
+def _capture_images(conn, snapshot, company_id):
+    if not snapshot["insert_images"]:
+        return
+    privacy = snapshot["privacy"]
+    for person in snapshot["people"]:
+        if not _hidden_mark(person["side"], privacy):
+            person["image"] = _encoded_image(signing_store.read_signature(person["id"], conn))
+    if privacy != "all_identity" and any(p["side"] == "company" for p in snapshot["people"]):
+        options = signing_store.read_options(company_id, conn)
+        snapshot["stamp"] = _encoded_image(dict(content=options["stamp"], settings=options["stamp_settings"]))
+
+
+def public_block(snapshot):
+    """Allowlist output fields; hidden personal data and images never enter renderers."""
+    if not snapshot:
+        return {}
+    privacy = snapshot.get("privacy", "full")
+    if privacy not in PRIVACY_MODES:
+        raise ValueError("Неизвестный режим скрытия реквизитов.")
+    people = []
+    for person in snapshot["people"]:
+        side = person["side"]
+        identity_hidden = _hidden_identity(side, privacy)
+        mark_hidden = _hidden_mark(side, privacy)
+        label = "Представитель УО" if side == "company" else "Представитель собственников МКД"
+        people.append(dict(label=label,
+                           name=HIDDEN if identity_hidden else person["name"],
+                           position="" if identity_hidden else person["position"] or person["role"],
+                           mark=HIDDEN if mark_hidden else SIGNATURE_LINE,
+                           image=person.get("image") if snapshot.get("insert_images") and not mark_hidden else None))
+    return dict(date=snapshot["date"], people=people,
+                stamp=snapshot.get("stamp") if snapshot.get("insert_images") and privacy != "all_identity" else None)
+
+
+def save_selection(report_id, signing_date, selected_ids, *, expected_context=None,
+                   privacy="full", insert_images=False):
+    if privacy not in PRIVACY_MODES:
+        raise ValueError("Неизвестный режим скрытия реквизитов.")
     day = iso_date(signing_date)
     if not day:
         raise ValueError("Укажите корректную дату подписания.")
@@ -59,7 +119,9 @@ def save_selection(report_id, signing_date, selected_ids, *, expected_context=No
         available = {person["id"]: person for person in available_people(conn, report, day)}
         if any(ident not in available for ident in ids):
             raise ValueError("Подписант не относится к отчету или не уполномочен на указанную дату.")
-        snapshot = dict(date=day, context=context, people=[available[ident] for ident in ids])
+        snapshot = dict(date=day, context=context, people=[available[ident] for ident in ids],
+                        privacy=privacy, insert_images=bool(insert_images))
+        _capture_images(conn, snapshot, report["company_id"])
         conn.execute("""INSERT INTO report_signing(report_id,snapshot_json) VALUES(?,?)
             ON CONFLICT(report_id) DO UPDATE SET snapshot_json=excluded.snapshot_json
             WHERE snapshot_json<>excluded.snapshot_json""",
