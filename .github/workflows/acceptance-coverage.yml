@@ -1,0 +1,64 @@
+name: Automated acceptance coverage
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: acceptance-coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install application and acceptance dependencies
+        run: python -m pip install -r requirements.txt "coverage>=7.13.3,<8" "pypdf>=5,<7"
+      - name: Run isolated modules and collect branch coverage
+        run: python -m scripts.run_coverage_acceptance
+      - name: Publish coverage and function inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-coverage
+          path: |
+            coverage-results/coverage.xml
+            coverage-results/coverage.json
+            coverage-results/function-inventory.json
+          if-no-files-found: error
+
+  sonar-diagnostics:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Read public Sonar issue details
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          params = dict(componentKeys="serbo26-lab_otchetchik",
+                        pullRequest=os.environ["PR_NUMBER"], resolved="false", ps=100)
+          url = "https://sonarcloud.io/api/issues/search?" + urllib.parse.urlencode(params)
+          with urllib.request.urlopen(url, timeout=30) as response:
+              data = json.load(response)
+          print("Sonar open issues:", data.get("total", data.get("paging", {}).get("total")))
+          for issue in data.get("issues", []):
+              print(json.dumps({key: issue.get(key) for key in
+                    ("rule", "component", "line", "message", "severity", "status")}, ensure_ascii=False))
+          PY

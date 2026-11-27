@@ -12,6 +12,12 @@ import sys
 import unittest
 
 
+def accepted(result: unittest.TestResult) -> bool:
+    """No empty, skipped or expected-failure suite may certify a build."""
+    return (result.testsRun > 0 and result.wasSuccessful()
+            and not result.skipped and not result.expectedFailures)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pattern", default="test_*.py")
@@ -22,7 +28,10 @@ def main() -> int:
     try:
         suite = unittest.defaultTestLoader.discover("tests", pattern=args.pattern)
         result = unittest.TextTestRunner(verbosity=2).run(suite)
-        return 0 if result.wasSuccessful() else 1
+        if not accepted(result):
+            print("Acceptance requires nonempty tests without skips or expected failures.", file=sys.stderr)
+            return 1
+        return 0
     finally:
         faulthandler.cancel_dump_traceback_later()
 
