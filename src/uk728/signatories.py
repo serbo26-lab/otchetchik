@@ -12,12 +12,14 @@ from datetime import date
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
     QScrollArea, QVBoxLayout, QWidget,
 )
 
-from . import db
+from . import db, signing_store
+from .act_images import load_act_image
+from .act_image_dialog import ActImageDialog
 from .paths import make_backup
 from .utils import format_date, iso_date, parse_date
 
@@ -317,7 +319,7 @@ class SignatoryListDialog(QDialog):
         root = QVBoxLayout(self)
         help_text = QLabel(
             "Можно хранить несколько лиц и разные периоды полномочий. "
-            "Для будущего подписания отчёта нужно будет выбрать лицо "
+            "Для подготовки отчёта выберите лицо "
             "на соответствующую дату. Записи из Ассистента защищены от изменений."
         )
         help_text.setWordWrap(True)
@@ -336,11 +338,127 @@ class SignatoryListDialog(QDialog):
             actions.addWidget(button)
         actions.addStretch(1)
         root.addLayout(actions)
+        self._build_image_actions(root)
         close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         close.rejected.connect(self.reject)
         root.addWidget(close)
         self.list.currentRowChanged.connect(self._selection_state)
         self.refresh()
+
+    def _build_image_actions(self, root):
+        self.image_info = QLabel()
+        self.image_info.setWordWrap(True)
+        root.addWidget(self.image_info)
+        self.signature_button = QPushButton("Подпись выбранного лица…")
+        self.signature_button.clicked.connect(lambda: self._edit_image("signature"))
+        self.remove_signature_button = QPushButton("Удалить изображение подписи")
+        self.remove_signature_button.clicked.connect(lambda: self._remove_image("signature"))
+        row = QHBoxLayout()
+        row.addWidget(self.signature_button)
+        row.addWidget(self.remove_signature_button)
+        root.addLayout(row)
+        if self.organization:
+            row = QHBoxLayout()
+            self.stamp_button = QPushButton("Печать УО…")
+            self.stamp_button.clicked.connect(lambda: self._edit_image("stamp"))
+            self.remove_stamp_button = QPushButton("Удалить печать")
+            self.remove_stamp_button.clicked.connect(lambda: self._remove_image("stamp"))
+            row.addWidget(self.stamp_button)
+            row.addWidget(self.remove_stamp_button)
+            root.addLayout(row)
+            self.insert_images = QCheckBox("Предлагать вставку изображений в новые отчеты")
+            self.insert_images.setChecked(bool(signing_store.read_options(self.company_id)["insert_images"]))
+            self.insert_images.toggled.connect(self._save_image_default)
+            root.addWidget(self.insert_images)
+            self.insert_images.setEnabled(not self._linked_company())
+
+    def _linked_company(self):
+        if not self.organization:
+            return False
+        row = db.row("SELECT assistant_source_id FROM companies WHERE id=?", (self.company_id,))
+        return bool(row and row["assistant_source_id"] is not None)
+
+    def _save_image_default(self, enabled):
+        try:
+            signing_store.save_options(self.company_id, insert_images=int(enabled))
+        except (ValueError, sqlite3.DatabaseError) as exc:
+            blocked = self.insert_images.blockSignals(True)
+            self.insert_images.setChecked(not enabled)
+            self.insert_images.blockSignals(blocked)
+            QMessageBox.warning(self, "Не удалось сохранить", str(exc))
+
+    def _image_record(self, kind):
+        if kind == "stamp":
+            options = signing_store.read_options(self.company_id)
+            return dict(content=options["stamp"], name=options["stamp_name"],
+                        settings=options["stamp_settings"])
+        person = self._selected()
+        return signing_store.read_signature(person["id"]) if person else {}
+
+    def _image_readonly(self, kind):
+        if kind == "stamp":
+            return self._linked_company()
+        person = self._selected()
+        return not person or person["assistant_source_id"] is not None
+
+    def _edit_image(self, kind):
+        saved = self._image_record(kind)
+        readonly = self._image_readonly(kind)
+        content, name = saved.get("content"), saved.get("name")
+        try:
+            if not content:
+                if readonly:
+                    return
+                path, _ = QFileDialog.getOpenFileName(self, "Выбрать изображение", "",
+                                                       "Изображения (*.png *.jpg *.jpeg)")
+                if not path:
+                    return
+                content, name = load_act_image(path)
+            dialog = ActImageDialog(kind, content, name or "Изображение", saved.get("settings"), self)
+            if readonly:
+                dialog.save_button.hide()
+                dialog.setWindowTitle(dialog.windowTitle() + " — просмотр, без сохранения")
+            if dialog.exec() == QDialog.DialogCode.Accepted and not readonly:
+                if kind == "stamp":
+                    signing_store.save_options(self.company_id, stamp=dialog.content,
+                        stamp_name=dialog.name, stamp_settings=dialog.settings)
+                else:
+                    signing_store.save_signature(self._selected()["id"], dialog.content,
+                                                 dialog.name, dialog.settings)
+                self._update_image_actions()
+        except (ValueError, OSError, sqlite3.DatabaseError) as exc:
+            QMessageBox.warning(self, "Не удалось обработать изображение", str(exc))
+
+    def _remove_image(self, kind):
+        if self._image_readonly(kind):
+            return
+        if QMessageBox.question(self, "Удаление изображения",
+                                "Удалить изображение для новых отчетов?",
+                                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        try:
+            if kind == "stamp":
+                signing_store.save_options(self.company_id, stamp=None)
+            else:
+                signing_store.save_signature(self._selected()["id"], None)
+            self._update_image_actions()
+        except (ValueError, sqlite3.DatabaseError) as exc:
+            QMessageBox.warning(self, "Не удалось удалить", str(exc))
+
+    def _update_image_actions(self):
+        record = self._selected()
+        signature = bool(self._image_record("signature").get("content"))
+        readonly = self._image_readonly("signature")
+        self.signature_button.setEnabled(bool(record and (signature or not readonly)))
+        self.remove_signature_button.setEnabled(signature and not readonly)
+        status = "Подпись: " + ("загружена" if signature else "не загружена")
+        if self.organization:
+            stamp = bool(self._image_record("stamp").get("content"))
+            readonly = self._linked_company()
+            self.stamp_button.setEnabled(stamp or not readonly)
+            self.remove_stamp_button.setEnabled(stamp and not readonly)
+            status += "; печать: " + ("загружена" if stamp else "не загружена")
+        self.image_info.setText(status + ". Изображения не подтверждают подписания документа.")
 
     def _owner(self):
         return {"company_id": self.company_id, "house_id": self.house_id}
@@ -382,6 +500,7 @@ class SignatoryListDialog(QDialog):
         else:
             reason = "Сначала выберите запись."
         self.delete_button.setToolTip(reason)
+        self._update_image_actions()
 
     def add_person(self):
         editor = PersonEditor(
