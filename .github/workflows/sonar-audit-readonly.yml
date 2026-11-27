@@ -1,4 +1,4 @@
-name: Read public Sonar issues (temporary audit)
+name: Read public Sonar issues (signing recheck)
 on:
   push:
     branches: ['audit/sonar-remaining-issues']
