@@ -48,3 +48,12 @@ class SigningImportTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     signing_store.save_signature(person, None)
                 self.assertEqual(hashlib.sha256(source.read_bytes()).digest(), digest)
+                with closing(sqlite3.connect(source)) as conn, conn:
+                    conn.execute("UPDATE act_people SET signature_settings=?", ('{"width_mm":30}',))
+                    conn.execute("UPDATE act_organization_options SET stamp=NULL")
+                changed = hashlib.sha256(source.read_bytes()).digest()
+                self.assertFalse(assistant_source.synchronize().unchanged)
+                self.assertEqual(signing_store.read_signature(person)["settings"]["width_mm"], 30)
+                self.assertIsNone(signing_store.read_options(company)["stamp"])
+                self.assertTrue(assistant_source.synchronize().unchanged)
+                self.assertEqual(hashlib.sha256(source.read_bytes()).digest(), changed)

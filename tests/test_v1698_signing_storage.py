@@ -1,4 +1,6 @@
 """Synthetic marks only; no authentic signatures or seals."""
+from contextlib import closing
+import sqlite3
 import tempfile
 import unittest
 from io import BytesIO
@@ -8,6 +10,7 @@ from unittest.mock import patch
 from PIL import Image, ImageDraw
 
 from src.uk728 import db, paths, signatories, signing_store
+from src.uk728.backup_restore import verify_backup
 
 
 def synthetic_image():
@@ -23,7 +26,7 @@ class SigningStorageTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
-        patcher = patch.object(paths, "data_dir", return_value=root)
+        patcher = patch.object(paths, "app_dir", return_value=root)
         patcher.start()
         self.addCleanup(patcher.stop)
         db.init_db()
@@ -45,3 +48,18 @@ class SigningStorageTests(unittest.TestCase):
         self.assertEqual(signing_store.read_signature(self.person)["content"], data)
         signing_store.save_signature(self.person, None)
         self.assertFalse(signing_store.read_signature(self.person))
+
+    def test_migrate_legacy_v12_with_guard_and_preserve_existing_person(self):
+        with closing(sqlite3.connect(paths.db_path())) as conn, conn:
+            for table in ("report_signing", "organization_signing", "signatory_images"):
+                conn.execute(f"DROP TABLE {table}")
+            conn.execute("UPDATE app_meta SET value='12' WHERE key='schema_version'")
+        db.init_db()
+        self.assertEqual(db.SCHEMA_VERSION, 13)
+        self.assertEqual(signatories.list_signatories(company_id=self.company)[0]["id"], self.person)
+        guards = list((paths.data_dir() / "backups").glob("*before_schema_v13*.db"))
+        self.assertEqual(len(guards), 1)
+        self.assertEqual(verify_backup(guards[0])["schema_version"], 12)
+        signing_store.save_signature(self.person, synthetic_image(), "new.png")
+        db.init_db()
+        self.assertEqual(list((paths.data_dir() / "backups").glob("*before_schema_v13*.db")), guards)
