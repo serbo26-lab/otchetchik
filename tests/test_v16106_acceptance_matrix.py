@@ -221,7 +221,8 @@ class SigningBoundaryTests(unittest.TestCase):
                                 (self.company, "Учебный объект"))
         self.report = db.create_report(self.company, self.house, 2025)
         self.person = signatories.save_local_signatory(
-            {"full_name": "Учебный представитель"}, company_id=self.company)
+            {"full_name": "Учебный представитель", "basis_kind": "Устав", "valid_from": "2025-01-01"},
+            company_id=self.company)
         self.resident = signatories.save_local_signatory(
             {"full_name": "Учебный собственник"}, house_id=self.house)
         signing_store.save_signature(self.person, sample_png())
@@ -249,7 +250,8 @@ class SigningBoundaryTests(unittest.TestCase):
     def test_invalid_selection_does_not_replace_saved_snapshot(self):
         before = report_signing.save_selection(self.report, "2025-12-31", [self.person])
         other = db.execute("INSERT INTO companies(name) VALUES(?)", ("Другая учебная УО",))
-        stranger = signatories.save_local_signatory({"full_name": "Другой представитель"}, company_id=other)
+        stranger = signatories.save_local_signatory({"full_name": "Другой представитель", "basis_kind": "Устав", "valid_from": "2025-01-01"},
+            company_id=other)
         for day, people, privacy in (("invalid", [self.person], "full"),
                                      ("2025-12-31", [], "full"),
                                      ("2025-12-31", [stranger], "full"),
