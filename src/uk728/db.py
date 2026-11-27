@@ -8,7 +8,7 @@ from typing import Any
 from .paths import db_path, make_backup
 from .utils import full_year_period
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 BEGIN_IMMEDIATE_SQL = "BEGIN IMMEDIATE"
 
 TEXT_DEFAULT_EMPTY = "TEXT NOT NULL DEFAULT ''"
@@ -73,7 +73,7 @@ def read_schema_version(conn: sqlite3.Connection) -> int | None:
 def init_db() -> None:
     path = db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Back up the existing Reporter database BEFORE any version-12 ALTER/DDL.
+    # Back up the existing Reporter database BEFORE any versioned ALTER/DDL.
     # The Assistant source is never involved. This also works with Reporter WAL.
     if path.is_file() and path.stat().st_size > 0:
         with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro",
@@ -292,6 +292,20 @@ def init_db() -> None:
                 WHERE assistant_source_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS ix_signatories_company ON signatories(company_id);
             CREATE INDEX IF NOT EXISTS ix_signatories_house ON signatories(house_id);
+            CREATE TABLE IF NOT EXISTS signatory_images (
+                person_id INTEGER PRIMARY KEY REFERENCES signatories(id) ON DELETE CASCADE,
+                content BLOB NOT NULL, name TEXT NOT NULL, settings TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS organization_signing (
+                company_id INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+                stamp BLOB, stamp_name TEXT NOT NULL DEFAULT '', stamp_settings TEXT NOT NULL DEFAULT '{}',
+                insert_images INTEGER NOT NULL DEFAULT 0,
+                customer_signature_placeholder INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS report_signing (
+                report_id INTEGER PRIMARY KEY REFERENCES reports(id) ON DELETE CASCADE,
+                snapshot_json TEXT NOT NULL
+            );
         """)
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_assistant_source "

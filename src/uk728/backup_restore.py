@@ -38,6 +38,9 @@ _BASE_COLUMNS = {
 _OPTIONAL_LEGACY_TABLES = {
     "work_categories": "id parent_id name section unit default_price notes is_active created_at updated_at",
     "signatories": "id company_id house_id assistant_source_id data_json created_at updated_at",
+    "signatory_images": "person_id content name settings",
+    "organization_signing": "company_id stamp stamp_name stamp_settings insert_images customer_signature_placeholder",
+    "report_signing": "report_id snapshot_json",
 }
 _MIGRATABLE_COLUMNS = {
     "work_items": "group_name subgroup_name",
