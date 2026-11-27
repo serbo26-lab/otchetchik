@@ -13,18 +13,19 @@ from __future__ import annotations
 from contextlib import closing
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+import base64
 import hashlib
 import json
 import os
 from pathlib import Path
 import sqlite3
 
-from . import db
+from . import db, signing_store
 from .paths import db_path, make_backup
 from .utils import iso_date, parse_date
 
 _CONFIG_KEY = "assistant_database_path"
-_DIGEST_KEY = "assistant_snapshot_digest_v2"
+_DIGEST_KEY = "assistant_snapshot_digest_v3"
 PERSON_FIELDS = (
     "full_name", "name_genitive", "position", "position_genitive", "role",
     "premises", "gender", "basis_kind", "basis_number", "basis_date",
@@ -38,6 +39,7 @@ class AssistantSnapshot:
     houses: tuple[dict, ...]
     missing_area: int
     people: tuple[dict, ...] = ()
+    signing_options: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -230,8 +232,44 @@ def _normalize_people(people_rows, org_ids, house_ids):
         people.append({
             "id": key, "organization_id": owner_org, "house_id": owner_house,
             "data": _normalize_person_data(person, key),
+            "image": _source_image(person, "signature"),
         })
     return people
+
+
+def _source_image(row, kind):
+    # Old databases may contain raw BLOBs without placement settings.
+    # Never import an unvalidated or malformed image.
+    content = row.get(kind)
+    if not content:
+        return None
+    try:
+        settings = json.loads(row.get(kind + "_settings") or "{}")
+        data, name, normalized = signing_store.image_record(
+            content, row.get(kind + "_name"), settings, kind=kind
+        )
+    except (ValueError, TypeError):
+        # Legacy sources did not guarantee usable PNG/JPEG assets.
+        if kind + "_settings" not in row:
+            return None
+        raise AssistantSourceError("Некорректное изображение или настройки подписания в Ассистенте.") from None
+    return {"content": base64.b64encode(data).decode("ascii"),
+            "name": name, "settings": json.loads(normalized)}
+
+
+def _read_signing_options(conn):
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(act_organization_options)")}
+    if not columns:
+        return ()
+    _required_columns(conn, "act_organization_options", {"organization_id"})
+    rows = []
+    for row in conn.execute("SELECT * FROM act_organization_options ORDER BY organization_id"):
+        value = dict(row)
+        rows.append(dict(organization_id=str(value["organization_id"]),
+                         stamp=_source_image(value, "stamp"),
+                         insert_images=bool(value.get("insert_images")),
+                         customer_signature_placeholder=bool(value.get("customer_signature_placeholder"))))
+    return tuple(rows)
 
 
 def read_source(source: Path | str) -> AssistantSnapshot:
@@ -274,13 +312,12 @@ def read_source(source: Path | str) -> AssistantSnapshot:
                 _required_columns(conn, "act_people", {
                     "id", "organization_id", "house_id", "data_json"
                 })
-                # Explicit projection excludes signature image BLOBs.
                 people_rows = tuple(dict(row) for row in conn.execute(
-                    "SELECT id,organization_id,house_id,data_json "
-                    "FROM act_people ORDER BY rowid"
+                    "SELECT * FROM act_people ORDER BY rowid"
                 ))
             else:
                 people_rows = ()
+            signing_options = _read_signing_options(conn)
     except sqlite3.DatabaseError as exc:
         raise AssistantSourceError(
             f"Не удалось прочитать SQLite Ассистента: {exc}"
@@ -289,7 +326,9 @@ def read_source(source: Path | str) -> AssistantSnapshot:
     org_ids = _validate_organization_ids(organizations)
     houses, house_ids, missing_area = _normalize_houses(house_rows, org_ids)
     people = _normalize_people(people_rows, org_ids, house_ids)
-    return AssistantSnapshot(organizations, tuple(houses), missing_area, tuple(people))
+    if any(item['organization_id'] not in org_ids for item in signing_options):
+        raise AssistantSourceError("Настройки подписания относятся к отсутствующей УО.")
+    return AssistantSnapshot(organizations, tuple(houses), missing_area, tuple(people), signing_options)
 
 
 def _snapshot_digest(snapshot: AssistantSnapshot) -> str:
@@ -300,13 +339,14 @@ def _snapshot_digest(snapshot: AssistantSnapshot) -> str:
     importer changes to invalidate the no-op fast path.
     """
     payload = {
-        "schema": 2,
+        "schema": 3,
         "organizations": [
             (str(org["id"]), str(org["name"]), str(org["ogrn"] or ""))
             for org in snapshot.organizations
         ],
         "houses": snapshot.houses,
         "people": snapshot.people,
+        "signing_options": snapshot.signing_options,
     }
     data = json.dumps(payload, ensure_ascii=False, sort_keys=True,
                       separators=(",", ":")).encode("utf-8")
@@ -462,6 +502,22 @@ def _sync_people(conn, people, mapping):
         if (cid is None) == (hid is None):
             raise AssistantSourceError("Не удалось сопоставить подписанта с владельцем.")
         _sync_person_record(conn, src_id, cid, hid, person["data"])
+        ident = conn.execute("SELECT id FROM signatories WHERE assistant_source_id=?", (src_id,)).fetchone()[0]
+        image = person["image"]
+        record = (base64.b64decode(image["content"]), image["name"],
+                  json.dumps(image["settings"], sort_keys=True)) if image else None
+        signing_store.write_signature(conn, ident, record)
+
+
+def _sync_signing_options(conn, options, mapping):
+    for item in options:
+        stamp = item["stamp"] or {}
+        signing_store.write_options(conn, mapping[item["organization_id"]], {
+            "stamp": base64.b64decode(stamp["content"]) if stamp else None,
+            "stamp_name": stamp.get("name", ""), "stamp_settings": stamp.get("settings", {}),
+            "insert_images": item["insert_images"],
+            "customer_signature_placeholder": item["customer_signature_placeholder"],
+        })
 
 
 def _sync_person_record(conn, src_id, cid, hid, person_data):
@@ -556,6 +612,7 @@ def synchronize(source: Path | str | None = None, *, save_path: bool = False) ->
         mapping, new_companies = _sync_organizations(conn, snapshot.organizations)
         new_houses = _sync_houses(conn, snapshot.houses, mapping)
         _sync_people(conn, snapshot.people, mapping)
+        _sync_signing_options(conn, snapshot.signing_options, mapping)
         _save_sync_metadata(conn, path, digest, save_path)
         conn.commit()
     return SyncSummary(
