@@ -15,7 +15,8 @@ SIGNATURE_LINE_MM = 8
 def normalize_image_settings(settings=None, *, kind):
     if kind not in {"signature", "stamp"}:
         raise ValueError("Неизвестный вид изображения.")
-    settings = settings or {}
+    if settings is None:
+        settings = {}
     if not isinstance(settings, dict):
         raise ValueError("Не удалось прочитать настройки изображения.")
 
