@@ -6,6 +6,7 @@ Storing a person is NOT signing or certifying any report.
 """
 from __future__ import annotations
 
+from contextlib import closing
 import json
 import sqlite3
 from datetime import date
@@ -108,7 +109,7 @@ def save_local_signatory(values: dict, *, company_id: int | None = None,
     if (company_id is None) == (house_id is None):
         raise ValueError("Подписант должен относиться к одной УО или одному дому.")
     data = _normalize(values, organization=company_id is not None)
-    with db.connect() as conn:
+    with closing(db.connect()) as conn, conn:
         _validate_existing_signatory(conn, existing_id, company_id, house_id)
         _reject_duplicate_signatory(conn, existing_id, company_id, house_id, data)
         payload = json.dumps(data, ensure_ascii=False)
@@ -131,7 +132,7 @@ def save_local_signatory(values: dict, *, company_id: int | None = None,
 
 def delete_local_signatory(record_id: int, *, company_id: int | None = None,
                            house_id: int | None = None) -> None:
-    with db.connect() as conn:
+    with closing(db.connect()) as conn, conn:
         row = conn.execute("SELECT * FROM signatories WHERE id=?", (record_id,)).fetchone()
         if row is None or row["assistant_source_id"] is not None:
             raise ValueError("Удалять исходные записи Ассистента нельзя.")
