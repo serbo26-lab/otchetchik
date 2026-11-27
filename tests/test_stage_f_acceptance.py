@@ -243,6 +243,41 @@ class AcceptanceStageTests(unittest.TestCase):
         self.assert_section_headings_preserved(pdf_text)
         self.assertEqual(db.load_report_bundle(self.rid), bundle)
 
+    def test_signing_block_images_and_privacy_in_all_formats(self):
+        from src.uk728 import report_signing, signatories, signing_store
+        from test_v1698_signing_storage import synthetic_image
+
+        director = signatories.save_local_signatory(
+            {"full_name": "Учебный руководитель", "basis_kind": "Устав", "valid_from": "2025-01-01"},
+            company_id=self.org)
+        resident = signatories.save_local_signatory(
+            {"full_name": "Учебное скрываемое лицо"}, house_id=self.house)
+        for person in (director, resident):
+            signing_store.save_signature(person, synthetic_image(), "synthetic.png")
+        signing_store.save_options(self.org, stamp=synthetic_image(), stamp_name="synthetic.png",
+                                   stamp_settings={"size_mm": 40})
+        report_signing.save_selection(self.rid, "2025-12-31", [director, resident],
+                                      privacy="house_identity", insert_images=True)
+        bundle = db.load_report_bundle(self.rid)
+        document = Document(export_docx(self.rid, bundle=bundle))
+        text = " ".join(para.text for para in document.paragraphs)
+        self.assertIn("Учебный руководитель", text)
+        self.assertNotIn("Учебное скрываемое лицо", text)
+        self.assertEqual(len(document.inline_shapes), 2)
+        self.assertAlmostEqual(document.inline_shapes[1].width.mm, 40, places=1)
+        book = load_workbook(export_xlsx(self.rid, bundle=bundle))
+        self.addCleanup(book.close)
+        self.assertEqual(len(book.active._images), 2)
+        text = " ".join(str(v) for row in book.active.values for v in row if v is not None)
+        self.assertIn("Учебный руководитель", text)
+        self.assertNotIn("Учебное скрываемое лицо", text)
+        pdf = PdfReader(str(export_pdf(self.rid, bundle=bundle)))
+        text = " ".join(" ".join((page.extract_text() or "").split()) for page in pdf.pages)
+        self.assertIn("Учебный руководитель", text)
+        self.assertNotIn("Учебное скрываемое лицо", text)
+        self.assertIn("Данные скрыты", text)
+        self.assertEqual(db.load_report_bundle(self.rid), bundle)
+
     def test_exports_are_separated_by_house_and_year(self):
         current = export_xlsx(self.rid)
         next_rid = db.create_report(self.org, self.other_house, 2026)

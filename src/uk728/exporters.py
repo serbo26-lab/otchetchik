@@ -6,6 +6,7 @@ from typing import Any
 from xml.sax.saxutils import escape
 
 from .db import load_report_bundle
+from .signing_export import append_excel, append_pdf, append_word
 from .paths import export_dir, safe_filename
 from .utils import balance_text, format_date, is_full_year, money, to_float
 
@@ -283,6 +284,9 @@ def export_xlsx(report_id: int, *, bundle: dict[str, Any] | None = None) -> Path
     fin_data = _financial_table_rows(bundle)
     table([NUMBER_LABEL, PAYMENT_TYPE_LABEL, "Задолженность на начало периода, руб.", "Размер начисленных средств, руб.", "Размер поступивших средств, руб.", "Задолженность на 1 января следующего периода, руб."], fin_data, 6)
 
+    if bundle.get("signing"):
+        append_excel(ws, r + 1, bundle)
+
     for row in ws.iter_rows():
         for cell in row:
             cell.alignment = cell.alignment.copy(wrap_text=True, vertical="top")
@@ -354,6 +358,7 @@ def export_docx(report_id: int, *, bundle: dict[str, Any] | None = None) -> Path
 
     p(FINANCIAL_HEADING, True)
     _word_table(doc, [NUMBER_LABEL, PAYMENT_TYPE_LABEL, "Задолженность на начало периода, руб.", "Размер начисленных средств, руб.", "Размер поступивших средств, руб.", "Задолженность на 1 января следующего периода, руб."], _financial_table_rows(bundle))
+    append_word(doc, bundle)
     with _new_export_path(out_path) as target:
         doc.save(target)
     return target
@@ -431,6 +436,7 @@ def export_pdf(report_id: int, *, bundle: dict[str, Any] | None = None) -> Path:
     elems.append(paragraph(FINANCIAL_HEADING, section))
     data = [["N", PAYMENT_TYPE_LABEL, "Задолженность на начало", "Начислено", "Поступило", "Задолженность на 1 января следующего периода"]] + _financial_table_rows(bundle)
     add_table(data, [10*mm, 62*mm, 30*mm, 28*mm, 28*mm, 28*mm])
+    append_pdf(elems, bundle, paragraph)
     with _new_export_path(out_path) as target:
         doc.filename = str(target)
         doc.build(elems)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -533,6 +534,9 @@ def load_report_bundle(report_id: int) -> dict[str, Any]:
             (report["house_id"], report_id, report["year"],
              report["year"], report["period_start"]),
         ).fetchone()
+        signing = conn.execute("SELECT snapshot_json FROM report_signing WHERE report_id=?", (report_id,)).fetchone()
+        if signing:
+            snapshot["signing"] = json.loads(signing[0])
         return {
             **snapshot,
             "company": dict(company) if company else {},
