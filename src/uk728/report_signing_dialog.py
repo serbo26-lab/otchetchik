@@ -24,6 +24,13 @@ class ReportSigningDialog(QDialog):
                       "Сохранение реквизитов не означает юридического подписания отчета.")
         hint.setWordWrap(True)
         root.addWidget(hint)
+        if self.previous:
+            saved = QLabel(f"Сохраненный снимок: {format_date(self.previous['date'])}, "
+                           f"лиц: {len(self.previous['people'])}. При повторной выгрузке "
+                           "используются сохраненные данные и изображения, а не текущие карточки. "
+                           "Сохранение здесь явно заменяет снимок.")
+            saved.setWordWrap(True)
+            root.addWidget(saved)
         root.addWidget(QLabel("Дата подписания (ДД.ММ.ГГГГ)"))
         self.date = QLineEdit(format_date(self.previous.get("date") or self.report["publish_date"]
                                           or self.report["period_end"]))
@@ -95,7 +102,7 @@ class ReportSigningDialog(QDialog):
     def _save(self):
         try:
             report_signing.save_selection(self.report_id, self.date.text(), self._selected(),
-                                          expected_context=self.context,
+                                          expected_context=self.context, expected_snapshot=self.previous,
                                           privacy=self.privacy.currentData(), insert_images=self.images.isChecked())
         except Exception as exc:
             QMessageBox.warning(self, "Не удалось сохранить реквизиты", str(exc))
@@ -106,7 +113,7 @@ class ReportSigningDialog(QDialog):
         if QMessageBox.question(self, "Удаление реквизитов", "Убрать дополнительный блок из отчета?",
                                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
             try:
-                report_signing.clear_selection(self.report_id)
+                report_signing.clear_selection(self.report_id, expected_snapshot=self.previous)
             except Exception as exc:
                 QMessageBox.warning(self, "Не удалось удалить реквизиты", str(exc))
                 return

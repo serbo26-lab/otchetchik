@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw
 
 from .act_images import (SIGNATURE_HEIGHT_MM, SIGNATURE_LINE_MM, SIGNATURE_WIDTH_MM,
                          fitted_size, image_png, prepare_act_image, signature_placement)
-from .report_signing import public_block
+from .report_signing import public_block, verify_snapshot
 from .utils import format_date
 
 BLOCK_TITLE = "Дополнительные реквизиты подписантов"
@@ -42,6 +42,7 @@ def _stamp_field(record):
 
 
 def signing_elements(bundle):
+    verify_snapshot(bundle)
     block = public_block(bundle.get("signing"))
     if not block:
         return []
