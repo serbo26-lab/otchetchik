@@ -32,8 +32,8 @@ def read_options(company_id, conn=None):
             return read_options(company_id, connection)
     row = conn.execute("SELECT * FROM organization_signing WHERE company_id=?", (company_id,)).fetchone()
     if row is None:
-        return dict(stamp=None, stamp_name="", stamp_settings={}, insert_images=0,
-                    customer_signature_placeholder=0)
+        return {"stamp": None, "stamp_name": "", "stamp_settings": {}, "insert_images": 0,
+                "customer_signature_placeholder": 0}
     result = dict(row)
     result["stamp_settings"] = json.loads(result["stamp_settings"])
     return result

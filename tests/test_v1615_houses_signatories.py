@@ -348,7 +348,7 @@ class HouseFieldsAndSignatoriesV1615Tests(unittest.TestCase):
         db.execute("UPDATE app_meta SET value='11' WHERE key='schema_version'")
         db.init_db()
         backups = list((self.folder / "data" / "backups").glob(
-            "reporting_728_before_schema_v12_*.db"
+            f"reporting_728_before_schema_v{db.SCHEMA_VERSION}_*.db"
         ))
         self.assertEqual(len(backups), 1)
         with sqlite3.connect(backups[0]) as previous:
