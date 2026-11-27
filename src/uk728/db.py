@@ -84,7 +84,7 @@ def init_db() -> None:
         if previous_version != SCHEMA_VERSION:
             if make_backup(f"before_schema_v{SCHEMA_VERSION}") is None:
                 raise RuntimeError("Не удалось создать копию перед обновлением структуры базы.")
-    with connect(path) as conn:
+    with closing(connect(path)) as conn, conn:
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS app_meta (
@@ -396,7 +396,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
 
 
 def rows(query: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
-    with connect() as conn:
+    with closing(connect()) as conn, conn:
         return conn.execute(query, params).fetchall()
 
 
@@ -409,12 +409,12 @@ def named_rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]
 
 
 def row(query: str, params: tuple[Any, ...] = ()) -> sqlite3.Row | None:
-    with connect() as conn:
+    with closing(connect()) as conn, conn:
         return conn.execute(query, params).fetchone()
 
 
 def execute(query: str, params: tuple[Any, ...] = ()) -> int:
-    with connect() as conn:
+    with closing(connect()) as conn, conn:
         cur = conn.execute(query, params)
         conn.commit()
         return int(cur.lastrowid or 0)
@@ -487,7 +487,7 @@ def create_report_in_conn(conn: sqlite3.Connection, company_id: int, house_id: i
 
 
 def create_report(company_id: int, house_id: int, year: int, period_start: str | None = None, period_end: str | None = None, show_period_note: bool = False) -> int:
-    with connect() as conn:
+    with closing(connect()) as conn, conn:
         rid = create_report_in_conn(conn, company_id, house_id, year, period_start, period_end, show_period_note)
         conn.commit()
         return rid
