@@ -2,10 +2,10 @@
 from contextlib import closing
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QLabel, QLineEdit, QListWidget,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout)
 
-from . import db, report_signing
+from . import db, report_signing, signing_store
 from .utils import format_date
 
 
@@ -30,6 +30,24 @@ class ReportSigningDialog(QDialog):
         root.addWidget(self.date)
         self.list = QListWidget()
         root.addWidget(self.list, 1)
+        options = signing_store.read_options(self.report["company_id"])
+        root.addWidget(QLabel("Вид реквизитов в выгрузке"))
+        self.privacy = QComboBox()
+        for key, label in report_signing.PRIVACY_MODES.items():
+            self.privacy.addItem(label, key)
+        default = "house_mark" if options["customer_signature_placeholder"] else "full"
+        self.privacy.setCurrentIndex(self.privacy.findData(self.previous.get("privacy", default)))
+        root.addWidget(self.privacy)
+        self.images = QCheckBox("Вставить сохраненные изображения подписей и печати в отчет")
+        self.images.setChecked(bool(self.previous.get("insert_images", False)))
+        if options["insert_images"] and not self.previous:
+            self.images.setToolTip("В настройках УО включена вставка изображений. Подтвердите ее для этого отчета.")
+        root.addWidget(self.images)
+        notice = QLabel("Настройка скрывает данные только в дополнительном блоке подписантов. "
+                        "Проверьте отдельно обязательные реквизиты формы и произвольный текст отчета. "
+                        "Изображения вставляются только по явному выбору; скрытые изображения не выгружаются.")
+        notice.setWordWrap(True)
+        root.addWidget(notice)
         self.status = QLabel()
         self.status.setWordWrap(True)
         root.addWidget(self.status)
@@ -77,7 +95,8 @@ class ReportSigningDialog(QDialog):
     def _save(self):
         try:
             report_signing.save_selection(self.report_id, self.date.text(), self._selected(),
-                                          expected_context=self.context)
+                                          expected_context=self.context,
+                                          privacy=self.privacy.currentData(), insert_images=self.images.isChecked())
         except Exception as exc:
             QMessageBox.warning(self, "Не удалось сохранить реквизиты", str(exc))
             return
