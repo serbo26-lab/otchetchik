@@ -5,7 +5,7 @@ import math
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageMath, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageChops, ImageMath, ImageOps
 
 SIGNATURE_WIDTH_MM = 38
 SIGNATURE_HEIGHT_MM = 26
@@ -38,8 +38,8 @@ def normalize_image_settings(settings=None, *, kind):
     rotation = settings.get("rotation", 0)
     if rotation not in (0, 90, 180, 270):
         raise ValueError("Поворот должен быть кратен 90°.")
-    result = dict(crop=[left, top, right, bottom], rotation=rotation,
-                  remove_background=bool(settings.get("remove_background", True)))
+    result = {"crop": [left, top, right, bottom], "rotation": rotation,
+              "remove_background": bool(settings.get("remove_background", True))}
     if kind == "stamp":
         result["size_mm"] = number("size_mm", 40, 10, 50)
     else:
@@ -52,14 +52,14 @@ def normalize_image_settings(settings=None, *, kind):
 def decode_act_image(content):
     if len(content) > 5 * 1024 * 1024:
         raise ValueError("Изображение должно занимать не больше 5 МБ.")
-    if not (content.startswith(b"\x89PNG\r\n\x1a\n") or content.startswith(b"\xff\xd8\xff")):
+    if not (content.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff"))):
         raise ValueError("Выберите изображение PNG или JPEG.")
     try:
         with Image.open(BytesIO(content)) as source:
             if max(source.size) > 8000 or source.width * source.height > 32_000_000:
                 raise ValueError("Допустимо до 8000 пикселей на сторону и 32 млн пикселей на изображение.")
             return ImageOps.exif_transpose(source).convert("RGBA")
-    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+    except (OSError, Image.DecompressionBombError) as exc:
         raise ValueError("Не удалось прочитать изображение PNG / JPEG.") from exc
 
 

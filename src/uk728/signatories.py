@@ -390,8 +390,8 @@ class SignatoryListDialog(QDialog):
     def _image_record(self, kind):
         if kind == "stamp":
             options = signing_store.read_options(self.company_id)
-            return dict(content=options["stamp"], name=options["stamp_name"],
-                        settings=options["stamp_settings"])
+            return {"content": options["stamp"], "name": options["stamp_name"],
+                    "settings": options["stamp_settings"]}
         person = self._selected()
         return signing_store.read_signature(person["id"]) if person else {}
 

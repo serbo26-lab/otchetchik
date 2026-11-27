@@ -23,9 +23,9 @@ def available_people(conn, report, signing_date):
         if (start and (parse_date(start) is None or parse_date(start) > day)
                 or end and (parse_date(end) is None or parse_date(end) < day)):
             continue
-        result.append(dict(id=row["id"], side="company" if row["company_id"] else "house",
-                           name=str(data.get("full_name") or ""), role=str(data.get("role") or ""),
-                           position=str(data.get("position") or ""), details=data))
+        result.append({"id": row["id"], "side": "company" if row["company_id"] else "house",
+                       "name": str(data.get("full_name") or ""), "role": str(data.get("role") or ""),
+                       "position": str(data.get("position") or ""), "details": data})
     return result
 
 
@@ -59,7 +59,7 @@ def save_selection(report_id, signing_date, selected_ids, *, expected_context=No
         available = {person["id"]: person for person in available_people(conn, report, day)}
         if any(ident not in available for ident in ids):
             raise ValueError("Подписант не относится к отчету или не уполномочен на указанную дату.")
-        snapshot = dict(date=day, context=context, people=[available[ident] for ident in ids])
+        snapshot = {"date": day, "context": context, "people": [available[ident] for ident in ids]}
         conn.execute("""INSERT INTO report_signing(report_id,snapshot_json) VALUES(?,?)
             ON CONFLICT(report_id) DO UPDATE SET snapshot_json=excluded.snapshot_json
             WHERE snapshot_json<>excluded.snapshot_json""",
