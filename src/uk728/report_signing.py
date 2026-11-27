@@ -98,8 +98,25 @@ def public_block(snapshot):
                 stamp=snapshot.get("stamp") if snapshot.get("insert_images") and privacy != "all_identity" else None)
 
 
+def verify_snapshot(bundle):
+    snapshot = bundle.get("signing")
+    if not snapshot:
+        return
+    if snapshot.get("context") != report_context(bundle["report"]):
+        raise ValueError("Изменился период или объект отчета. Повторно выберите подписантов либо уберите блок.")
+    if not parse_date(snapshot.get("date")) or not snapshot.get("people"):
+        raise ValueError("Некорректный снимок подписантов. Повторно выберите подписантов.")
+    if snapshot.get("privacy", "full") not in PRIVACY_MODES:
+        raise ValueError("Неизвестный режим скрытия реквизитов.")
+
+
+def _require_previous(conn, report_id, expected_snapshot):
+    if expected_snapshot is not None and read_snapshot(report_id, conn) != expected_snapshot:
+        raise ValueError("Реквизиты подписантов изменились в другом окне. Откройте их повторно.")
+
+
 def save_selection(report_id, signing_date, selected_ids, *, expected_context=None,
-                   privacy="full", insert_images=False):
+                   expected_snapshot=None, privacy="full", insert_images=False):
     if privacy not in PRIVACY_MODES:
         raise ValueError("Неизвестный режим скрытия реквизитов.")
     day = iso_date(signing_date)
@@ -113,6 +130,7 @@ def save_selection(report_id, signing_date, selected_ids, *, expected_context=No
         report = conn.execute("SELECT * FROM reports WHERE id=?", (report_id,)).fetchone()
         if report is None:
             raise ValueError("Отчет не найден.")
+        _require_previous(conn, report_id, expected_snapshot)
         context = report_context(report)
         if expected_context is not None and context != expected_context:
             raise ValueError("Отчет изменился. Откройте выбор подписантов повторно.")
@@ -129,6 +147,8 @@ def save_selection(report_id, signing_date, selected_ids, *, expected_context=No
         return snapshot
 
 
-def clear_selection(report_id):
+def clear_selection(report_id, *, expected_snapshot=None):
     with closing(db.connect()) as conn, conn:
+        conn.execute(db.BEGIN_IMMEDIATE_SQL)
+        _require_previous(conn, report_id, expected_snapshot)
         conn.execute("DELETE FROM report_signing WHERE report_id=?", (report_id,))

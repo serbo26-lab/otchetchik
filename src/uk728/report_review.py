@@ -9,6 +9,8 @@ from datetime import date, datetime
 from math import isfinite
 from typing import Any
 
+from .report_signing import verify_snapshot
+
 
 def _date(value: Any) -> date | None:
     raw = str(value or "").strip()
@@ -224,6 +226,10 @@ def inspect_report(bundle: dict[str, Any]) -> dict[str, Any]:
     counts = _check_sections(bundle, errors, warnings)
     _check_imported_work(bundle, warnings)
     _check_management(bundle, report, counts, warnings)
+    try:
+        verify_snapshot(bundle)
+    except ValueError as exc:
+        errors.append(str(exc))
 
     return {
         "report_id": rid,
