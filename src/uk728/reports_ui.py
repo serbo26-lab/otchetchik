@@ -19,6 +19,7 @@ from .paths import make_backup
 from .utils import full_year_period, iso_date, money, to_float
 from .ui_shell import ActionFlowLayout
 from .report_storage import sync_report_rows
+from .report_signing_dialog import ReportSigningDialog
 from .report_review import inspect_report, review_text, bundle_fingerprint
 from .ui_components import ContentCard, action_panel, table_card_with_selection, fit_table_columns
 from .ui_editors import (
@@ -488,9 +489,24 @@ class ReportsTab(BaseTab):
         polish_form(form)
         card.add_layout(form)
         layout.addWidget(card)
+        signing = QPushButton("Подписанты отчета…")
+        signing.setToolTip("Дополнительные реквизиты; сохранение не означает подписания.")
+        signing.clicked.connect(self._open_signing)
+        layout.addWidget(signing)
         self._next_report_action(layout, "Перейти к содержанию", 1)
         layout.addStretch()
         self.report_tabs.addTab(form_scroll(w), "Общие сведения")
+
+    def _open_signing(self):
+        if not self.current_id:
+            return
+        try:
+            self.flush_autosave()
+            dialog = ReportSigningDialog(int(self.current_id), self)
+            if dialog.exec() == QDialog.Accepted:
+                self._invalidate_review()
+        except Exception as exc:
+            QMessageBox.warning(self, "Не удалось открыть подписантов", str(exc))
 
     def _build_content_tab(self):
         w = QWidget(); layout = QVBoxLayout(w)
