@@ -28,7 +28,7 @@ jobs:
           print("Latest main analysis:", json.dumps(analyses.get("analyses", []), ensure_ascii=False))
           gate = read("qualitygates/project_status", projectKey=project)
           print("Main Quality Gate:", gate.get("projectStatus", {}).get("status"))
-          for target, extra in [("main", {})] + [(f"PR {n}", {"pullRequest": str(n)}) for n in range(102, 110)]:
+          for target, extra in [("main", {}), ("PR 109", {"pullRequest": "109"})]:
               print("Audit target:", target)
               page = 1
               while True:
